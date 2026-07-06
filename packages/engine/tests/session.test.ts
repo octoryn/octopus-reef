@@ -18,22 +18,23 @@ function fixedClock(baseSeconds = 0): () => string {
   return () => new Date(Date.UTC(2026, 6, 6, 0, 0, n++)).toISOString();
 }
 
-test("a governed session drives the work spine proposed → done", async () => {
+test("a completed session drives the work spine proposed → done", async () => {
   const session = new GovernedSession({
     id: "s1",
     task: "rotate the signing key",
     driver: new MockDriver(),
     now: fixedClock(),
   });
-  const { snapshot } = await session.run();
+  const { snapshot, outcome } = await session.run();
 
+  assert.equal(outcome, "completed");
   assert.equal(snapshot.workState, "done");
   assert.equal(snapshot.sealed, true);
   // proposed(create) + ready + claimed + in_progress + done = 5 work-chain links.
   assert.equal(snapshot.workChainLength, 5);
 });
 
-test("every session moment is an evidence link and both chains verify", async () => {
+test("every session moment is an evidence link and all three checks verify", async () => {
   const session = new GovernedSession({
     id: "s2",
     task: "add tests",
@@ -44,8 +45,7 @@ test("every session moment is an evidence link and both chains verify", async ()
 
   const v = session.verify();
   assert.equal(v.ok, true, `expected intact, got ${JSON.stringify(v)}`);
-  assert.ok(session.log.length >= session.events.length - 0);
-  // The log chain and the event stream are the same length (1 evidence per event).
+  assert.equal(v.binding, "bound");
   assert.equal(session.log.length, session.events.length);
 });
 
@@ -66,18 +66,23 @@ test("the session emits a well-formed, ordered event stream", async () => {
   assert.ok(events.some((e) => e.kind === "action.executed"));
 });
 
-test("the gate denies a dangerous action but the session still seals and verifies", async () => {
+test("a denied REQUIRED action fails the session — no misleading success", async () => {
   const session = new GovernedSession({
     id: "s4",
     task: "clean up",
     driver: new UnsafeDemoDriver(),
     now: fixedClock(),
   });
-  await session.run();
+  const { outcome } = await session.run();
 
-  const denied = session.events.filter((e) => e.kind === "action.denied");
-  assert.equal(denied.length, 1, "the rm -rf / must be denied");
-  assert.equal(session.workState, "done");
+  assert.equal(
+    outcome,
+    "failed",
+    "a denied required action must fail the work",
+  );
+  assert.equal(session.workState, "failed");
+  assert.equal(session.snapshot().actionsDenied, 1);
+  // Even a failed session is fully provable.
   assert.equal(session.verify().ok, true);
 });
 
@@ -123,7 +128,6 @@ test("a tampered evidence log fails to load — the store is not trusted", async
 
   const logPath = join(dir, "session.log.jsonl");
   const lines = readFileSync(logPath, "utf8").trim().split("\n");
-  // Forge the content of the 5th record without re-deriving its hashes.
   const forged = JSON.parse(lines[4]!) as {
     evidence: { content: { summary: string } };
   };

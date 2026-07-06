@@ -4,10 +4,17 @@
  * Where `octopus-workstate` tracks the *work spine* (proposed → done), the
  * EvidenceLog captures every fine-grained session moment (observations,
  * actions, gate rulings, messages) as an `octopus-evidence` chain. Both are
- * tamper-evident; together they are the whole provable session.
+ * tamper-evident; together, and CROSS-BOUND (see GovernedSession/persist), they
+ * are the whole provable session.
  *
  * This is a thin, honest wrapper over `octopus-evidence`: it never reimplements
  * hashing or linkage — it composes `createEvidence` + `nextLink` + `verifyChain`.
+ *
+ * Honest limit: in unkeyed (default) mode the integrity hashes are public
+ * SHA-256, so a writer with file access can rewrite the log AND re-mint every
+ * id/link — a rewrite verifies clean. Unkeyed mode detects *accidental* damage
+ * and *partial* tampering, not a full re-mint. Use `integritySecret` (keyed
+ * mode) when the store is untrusted; then no field can be forged without the key.
  */
 import {
   createEvidence,
@@ -66,6 +73,10 @@ export class EvidenceLog {
     return chainHead(this.#chain);
   }
 
+  evidences(): readonly Evidence[] {
+    return this.#evidences;
+  }
+
   records(): LogRecord[] {
     return this.#evidences.map((evidence, i) => ({
       evidence,
@@ -113,18 +124,30 @@ export class EvidenceLog {
   /**
    * Rebuild a log from stored records and re-verify it store-untrusting. A
    * record whose link does not recompute is rejected — a restored log always
-   * passes its own {@link verify}.
+   * passes its own {@link verify}. Pass an anchor (`expectedLength`/
+   * `expectedHead`) to also reject tail-truncation.
    */
   static restore(
     records: readonly LogRecord[],
-    options: EvidenceLogOptions = {},
+    options: EvidenceLogOptions & VerifyLogOptions = {},
   ): EvidenceLog {
-    const log = new EvidenceLog(options);
+    const log = new EvidenceLog(
+      options.integritySecret !== undefined
+        ? { integritySecret: options.integritySecret }
+        : {},
+    );
     for (const r of records) {
       log.#evidences.push(r.evidence);
       log.#chain.push(r.link);
     }
-    const check = log.verify();
+    const check = log.verify({
+      ...(options.expectedLength !== undefined
+        ? { expectedLength: options.expectedLength }
+        : {}),
+      ...(options.expectedHead !== undefined
+        ? { expectedHead: options.expectedHead }
+        : {}),
+    });
     if (!check.ok) {
       throw new Error(
         `cannot restore EvidenceLog: ${check.reason} (at ${check.brokenAt})`,

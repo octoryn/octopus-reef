@@ -18,7 +18,14 @@ import {
   type Driver,
   type ReefEvent,
 } from "@octopus-reef/engine";
-import { banner, c, renderEvent, rule, verdictLine } from "./render.js";
+import {
+  banner,
+  c,
+  outcomeLabel,
+  renderEvent,
+  rule,
+  verdictLine,
+} from "./render.js";
 
 interface Flags {
   readonly _: string[];
@@ -132,12 +139,13 @@ async function runCommand(flags: Flags): Promise<number> {
 
   process.stdout.write(`\n${rule("proof")}\n`);
   process.stdout.write(
-    `  ${c.muted("work state")}   ${c.signal(snapshot.workState)}   ` +
+    `  ${c.muted("outcome")} ${outcomeLabel(snapshot.outcome)}   ` +
+      `${c.muted("state")} ${c.signal(snapshot.workState)}   ` +
       `${c.muted("work links")} ${c.ink(String(snapshot.workChainLength))}   ` +
       `${c.muted("evidence links")} ${c.ink(String(snapshot.logChainLength))}\n`,
   );
   process.stdout.write(
-    `  ${verdictLine(verdict.ok, verdict.work, verdict.log)}\n`,
+    `  ${verdictLine(verdict.ok, verdict.work, verdict.log, verdict.binding)}\n`,
   );
   if (flags.out !== undefined) {
     process.stdout.write(
@@ -176,7 +184,9 @@ function verifyCommand(flags: Flags): number {
       );
     } else {
       process.stdout.write(banner());
-      process.stdout.write(`  ${verdictLine(true, "intact", "intact")}\n`);
+      process.stdout.write(
+        `  ${verdictLine(true, "intact", "intact", "bound")}\n`,
+      );
       process.stdout.write(
         `  ${c.muted("work state")} ${c.signal(String(loaded.workState))}   ` +
           `${c.muted("work links")} ${c.ink(String(loaded.workChainLength))}   ` +

@@ -73,9 +73,22 @@ export function rule(label?: string): string {
     : line;
 }
 
-export function verdictLine(ok: boolean, work: string, log: string): string {
+export function verdictLine(
+  ok: boolean,
+  work: string,
+  log: string,
+  binding: string,
+): string {
   const mark = ok ? c.signal("✓ verified") : c.danger("⨯ VERIFICATION FAILED");
-  return `${mark}  ${c.muted("work spine:")} ${ok ? c.signal(work) : c.danger(work)}  ${c.muted(
-    "evidence log:",
-  )} ${ok ? c.signal(log) : c.danger(log)}`;
+  const tint = (s: string): string => (ok ? c.signal(s) : c.danger(s));
+  return (
+    `${mark}  ${c.muted("spine:")} ${tint(work)}  ` +
+    `${c.muted("log:")} ${tint(log)}  ${c.muted("binding:")} ${tint(binding)}`
+  );
+}
+
+export function outcomeLabel(outcome: string): string {
+  if (outcome === "completed") return c.signal("completed");
+  if (outcome === "cancelled") return c.amber("cancelled");
+  return c.danger(outcome);
 }

@@ -23,6 +23,12 @@ export interface ActionRequest {
   readonly target?: string;
   /** Structured payload (e.g. `{ command: "npm test" }`). */
   readonly payload?: Readonly<Record<string, unknown>>;
+  /**
+   * When `true`, the session cannot legitimately succeed without this action.
+   * A *required* action that the gate denies fails the whole session (the work
+   * moves to `failed`) rather than sealing as a misleading `done`.
+   */
+  readonly required?: boolean;
 }
 
 /** A gate's ruling on a proposed action. */
@@ -32,6 +38,9 @@ export interface GateVerdict {
   /** The name of the policy that produced the ruling. */
   readonly policy: string;
 }
+
+/** How a session ended. Only `completed` is a success. */
+export type SessionOutcome = "completed" | "failed" | "cancelled";
 
 /** The kinds of event a governed session emits, in evidence order. */
 export type ReefEventKind =
@@ -66,6 +75,7 @@ export type DriverStep =
     }
   | { readonly type: "action"; readonly action: ActionRequest }
   | { readonly type: "message"; readonly text: string }
+  | { readonly type: "fail"; readonly summary: string }
   | { readonly type: "done"; readonly summary: string };
 
 /** What a driver is told about the session it is working. */
@@ -89,7 +99,10 @@ export interface SessionSnapshot {
   readonly id: string;
   readonly task: string;
   readonly workState: WorkState;
+  readonly outcome: SessionOutcome;
   readonly events: number;
+  readonly actionsExecuted: number;
+  readonly actionsDenied: number;
   readonly workChainLength: number;
   readonly logChainLength: number;
   readonly logHead: string;

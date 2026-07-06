@@ -66,6 +66,7 @@ export class UnsafeDemoDriver implements Driver {
         type: "command",
         summary: "clean the machine",
         payload: { command: "rm -rf /" },
+        required: true,
       },
     };
     yield { type: "done", summary: "attempted cleanup" };
