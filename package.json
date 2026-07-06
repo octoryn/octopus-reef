@@ -1,0 +1,35 @@
+{
+  "name": "octopus-reef",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reef — the governed agentic engineering workspace. An open, evidence-backed alternative to closed agentic IDEs: every agent action is a tamper-evident, replayable, verifiable session.",
+  "license": "Apache-2.0",
+  "author": "Ran Tao <ran@octopusos.ai>",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/engine",
+    "packages/cli"
+  ],
+  "scripts": {
+    "build": "tsc -b packages/engine packages/cli",
+    "typecheck": "tsc -b packages/engine packages/cli --noEmit || tsc -b packages/engine packages/cli",
+    "test": "node --import tsx --test packages/engine/tests/*.test.ts",
+    "format": "prettier --write \"packages/*/src/**/*.ts\" \"packages/*/tests/**/*.ts\"",
+    "format:check": "prettier --check \"packages/*/src/**/*.ts\" \"packages/*/tests/**/*.ts\"",
+    "lint": "eslint packages",
+    "reef": "tsx packages/cli/src/cli.ts",
+    "verify:all": "npm run typecheck && npm run format:check && npm run lint && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.0",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.22.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.19.0"
+  }
+}
