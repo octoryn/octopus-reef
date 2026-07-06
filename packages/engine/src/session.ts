@@ -137,6 +137,15 @@ export class GovernedSession {
     let outcome: SessionOutcome | null = null;
     let reason = "driver ended without an explicit done step";
 
+    if (this.#signal?.aborted) {
+      this.#finalize("cancelled", "session was cancelled before it started");
+      return {
+        snapshot: this.snapshot(),
+        outcome: "cancelled",
+        events: this.events,
+      };
+    }
+
     try {
       for await (const step of this.#driver.run({
         sessionId: this.id,
@@ -195,7 +204,15 @@ export class GovernedSession {
       reason = `driver error: ${err instanceof Error ? err.message : String(err)}`;
     }
 
-    if (outcome === null) outcome = "failed";
+    // Cancellation wins over the driver's outcome and over the failure default,
+    // and is observed even when the driver yielded zero steps or aborted on its
+    // last step (the loop-top check alone would miss those — review R2 regression).
+    if (this.#signal?.aborted) {
+      outcome = "cancelled";
+      reason = "session was cancelled";
+    } else if (outcome === null) {
+      outcome = "failed";
+    }
     this.#finalize(outcome, reason);
     return { snapshot: this.snapshot(), outcome, events: this.events };
   }
@@ -275,9 +292,14 @@ export class GovernedSession {
   }
 
   #advance(to: WorkState, reason: string): void {
+    // Bind the work spine to the evidence log: each transition commits the log
+    // head *at this point*, so two sessions with the same id/task/actor/clock
+    // but different steps produce DIFFERENT spines. Without this, byte-identical
+    // spines let a foreign log be swapped in and still verify (review R2 H1).
     const transition = this.#graph.transition(this.workItemId, to, {
       by: this.#actor,
       reason,
+      evidence: [{ evidenceId: this.#log.head, kind: "reef.log-head" }],
     });
     this.#emit("work.transition", `${transition.from ?? "∅"} → ${to}`, {
       from: transition.from,

@@ -78,6 +78,15 @@ export interface LoadedSession {
   readonly workState: WorkState | undefined;
   readonly workChainLength: number;
   readonly logChainLength: number;
+  /**
+   * `true` only when an `integritySecret` was supplied. An *unkeyed* successful
+   * load proves the store is self-CONSISTENT (public SHA-256), NOT AUTHENTIC: a
+   * writer with file access can re-mint the whole session and it will still
+   * load. For an untrusted store, load in keyed mode (or pin `expected*`
+   * anchors). Callers should treat `authenticated: false` as "integrity of a
+   * trusted store", not "proof against a malicious one".
+   */
+  readonly authenticated: boolean;
 }
 
 /**
@@ -140,5 +149,6 @@ export function loadSession(
     workState: items[0]?.state,
     workChainLength: graph.auditChain().length,
     logChainLength: log.length,
+    authenticated: options.integritySecret !== undefined,
   };
 }
