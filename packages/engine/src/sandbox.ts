@@ -18,21 +18,34 @@
  *     command line (fsmonitor / pager / hooks / external-diff / textconv), since
  *     a repo's own `.git/config` is untrusted.
  *
- * Honest scope: on macOS `sandbox-exec` denies network + out-of-root writes, and
- * sensitive real-HOME paths are read-denied — but reads are otherwise
- * unrestricted (a fully read-confining profile is not portable across
- * toolchains). The allowlist therefore excludes general file-read tools
- * (cat/ls/grep) — reads go through Reef's confined `read`/`search` actions, not
- * the shell. STRONG isolation for a fully untrusted repo is the container's job
- * (Docker, M5); the local sandbox is defense-in-depth. On non-macOS the process
- * is still cwd-confined, time-bounded, shell-free, and env-neutralised, but
- * OS-level network/write isolation is best-effort — {@link SandboxExecutor}
+ * Honest scope: on macOS `sandbox-exec` denies network + out-of-root writes AND
+ * denies reads of the entire real HOME (SSH keys, cloud creds, ~/.claude.json,
+ * every other project), re-allowing only the workspace + the binary's toolchain.
+ * That last part matters: git's config-driven code-execution surface (filter /
+ * gpg / fsmonitor / textconv hooks in an untrusted repo's own config) is
+ * UNBOUNDED — chasing it knob-by-knob is a losing game — so instead of trying to
+ * stop the code running, we stop it reaching secrets. Executed code still runs,
+ * but only against the workspace, with no network and no out-of-root write, so
+ * it cannot exfiltrate. Reads of system paths (/usr, /etc, /tmp) stay allowed so
+ * the toolchain works; that is the local sandbox's honest limit — STRONG
+ * isolation of a fully untrusted repo is the container's job (Docker, M5). The
+ * allowlist also excludes general file-read tools (cat/ls/grep) — reads go
+ * through Reef's confined `read`/`search` actions. On non-macOS the process is
+ * still cwd-confined, time-bounded, shell-free, and env-neutralised, but
+ * OS-level network/read/write isolation is best-effort — {@link SandboxExecutor}
  * reports which runner is active so a surface can warn.
  */
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import {
+  accessSync,
+  constants as fsConstants,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative } from "node:path";
 import type { ActionRequest } from "./types.js";
 import {
   canonicalRoot,
@@ -58,6 +71,12 @@ export interface RunOptions {
   readonly env: Readonly<Record<string, string>>;
   /** Directories the OS sandbox should permit writes to (workspace + home). */
   readonly writableRoots: readonly string[];
+  /**
+   * Directories to RE-ALLOW reads for after the real HOME is read-denied — the
+   * workspace (which may itself live under HOME) plus the toolchain prefix of
+   * the binary being run (e.g. a node under `~/.nvm`).
+   */
+  readonly readableRoots: readonly string[];
 }
 
 /** Runs a fully-formed argv. Injectable so tests never touch a real process. */
@@ -68,10 +87,29 @@ export interface CommandRunner {
 
 const OUTPUT_CAP = 16_000;
 
+/** Throwaway HOME dirs to remove when the process exits (temp-dir hygiene). */
+const TEMP_HOMES = new Set<string>();
+let exitHookInstalled = false;
+function registerTempHome(dir: string): void {
+  TEMP_HOMES.add(dir);
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.once("exit", () => {
+    for (const d of TEMP_HOMES) {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        /* best-effort on exit */
+      }
+    }
+  });
+}
+
 /**
  * Spawn `cmd argv` with no shell, in its own process group, capturing bounded
- * output and enforcing a timeout that kills the WHOLE group (not just the direct
- * child — a grandchild would otherwise survive and could hold the pipe open).
+ * output and enforcing a timeout that kills the WHOLE group and RESOLVES — a
+ * descendant that escaped the group (setsid) could otherwise hold the stdout
+ * pipe open and 'close' would never fire, hanging the executor.
  */
 function spawnCollect(
   cmd: string,
@@ -87,8 +125,16 @@ function spawnCollect(
     });
     let stdout = "";
     let stderr = "";
-    let timedOut = false;
     let settled = false;
+    const append = (buf: string, d: Buffer): string =>
+      buf.length >= OUTPUT_CAP
+        ? buf
+        : buf + d.toString("utf8").slice(0, OUTPUT_CAP - buf.length);
+    const finish = (code: number | null, timedOut: boolean): void => {
+      if (settled) return;
+      settled = true;
+      resolve({ code, stdout, stderr, timedOut });
+    };
     const killGroup = (signal: NodeJS.Signals): void => {
       try {
         if (child.pid !== undefined) process.kill(-child.pid, signal);
@@ -96,31 +142,26 @@ function spawnCollect(
         child.kill(signal); // group gone / never formed — fall back to the child
       }
     };
+    // Resolve on timeout even if a setsid-escaped descendant holds the pipe open.
     const timer = setTimeout(() => {
-      timedOut = true;
       killGroup("SIGKILL");
+      finish(null, true);
     }, opts.timeoutMs);
-    const append = (buf: string, d: Buffer): string =>
-      buf.length >= OUTPUT_CAP
-        ? buf
-        : buf + d.toString("utf8").slice(0, OUTPUT_CAP - buf.length);
     child.stdout?.on("data", (d: Buffer) => {
       stdout = append(stdout, d);
     });
     child.stderr?.on("data", (d: Buffer) => {
       stderr = append(stderr, d);
     });
-    const done = (code: number | null): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr, timedOut });
-    };
     child.on("error", (err: Error) => {
+      clearTimeout(timer);
       if (stderr.length < OUTPUT_CAP) stderr += err.message;
-      done(null);
+      finish(null, false);
     });
-    child.on("close", (code) => done(code));
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      finish(code, false);
+    });
   });
 }
 
@@ -129,57 +170,54 @@ function sbplEscape(path: string): string {
   return path.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-/** Real-HOME subpaths a sandboxed command must never read (credentials/keys). */
-function sensitiveReadDenies(): string {
-  const home = homedir();
-  if (home === "" || home === "/") return "";
-  const denied = [
-    ".ssh",
-    ".aws",
-    ".gnupg",
-    ".netrc",
-    ".git-credentials",
-    ".npmrc",
-    ".docker",
-    ".kube",
-    ".config/gh",
-    ".config/git",
-    ".config/gcloud",
-    "Library/Keychains",
-  ].map((rel) => `(subpath "${sbplEscape(join(home, rel))}")`);
-  return `(deny file-read* ${denied.join(" ")})`;
-}
-
 /**
- * An SBPL profile: allow by default, but DENY the network, DENY every filesystem
- * write except the workspace/home, and DENY reads of well-known secret paths.
- * "allow default" keeps ordinary toolchain binaries working (their libraries
- * live in unpredictable places); the explicit denies are the confinement.
+ * An SBPL profile: allow by default, but DENY the network, DENY every write
+ * outside the workspace/home, and — critically — DENY all reads of the real
+ * HOME, re-allowing only the workspace/home/toolchain.
+ *
+ * Reading is what turns a repo-config code-exec vector (git filter/gpg hooks —
+ * an unbounded surface we deliberately DON'T try to enumerate) into a secret
+ * exfiltration: the hook prints `~/.ssh/id_rsa` / `~/.aws` / `~/.claude.json`
+ * back through the tool's output. Denying the whole real HOME (where those live,
+ * along with every other project) contains it — executed code can still run, but
+ * only against the workspace, with no network and no out-of-root write. Reads of
+ * system paths (/usr, /etc, /tmp) stay allowed so the toolchain works; that is
+ * the local sandbox's honest limit — full untrusted-repo isolation is the
+ * container (M5). "allow default" keeps ordinary binaries working.
  */
-function darwinProfile(writableRoots: readonly string[]): string {
-  const writes = writableRoots
-    .map((r) => `(subpath "${sbplEscape(r)}")`)
-    .join(" ");
-  return [
+function darwinProfile(
+  writableRoots: readonly string[],
+  readableRoots: readonly string[],
+): string {
+  const subpaths = (roots: readonly string[]): string =>
+    roots.map((r) => `(subpath "${sbplEscape(r)}")`).join(" ");
+  const home = homedir();
+  const lines = [
     "(version 1)",
     "(allow default)",
     "(deny network*)",
     "(deny file-write*)",
-    `(allow file-write* ${writes})`,
+    `(allow file-write* ${subpaths(writableRoots)})`,
     '(allow file-write-data (literal "/dev/null") (literal "/dev/zero")' +
       ' (literal "/dev/stdout") (literal "/dev/stderr") (literal "/dev/tty")' +
       ' (literal "/dev/dtracehelper"))',
-    sensitiveReadDenies(),
-  ]
-    .filter((line) => line.length > 0)
-    .join("\n");
+  ];
+  if (home !== "" && home !== "/") {
+    // Order matters: the re-allow comes AFTER the deny (last match wins in SBPL),
+    // so a workspace/toolchain under HOME stays readable.
+    lines.push(`(deny file-read* (subpath "${sbplEscape(home)}"))`);
+    if (readableRoots.length > 0) {
+      lines.push(`(allow file-read* ${subpaths(readableRoots)})`);
+    }
+  }
+  return lines.join("\n");
 }
 
 /** macOS: wrap the command in `sandbox-exec` with the confinement profile. */
 export const darwinSandboxRunner: CommandRunner = {
   name: "darwin-sandbox-exec",
   run(argv, opts) {
-    const profile = darwinProfile(opts.writableRoots);
+    const profile = darwinProfile(opts.writableRoots, opts.readableRoots);
     return spawnCollect("sandbox-exec", ["-p", profile, ...argv], opts);
   },
 };
@@ -278,6 +316,49 @@ function hardenGitArgv(argv: readonly string[]): string[] {
   return out;
 }
 
+/** Resolve a command name to its real executable path (via PATH), or undefined. */
+function resolveBinary(
+  name: string,
+  pathEnv: string | undefined,
+): string | undefined {
+  try {
+    if (name.includes("/")) return realpathSync(name);
+    for (const dir of (pathEnv ?? "").split(delimiter)) {
+      if (dir === "") continue;
+      const candidate = join(dir, name);
+      try {
+        accessSync(candidate, fsConstants.X_OK);
+        return realpathSync(candidate);
+      } catch {
+        /* keep searching PATH */
+      }
+    }
+  } catch {
+    /* unresolved — caller falls back to no toolchain allow */
+  }
+  return undefined;
+}
+
+/** True if allowing reads of `p` would NOT re-open the read-denied HOME. */
+function safeReadAllow(p: string, home: string): boolean {
+  const rel = relative(p, home);
+  // rel === "" → p is HOME; rel without ".." → HOME is *inside* p (an ancestor).
+  return rel !== "" && (rel.startsWith("..") || isAbsolute(rel));
+}
+
+/**
+ * The narrowest toolchain directory to re-allow reads for so the binary at
+ * `bin` can load its libraries, without ever re-opening HOME. Prefers the
+ * install prefix (dirname²), falling back to the bin dir.
+ */
+function toolchainReadAllow(bin: string, home: string): string | undefined {
+  const prefix = dirname(dirname(bin));
+  if (safeReadAllow(prefix, home)) return prefix;
+  const binDir = dirname(bin);
+  if (safeReadAllow(binDir, home)) return binDir;
+  return undefined;
+}
+
 export interface SandboxOptions {
   /** Override the process runner (tests inject a fake). */
   readonly runner?: CommandRunner;
@@ -307,12 +388,28 @@ export class SandboxExecutor implements ActionExecutor {
     this.#timeoutMs = options.timeoutMs ?? 10_000;
     // A private, empty HOME/TMPDIR for every command this executor runs.
     this.#home = mkdtempSync(join(tmpdir(), "reef-home-"));
+    registerTempHome(this.#home);
     this.#env = sandboxEnv(this.#home);
   }
 
   /** Which runner is active — so a surface can warn when isolation is best-effort. */
   get runnerName(): string {
     return this.#runner.name;
+  }
+
+  /** The private throwaway HOME this executor runs commands with. */
+  get homeDir(): string {
+    return this.#home;
+  }
+
+  /** Remove this executor's throwaway HOME. Idempotent; call when done. */
+  dispose(): void {
+    TEMP_HOMES.delete(this.#home);
+    try {
+      rmSync(this.#home, { recursive: true, force: true });
+    } catch {
+      /* already gone */
+    }
   }
 
   async execute(action: ActionRequest): Promise<ExecOutcome> {
@@ -347,11 +444,22 @@ export class SandboxExecutor implements ActionExecutor {
     } catch {
       /* best-effort; spawn will surface a real failure */
     }
+    // Re-allow reads for the workspace, throwaway home, and the binary's
+    // toolchain prefix (which may live under the read-denied real HOME).
+    const bin = resolveBinary(argv[0]!, this.#env.PATH);
+    const toolchain =
+      bin !== undefined ? toolchainReadAllow(bin, homedir()) : undefined;
+    const readableRoots = [
+      this.#root,
+      this.#home,
+      ...(toolchain !== undefined ? [toolchain] : []),
+    ];
     const result = await this.#runner.run(argv, {
       cwd: this.#root,
       timeoutMs: this.#timeoutMs,
       env: this.#env,
       writableRoots: [this.#root, this.#home],
+      readableRoots,
     });
     if (result.timedOut) {
       return {

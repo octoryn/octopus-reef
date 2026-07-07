@@ -7,8 +7,16 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { existsSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { execSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   GovernedSession,
@@ -279,7 +287,28 @@ test("M1b-3 review: git argv is hardened against repo/global config code executi
   assert.ok(di >= 0 && diff.indexOf("HEAD") > di);
 });
 
-// ---- REAL macOS sandbox: the OS blocks an out-of-root write and network ----
+// ---- MED: a timed-out command with a real runner resolves (never hangs) ----
+test("M1b-3 review: a real long-running command resolves on timeout", async () => {
+  const ws = mkdtempSync(join(tmpdir(), "reef-ws-"));
+  const ex = new SandboxExecutor(ws, { timeoutMs: 700 }); // real platform runner
+  const r = await ex.execute(cmd("node -e setTimeout(function(){},60000)"));
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? "", /timed out after 700ms/);
+  ex.dispose();
+});
+
+// ---- MED: the throwaway HOME is cleaned up on dispose ----
+test("M1b-3 review: dispose() removes the throwaway HOME (no temp-dir leak)", () => {
+  const ws = mkdtempSync(join(tmpdir(), "reef-ws-"));
+  const ex = new SandboxExecutor(ws);
+  const home = ex.homeDir;
+  assert.equal(existsSync(home), true);
+  ex.dispose();
+  assert.equal(existsSync(home), false, "throwaway HOME must be removed");
+  ex.dispose(); // idempotent
+});
+
+// ---- REAL macOS sandbox: the OS blocks writes, network, AND real-HOME reads ----
 if (process.platform === "darwin") {
   test("M1b-3 [darwin]: sandbox-exec blocks out-of-root writes; benign commands run", async () => {
     const ws = mkdtempSync(join(tmpdir(), "reef-ws-"));
@@ -297,6 +326,57 @@ if (process.platform === "darwin") {
     const version = await ex.execute(cmd("node --version"));
     assert.equal(version.ok, true, version.error ?? "");
     assert.match(version.output ?? "", /^v\d+\./);
+    ex.dispose();
+  });
+
+  test("M1b-3 [darwin] review HIGH: git repo-config code-exec cannot exfiltrate a real-HOME secret", async () => {
+    // Plant a fake secret in the REAL home. Even when an attacker-controlled repo
+    // runs code via a git clean-filter during a sandboxed `git diff`, the OS must
+    // deny reading it — the filter runs, but reaches no secret.
+    const secretPath = join(homedir(), `.reef-fake-secret-${process.pid}`);
+    writeFileSync(secretPath, "SECRET=sk-VICTIM-abc123");
+    try {
+      const ws = mkdtempSync(join(tmpdir(), "reef-attack-"));
+      const git = (a: string): void => {
+        execSync(`git ${a}`, { cwd: ws });
+      };
+      git("init -q");
+      git("config user.email a@b.c");
+      git("config user.name a");
+      // Commit CLEAN content first (no filter configured yet — nothing baked in).
+      writeFileSync(join(ws, "data.txt"), "v1\n");
+      git("add data.txt");
+      git("commit -q -m init");
+      // Now configure the malicious clean filter and dirty the worktree, so the
+      // SANDBOXED `git diff` is what triggers the filter.
+      const evil = join(ws, "evil.sh");
+      // `|| true` so the denied read doesn't fail the filter (git would then
+      // discard its output); the marker proves the code ran under the sandbox.
+      writeFileSync(
+        evil,
+        `#!/bin/sh\necho FILTER-RAN\ncat "${secretPath}" 2>/dev/null || true\nexit 0\n`,
+      );
+      chmodSync(evil, 0o755);
+      writeFileSync(join(ws, ".gitattributes"), "data.txt filter=evil\n");
+      git("config filter.evil.clean ./evil.sh");
+      writeFileSync(join(ws, "data.txt"), "v2\n"); // dirty → diff re-cleans it
+
+      const ex = new SandboxExecutor(ws);
+      const r = await ex.execute(cmd("git diff"));
+      const surfaced = `${r.output ?? ""}${r.error ?? ""}`;
+      assert.ok(
+        surfaced.includes("FILTER-RAN"),
+        "the filter must actually run under the sandbox (else the test proves nothing)",
+      );
+      assert.equal(
+        surfaced.includes("sk-VICTIM-abc123"),
+        false,
+        "the real-HOME secret must NOT be exfiltrated through git output",
+      );
+      ex.dispose();
+    } finally {
+      rmSync(secretPath, { force: true });
+    }
   });
 }
 
