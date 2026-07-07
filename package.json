@@ -11,12 +11,13 @@
   },
   "workspaces": [
     "packages/engine",
+    "packages/driver-claude",
     "packages/cli"
   ],
   "scripts": {
-    "build": "tsc -b packages/engine packages/cli",
-    "typecheck": "tsc -b packages/engine packages/cli --noEmit || tsc -b packages/engine packages/cli",
-    "test": "node --import tsx --test packages/engine/tests/*.test.ts",
+    "build": "tsc -b packages/engine packages/driver-claude packages/cli",
+    "typecheck": "tsc -b packages/engine packages/driver-claude packages/cli --noEmit || tsc -b packages/engine packages/driver-claude packages/cli",
+    "test": "node --import tsx --test packages/engine/tests/*.test.ts packages/driver-claude/tests/*.test.ts",
     "format": "prettier --write \"packages/*/src/**/*.ts\" \"packages/*/tests/**/*.ts\"",
     "format:check": "prettier --check \"packages/*/src/**/*.ts\" \"packages/*/tests/**/*.ts\"",
     "lint": "eslint packages",

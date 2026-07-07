@@ -33,12 +33,18 @@ complete, and chasing bypasses (quoting, `${IFS}`, pipes, …) does not converge
 It catches obvious catastrophic commands and is scoped honestly. **Real
 command-execution safety is M1's job** (allowlist + sandbox), see below.
 
-## M1 — Real agent driver (Claude Agent SDK) + real execution safety 🔜
+## M1 — Real agent driver (Claude) + real execution safety 🔨
 Make `reef run` do real agentic coding when `ANTHROPIC_API_KEY` is present,
 behind the identical `Driver` interface. Mock stays the default (offline/CI/Docker).
-- ClaudeDriver wrapping the Claude Agent SDK; tool calls surface as `ActionRequest`s.
+- ✅ **M1a — governed planning**: `@octopus-reef/driver-claude` `ClaudeDriver`
+  calls `claude-opus-4-8` (adaptive thinking, effort high, structured-output
+  plan) and maps the plan to gated, evidence-chained `DriverStep`s. `reef run
+  --claude`. No real execution yet — a dangerous planned command is still denied
+  by the gate; no key → session fails gracefully. Network-free unit tests.
+- 🔜 **M1b — real execution safety**: bidirectional gate protocol (driver
+  proposes → session gates → executes only if allowed → result back to Claude),
+  `octopus-runtime` allowlist, and an OS sandbox. Only then does a real command run.
 - Streaming turns → `DriverStep`s → evidence links.
-- Read the `claude-api` skill before implementing; pin the model id.
 - **Execution safety (the real gate, replacing reliance on the denylist):** a
   real command NEVER runs on `DefaultGate`'s say-so. It must pass an
   **allowlist policy** (`octopus-runtime` Principal/decision — allow-known-safe,

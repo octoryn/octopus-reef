@@ -18,6 +18,7 @@ import {
   type Driver,
   type ReefEvent,
 } from "@octopus-reef/engine";
+import { ClaudeDriver } from "@octopus-reef/driver-claude";
 import {
   banner,
   c,
@@ -33,6 +34,7 @@ interface Flags {
   readonly secret: string | undefined;
   readonly json: boolean;
   readonly demoDenial: boolean;
+  readonly claude: boolean;
 }
 
 function parse(argv: readonly string[]): Flags {
@@ -41,15 +43,17 @@ function parse(argv: readonly string[]): Flags {
   let secret: string | undefined;
   let json = false;
   let demoDenial = false;
+  let claude = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--out") out = argv[++i];
     else if (a === "--secret") secret = argv[++i];
     else if (a === "--json") json = true;
     else if (a === "--demo-denial") demoDenial = true;
+    else if (a === "--claude") claude = true;
     else positional.push(a);
   }
-  return { _: positional, out, secret, json, demoDenial };
+  return { _: positional, out, secret, json, demoDenial, claude };
 }
 
 function sessionId(): string {
@@ -72,6 +76,7 @@ function help(): void {
       `${c.bold("FLAGS")}`,
       `  --out <dir>     Persist the session (workstate.jsonl + session.log.jsonl).`,
       `  --secret <key>  Keyed mode: bind every link with an HMAC.`,
+      `  --claude        Use the real Claude agent driver (needs ANTHROPIC_API_KEY; plans under governance, does not execute yet).`,
       `  --demo-denial   Use a driver that proposes a dangerous command, to show the gate.`,
       `  --json          Machine-readable output.`,
       ``,
@@ -89,9 +94,11 @@ async function runCommand(flags: Flags): Promise<number> {
     );
     return 2;
   }
-  const driver: Driver = flags.demoDenial
-    ? new UnsafeDemoDriver()
-    : new MockDriver();
+  const driver: Driver = flags.claude
+    ? new ClaudeDriver()
+    : flags.demoDenial
+      ? new UnsafeDemoDriver()
+      : new MockDriver();
   const id = sessionId();
   const events: ReefEvent[] = [];
 

@@ -1,0 +1,21 @@
+{
+  "name": "@octopus-reef/driver-claude",
+  "version": "0.1.0",
+  "description": "The real Claude Agent driver for Reef: turns a task into a governed session via claude-opus-4-8. Kept in its own package so the engine stays offline and dependency-free.",
+  "license": "Apache-2.0",
+  "author": "Ran Tao <ran@octopusos.ai>",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "@octopus-reef/engine": "^0.1.0"
+  }
+}
