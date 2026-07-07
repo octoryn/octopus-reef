@@ -1,0 +1,31 @@
+name: release
+
+# Publishing is deliberate: it runs only when a maintainer pushes a version tag
+# AND an NPM_TOKEN secret is configured. Nothing publishes on ordinary pushes.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+      - run: npm run verify:all
+      - name: publish public packages
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for pkg in engine protocol driver-claude server; do
+            npm publish --access public --workspace "@octopus-reef/$pkg" || true
+          done

@@ -133,10 +133,23 @@ that's fully self-contained and central to the positioning.
   module (`octopus-blackboard@0.3`, `octopus-observe@0.9`, …) integrated behind an
   engine seam, incrementally, one module + review at a time.
 
-## M7 — Harden & publish 🔜
-Bilingual house docs (README/ARCHITECTURE/DELIVERY-PLAN/CONTRIBUTING/SECURITY zh),
-CI (`ci.yml`/`release.yml`), ≥1 adversarial review round per surface converged,
-then publish packages + tag.
+## M7 — Harden & publish 🔨
+- ✅ **CI** — `.github/workflows/ci.yml`: the full house gate (`verify:all` —
+  typecheck/lint/format/test/build across libs + web + ide; the macOS sandbox
+  tests self-skip off darwin) plus a real Docker image build + smoke test (UI +
+  governed API + verify from the container). `release.yml` publishes public
+  packages only on a `v*` tag with an `NPM_TOKEN` secret — never on an ordinary push.
+- ✅ **Docs** — `SECURITY.md` (real threat model + the honest sandbox limit + private
+  reporting) and `CONTRIBUTING.md` (house standard + adversarial-review rhythm);
+  README replay note corrected to shipped.
+- 🔜 **Bilingual (zh)** house docs.
+- 🔜 **Publish** — packages are publish-ready (metadata/exports/files set); the
+  actual `npm publish` + tag is a deliberate, maintainer-gated step (held for
+  explicit go — it's public and irreversible).
+- Review status: the engine/gate/executor/sandbox converged over ten adversarial
+  rounds (M0 + M1b). The surfaces (server/web/ide) are lower-risk; their
+  security-relevant bits (SSE, static-serving path-traversal, webview CSP) are
+  tested. A dedicated surface-review round is the remaining M7 hardening item.
 
 ---
 

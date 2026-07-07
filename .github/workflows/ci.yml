@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: verify (typecheck · lint · format · test · build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      # The full house gate: typecheck (libs + web + ide), format, lint, tests
+      # (the macOS sandbox-exec tests self-skip off darwin), then all builds.
+      - run: npm run verify:all
+
+  docker:
+    name: docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build image
+        run: docker build -t octopus-reef:ci .
+      - name: smoke test — UI + governed API from the container
+        run: |
+          docker run -d --rm -p 4300:4300 --name reef-ci octopus-reef:ci
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:4300/health && break || sleep 1
+          done
+          curl -sf http://127.0.0.1:4300/ | grep -q "governed sessions"
+          id=$(curl -sf -X POST http://127.0.0.1:4300/sessions \
+            -H 'content-type: application/json' -d '{"task":"ci smoke"}' \
+            | node -e "process.stdin.on('data',d=>process.stdout.write(JSON.parse(d).id))")
+          sleep 1
+          curl -sf "http://127.0.0.1:4300/sessions/$id/verify" | grep -q '"ok":true'
+          docker stop reef-ci
