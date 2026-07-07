@@ -1,0 +1,12 @@
+{
+  "name": "@octopus-reef/adapter-scout",
+  "version": "0.1.0",
+  "description": "A thin, dependency-free HTTP client for a running octopus-scout — Reef CALLS Scout to pull governed web/PDF context at session open (robots + rate-limit + hash-dedup), rather than bundling the heavy ingestion service. Bring the trusted content in as a session observation.",
+  "license": "Apache-2.0",
+  "author": "Ran Tao <ran@octopusos.ai>",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "files": ["dist", "README.md", "LICENSE"]
+}

@@ -117,7 +117,7 @@ daemon hosts the built SPA).
   /sessions/:id/verify` returns `ok / intact / intact / bound`. `docker compose
   up` is the one-command form.
 
-## M6 — Deepen stack integration 🔨 (6 of 7 integrated)
+## M6 — Deepen stack integration ✅ (7 of 7 integrated)
 Wire the stack modules behind the engine's seams — the light, well-fitting ones
 first; the heavy/ill-shaped ones deferred with honest reasons.
 - ✅ **Replay** — byte-for-byte session reconstruction from the evidence log.
@@ -146,9 +146,13 @@ first; the heavy/ill-shaped ones deferred with honest reasons.
   (`octopus-experience`). `rememberDecision(memory, title, why)` records why a
   choice was made; `recall(memory, query)` surfaces the relevant prior context at
   session open. Ask *why*, not just *what*. `:memory:` or a persistent sqlite file.
-- ⏸ **Scout** — a full web/PDF ingestion **service** (fastify + playwright +
-  postgres + redis). Embedding it is the wrong shape; the right integration is
-  Reef *calling* a running Scout for session context, not bundling it.
+- ✅ **Scout** — `@octopus-reef/adapter-scout`: a thin, ZERO-dependency HTTP client
+  for a RUNNING `octopus-scout`. Scout is a full web/PDF ingestion service
+  (fastify + playwright + postgres + redis) — the wrong thing to embed, so Reef
+  *calls* it: at session open, `ScoutClient.scrape(url)` pulls task context
+  governed by Scout's own policy (robots, rate-limit, hash-dedup, SSRF guard) and
+  returns a normalized page to bring in as a session observation. `fetch` is
+  injectable (testable against a fake Scout — no running service needed).
 
 ## M7 — Harden & publish 🔨
 - ✅ **CI** — `.github/workflows/ci.yml`: the full house gate (`verify:all` —
