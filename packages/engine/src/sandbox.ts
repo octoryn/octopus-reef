@@ -143,8 +143,13 @@ function spawnCollect(
       }
     };
     // Resolve on timeout even if a setsid-escaped descendant holds the pipe open.
+    // Destroy the pipes and unref the child so that escaped descendant can't keep
+    // the Node event loop alive after we've given up on it.
     const timer = setTimeout(() => {
       killGroup("SIGKILL");
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.unref();
       finish(null, true);
     }, opts.timeoutMs);
     child.stdout?.on("data", (d: Buffer) => {
@@ -203,11 +208,17 @@ function darwinProfile(
       ' (literal "/dev/dtracehelper"))',
   ];
   if (home !== "" && home !== "/") {
-    // Order matters: the re-allow comes AFTER the deny (last match wins in SBPL),
-    // so a workspace/toolchain under HOME stays readable.
-    lines.push(`(deny file-read* (subpath "${sbplEscape(home)}"))`);
+    // Deny reading the CONTENTS (file-read-data) of anything under HOME — that is
+    // what a secret exfil needs (cat ~/.ssh/id_rsa). Metadata/traversal stays
+    // allowed so a toolchain living under HOME (nvm, and node's own CJS loader
+    // which lstats every path component up to HOME) still works. Order matters:
+    // the re-allow comes AFTER the deny (last match wins in SBPL), so a
+    // workspace/toolchain under HOME stays fully readable.
+    lines.push(`(deny file-read-data (subpath "${sbplEscape(home)}"))`);
     if (readableRoots.length > 0) {
-      lines.push(`(allow file-read* ${subpaths(readableRoots)})`);
+      // Must re-allow the SAME operation (file-read-data): in SBPL a later
+      // `allow file-read*` does NOT override a `deny file-read-data`.
+      lines.push(`(allow file-read-data ${subpaths(readableRoots)})`);
     }
   }
   return lines.join("\n");
@@ -437,6 +448,20 @@ export class SandboxExecutor implements ActionExecutor {
     if (argv.length === 0) {
       return { ok: false, error: "command is empty" };
     }
+    // Read-confinement re-allows the workspace root — but if that root IS the
+    // real HOME (or an ancestor, or "/"), that allow would re-open ALL of HOME
+    // and nullify the whole confinement. There is no safe way to both confine
+    // HOME and treat HOME as the workspace, so refuse rather than leak.
+    const home = homedir();
+    if (!safeReadAllow(this.#root, home)) {
+      return {
+        ok: false,
+        error:
+          "refusing to run commands: the workspace root is your home directory " +
+          "(or an ancestor of it) — point --workspace at a project subdirectory " +
+          "so the sandbox can confine reads",
+      };
+    }
     if (argv[0] === "git") argv = hardenGitArgv(argv);
     // The command runs IN the workspace — make sure it (and HOME) exist.
     try {
@@ -444,16 +469,18 @@ export class SandboxExecutor implements ActionExecutor {
     } catch {
       /* best-effort; spawn will surface a real failure */
     }
-    // Re-allow reads for the workspace, throwaway home, and the binary's
-    // toolchain prefix (which may live under the read-denied real HOME).
-    const bin = resolveBinary(argv[0]!, this.#env.PATH);
-    const toolchain =
-      bin !== undefined ? toolchainReadAllow(bin, homedir()) : undefined;
-    const readableRoots = [
-      this.#root,
-      this.#home,
-      ...(toolchain !== undefined ? [toolchain] : []),
-    ];
+    // Re-allow reads for the workspace, throwaway home, and the toolchain
+    // prefixes (which may live under the read-denied real HOME) — BOTH the
+    // command's own binary AND the node runtime, since a node-based tool like
+    // `npm` resolves into node_modules and still needs node itself.
+    const readable = new Set<string>([this.#root, this.#home]);
+    for (const name of [argv[0]!, "node"]) {
+      const bin = resolveBinary(name, this.#env.PATH);
+      const toolchain =
+        bin !== undefined ? toolchainReadAllow(bin, home) : undefined;
+      if (toolchain !== undefined) readable.add(toolchain);
+    }
+    const readableRoots = [...readable];
     const result = await this.#runner.run(argv, {
       cwd: this.#root,
       timeoutMs: this.#timeoutMs,

@@ -308,7 +308,37 @@ test("M1b-3 review: dispose() removes the throwaway HOME (no temp-dir leak)", ()
   ex.dispose(); // idempotent
 });
 
+// ---- R3 HIGH: refuse commands when the workspace root would un-confine HOME ----
+test("M1b-3 R3: commands are refused when the workspace root is HOME (or an ancestor)", async () => {
+  const ex = new SandboxExecutor(homedir());
+  const r = await ex.execute(cmd("node --version"));
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? "", /home directory|ancestor/);
+  ex.dispose();
+
+  const exRoot = new SandboxExecutor("/");
+  const r2 = await exRoot.execute(cmd("node --version"));
+  assert.equal(r2.ok, false);
+  exRoot.dispose();
+});
+
 // ---- REAL macOS sandbox: the OS blocks writes, network, AND real-HOME reads ----
+if (process.platform === "darwin") {
+  test("M1b-3 R3 [darwin]: node AND npm still run under read-confinement", async () => {
+    const ws = mkdtempSync(join(tmpdir(), "reef-ws-"));
+    const ex = new SandboxExecutor(ws);
+    const node = await ex.execute(cmd("node --version"));
+    assert.equal(node.ok, true, node.error ?? "");
+    assert.match(node.output ?? "", /^v\d+\./);
+    // npm resolves into node_modules — it needs BOTH its own prefix and node's.
+    const npm = await ex.execute(cmd("npm --version"));
+    assert.equal(npm.ok, true, npm.error ?? "");
+    assert.match(npm.output ?? "", /^\d+\.\d+/);
+    ex.dispose();
+  });
+}
+
+// ---- REAL macOS sandbox: writes/network/HOME-secret reads (legacy block) ----
 if (process.platform === "darwin") {
   test("M1b-3 [darwin]: sandbox-exec blocks out-of-root writes; benign commands run", async () => {
     const ws = mkdtempSync(join(tmpdir(), "reef-ws-"));
