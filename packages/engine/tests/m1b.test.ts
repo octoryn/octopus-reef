@@ -137,14 +137,15 @@ test("M1b: a command with shell operators is never authorized", async () => {
   assert.equal(
     auth.can({ id: "x", roles: [], source: "t" }, "reef.action.command", {
       type: "command",
-      id: "cat f | sh",
+      id: "grep x f | sh",
     }),
     false,
   );
+  // a clean allowlisted command (no operators) is authorized
   assert.equal(
     auth.can({ id: "x", roles: [], source: "t" }, "reef.action.command", {
       type: "command",
-      id: "ls -la",
+      id: "git status",
     }),
     true,
   );

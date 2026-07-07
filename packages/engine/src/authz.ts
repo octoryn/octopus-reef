@@ -41,21 +41,19 @@ export const LOCAL_PRINCIPAL: Principal = Object.freeze({
  * executor runs nothing, e.g. the NoopExecutor). NOT for real execution. */
 export const allowAll: Authorizer = { can: (): boolean => true };
 
-/** Read-only binaries that are safe to allow. `"*"` = any args; array = allowed subcommands. */
+/**
+ * The command allowlist: a SMALL set of build/VCS tools. `"*"` = any args;
+ * array = allowed subcommands.
+ *
+ * Deliberately NO general file-read tools (cat/ls/grep/head/tail): once a
+ * command actually executes, such a "read-only" binary is a filesystem-exfil
+ * channel — it prints any readable file straight back into the agent's context
+ * (review M1b-3 HIGH). Reads go through Reef's CONFINED `read`/`search` actions,
+ * not the shell. What remains is version/inspection of the toolchain plus
+ * read-only git; git's config-driven code-execution is neutralised by the
+ * sandbox (see sandbox.ts hardenGitArgv + a throwaway HOME).
+ */
 const READ_ONLY: Readonly<Record<string, readonly string[] | "*">> = {
-  ls: "*",
-  pwd: "*",
-  echo: "*",
-  printf: "*",
-  cat: "*",
-  head: "*",
-  tail: "*",
-  wc: "*",
-  grep: "*",
-  date: "*",
-  whoami: "*",
-  true: "*",
-  false: "*",
   node: ["--version", "-v"],
   npm: ["--version", "-v", "list", "ls"],
   python3: ["--version"],
