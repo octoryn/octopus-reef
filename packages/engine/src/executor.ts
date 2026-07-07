@@ -11,6 +11,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   writeFileSync,
 } from "node:fs";
@@ -22,22 +23,33 @@ import type { ActionRequest } from "./types.js";
  * re-append any not-yet-created suffix. This lets the executor bootstrap a
  * missing root (the first `edit` creates it) instead of throwing an opaque
  * ENOENT, while still resolving symlinks in the real part of the root path.
+ *
+ * A symlink root is FOLLOWED to its intended target — even a dangling one — so a
+ * root that is itself a broken/not-yet-created symlink still bootstraps rather
+ * than false-rejecting every operation. The hop count defuses symlink cycles.
  */
 function canonicalRoot(root: string): string {
-  const abs = resolve(root);
   const missing: string[] = [];
-  let probe = abs;
-  for (;;) {
+  let probe = resolve(root);
+  for (let hops = 0; hops < 64; hops++) {
+    let stat;
     try {
-      const real = realpathSync(probe);
-      return missing.length > 0 ? join(real, ...missing) : real;
+      stat = lstatSync(probe);
     } catch {
       const parent = dirname(probe);
-      if (parent === probe) return abs; // nothing on this path exists
+      if (parent === probe) break; // reached filesystem root; nothing exists
       missing.unshift(relative(parent, probe));
       probe = parent;
+      continue;
     }
+    if (stat.isSymbolicLink()) {
+      probe = resolve(dirname(probe), readlinkSync(probe));
+      continue;
+    }
+    const real = realpathSync(probe);
+    return missing.length > 0 ? join(real, ...missing) : real;
   }
+  return resolve(root);
 }
 
 export interface ExecOutcome {

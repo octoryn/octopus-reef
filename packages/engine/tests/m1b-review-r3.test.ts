@@ -7,7 +7,14 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkspaceExecutor, reefAllowlist } from "../src/index.js";
@@ -54,6 +61,26 @@ test("M1b R3 MED: an in-root symlink is not rejected as an escape", async () => 
     target: "v1/new.txt",
   });
   assert.equal(readBack.output, "ok");
+});
+
+// ---- R4 MED: a workspace root that is a (dangling) symlink still bootstraps ----
+test("M1b R4 MED: a dangling-symlink workspace root bootstraps on first write", async () => {
+  const base = mkdtempSync(join(tmpdir(), "reef-base-"));
+  const target = join(base, "ghost"); // does NOT exist yet
+  const rootLink = join(base, "droot");
+  symlinkSync(target, rootLink); // root is a dangling symlink → its target
+
+  const ex = new WorkspaceExecutor(rootLink);
+  const write = await ex.execute({
+    type: "edit",
+    summary: "",
+    target: "f.txt",
+    payload: { content: "ok" },
+  });
+
+  assert.equal(write.ok, true, write.error ?? "");
+  assert.equal(readFileSync(join(target, "f.txt"), "utf8"), "ok");
+  rmSync(base, { recursive: true, force: true });
 });
 
 // ---- LOW: the attached `-c<cfg>` form is also hard-denied ----
