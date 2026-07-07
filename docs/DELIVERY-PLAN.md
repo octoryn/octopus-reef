@@ -117,15 +117,21 @@ daemon hosts the built SPA).
   /sessions/:id/verify` returns `ok / intact / intact / bound`. `docker compose
   up` is the one-command form.
 
-## M6 — Deepen stack integration 🔜
-Wire the remaining modules behind the engine's seams:
-- **Runtime** — replace `DefaultGate` internals with `octopus-runtime` Principal/decision gate.
-- **Blackboard** — multi-agent shared cognition (parallel agents on one session).
-- **Replay** — byte-for-byte session reconstruction from the evidence log.
-- **Observe** — turn agent inputs into trusted Observations at the boundary.
-- **Experience** — "why this knowledge is trusted" surfaced in the session.
-- **Scout** — pull task context/evidence at session open.
-- **Inspect** — governance lint over the workspace itself.
+## M6 — Deepen stack integration 🔨 (Replay ✅)
+Wire the remaining modules behind the engine's seams. Delivered first: the one
+that's fully self-contained and central to the positioning.
+- ✅ **Replay** — byte-for-byte session reconstruction from the evidence log.
+  `replaySession(dir)` / `reef replay <dir>`: load + re-verify store-untrusting,
+  then reconstruct the full `ReefEvent` timeline from the verified log —
+  deterministically and totally (the reconstructed events equal what the session
+  emitted live; a tampered log cannot be replayed). Proven byte-for-byte by a
+  deep-equal regression test; tamper + keyed cases covered.
+- 🔜 **Runtime** — the `Authorizer`/`Principal` ports are already structurally
+  identical to `octopus-runtime@0.7.0`, so a real RBAC/OIDC gate drops in behind
+  the same interface with the engine still offline. Next: a thin adapter package.
+- 🔜 **Blackboard / Observe / Experience / Scout / Inspect** — each is a published
+  module (`octopus-blackboard@0.3`, `octopus-observe@0.9`, …) integrated behind an
+  engine seam, incrementally, one module + review at a time.
 
 ## M7 — Harden & publish 🔜
 Bilingual house docs (README/ARCHITECTURE/DELIVERY-PLAN/CONTRIBUTING/SECURITY zh),

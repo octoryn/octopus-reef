@@ -18,6 +18,7 @@ import {
   loadSession,
   persistSession,
   reefAllowlist,
+  replaySession,
   type ActionExecutor,
   type Driver,
   type ReefEvent,
@@ -87,12 +88,14 @@ function help(): void {
       `${c.bold("USAGE")}`,
       `  reef run "<task>" [--out <dir>] [--secret <key>] [--demo-denial] [--json]`,
       `  reef verify <dir> [--secret <key>] [--json]`,
+      `  reef replay <dir> [--secret <key>] [--json]`,
       `  reef serve [<port>] [--out <dir>]`,
       ``,
       `${c.bold("COMMANDS")}`,
       `  ${c.signal("run")}     Run a governed agentic session. Every step becomes a`,
       `          tamper-evident evidence link over a governed work spine.`,
       `  ${c.signal("verify")}  Load a persisted session and re-verify it store-untrusting.`,
+      `  ${c.signal("replay")}  Re-verify AND reconstruct a session's full timeline from the log.`,
       `  ${c.signal("serve")}   Start the daemon (HTTP + SSE) that every surface shares.`,
       ``,
       `${c.bold("FLAGS")}`,
@@ -278,6 +281,48 @@ async function serveCommand(flags: Flags): Promise<number> {
   });
 }
 
+function replayCommand(flags: Flags): number {
+  const dir = flags._[1];
+  if (dir === undefined) {
+    process.stderr.write(
+      c.danger("error: reef replay needs a session directory\n"),
+    );
+    return 2;
+  }
+  try {
+    const replayed = replaySession(
+      dir,
+      flags.secret !== undefined ? { integritySecret: flags.secret } : {},
+    );
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(replayed, null, 2) + "\n");
+      return 0;
+    }
+    process.stdout.write(banner());
+    process.stdout.write(
+      `  ${verdictLine(true, "intact", "intact", "bound")}   ${c.muted("replayed")} ${c.ink(String(replayed.events.length))} ${c.muted("events")}\n\n`,
+    );
+    for (const e of replayed.events) {
+      process.stdout.write(renderEvent(e) + "\n");
+    }
+    process.stdout.write("\n");
+    return 0;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    if (flags.json)
+      process.stdout.write(
+        JSON.stringify({ ok: false, reason }, null, 2) + "\n",
+      );
+    else {
+      process.stdout.write(banner());
+      process.stdout.write(
+        `  ${c.danger("⨯ REPLAY FAILED")}  ${c.muted(reason)}\n\n`,
+      );
+    }
+    return 1;
+  }
+}
+
 async function main(): Promise<number> {
   const flags = parse(process.argv.slice(2));
   const command = flags._[0];
@@ -288,6 +333,8 @@ async function main(): Promise<number> {
       return serveCommand(flags);
     case "verify":
       return verifyCommand(flags);
+    case "replay":
+      return replayCommand(flags);
     case undefined:
     case "help":
     case "--help":

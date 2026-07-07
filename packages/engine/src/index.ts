@@ -38,6 +38,9 @@ export { MockDriver, UnsafeDemoDriver } from "./driver.js";
 export { persistSession, loadSession } from "./persist.js";
 export type { PersistOptions, LoadedSession } from "./persist.js";
 
+export { replaySession, reconstructEvents } from "./replay.js";
+export type { ReplayedSession } from "./replay.js";
+
 export { verifyBinding } from "./verify.js";
 export type { BindingResult } from "./verify.js";
 

@@ -7,9 +7,10 @@
 Reef is an open, evidence-backed alternative to closed agentic IDEs. It runs
 agents across your codebases like any agentic workspace — then **proves every
 action they took**. Each state transition is a tamper-evident link. Every session
-verifies independently, without trusting the store — and is captured as an
-append-only evidence chain built for byte-for-byte replay (the Replay surface
-lands at M6; see [docs/DELIVERY-PLAN.md](docs/DELIVERY-PLAN.md)).
+verifies independently, without trusting the store — and **replays byte-for-byte
+from its evidence log** (`reef replay <dir>`): a persisted session is
+re-verified store-untrusting, then its entire timeline is reconstructed, exactly
+as it was emitted. Replay only succeeds on a log that verifies.
 
 > **Part of [Octopus Core](https://github.com/octoryn) — the open infrastructure stack for governed AI.** Reef is the *workspace surface* that composes the stack into one product. It never reinvents hashing, chains, or the work state machine — it builds on [`octopus-evidence`](https://github.com/octoryn/octopus-evidence) and [`octopus-workstate`](https://github.com/octoryn/octopus-workstate), and (on the roadmap) Runtime, Blackboard, Replay, Observe, Experience, Scout, and Inspect.
 
