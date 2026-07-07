@@ -1,0 +1,20 @@
+{
+  "name": "@octopus-reef/adapter-observe",
+  "version": "0.1.0",
+  "description": "The Reef input boundary: turn an untrusted agent input (a tool call, an action) into a validated, canonical Observation via octopus-observe, then bridge it to evidence a governed session can carry. Only trusted observations cross the boundary.",
+  "license": "Apache-2.0",
+  "author": "Ran Tao <ran@octopusos.ai>",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "dependencies": {
+    "octopus-observe": "^0.9.0"
+  }
+}
