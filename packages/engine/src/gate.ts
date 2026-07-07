@@ -101,7 +101,12 @@ const DANGEROUS_PATTERNS: readonly RegExp[] = [
   /\bfind\s+(?:\/|~|\$HOME)[^\n]*(?:-delete\b|-exec\s+rm\b)/i, // find / ... -delete | -exec rm
 ];
 
-/** Extract a normalised command string from an action, if it carries one. */
+/**
+ * Extract a normalised command string. Spaces/tabs are collapsed, but NEWLINES
+ * are PRESERVED so a multi-statement command can be split and checked
+ * statement-by-statement (review R3 HIGH: collapsing `\n` to a space let a
+ * dangerous second line hide behind an `echo` prefix).
+ */
 function commandText(action: ActionRequest): string | undefined {
   if (action.type !== "command") return undefined;
   const raw =
@@ -111,12 +116,24 @@ function commandText(action: ActionRequest): string | undefined {
       ? action.payload.command
       : (action.target ?? action.summary);
   const s = typeof raw === "string" ? raw : String(raw);
-  return s.replace(/\s+/g, " ").trim();
+  return s
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .trim();
 }
 
-/** A pure `echo`/`printf` that cannot execute what it merely prints. */
-function isInertEcho(command: string): boolean {
-  return /^(?:echo|printf)\s/i.test(command) && !/[|;&`]|\$\(|>/.test(command);
+/** Shell separators that start a NEW statement (a single `|` pipe is NOT one). */
+const STATEMENT_SEP = /[\n;&]|&&|\|\|/;
+
+/**
+ * A single statement that is a pure `echo`/`printf`: it prints, it cannot execute
+ * a subcommand (no pipe, backtick, `$(…)`, redirect, or newline). Applied per
+ * statement, so a later dangerous statement can never ride on an echo prefix.
+ */
+function isInertEcho(statement: string): boolean {
+  return (
+    /^(?:echo|printf)\b/i.test(statement) && !/[|`\n]|\$\(|>/.test(statement)
+  );
 }
 
 export interface ActionGate {
@@ -129,13 +146,28 @@ export class DefaultGate implements ActionGate {
 
   check(action: ActionRequest): GateVerdict {
     const command = commandText(action);
-    if (command !== undefined && !isInertEcho(command)) {
+    if (command !== undefined) {
+      const statements = command
+        .split(STATEMENT_SEP)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      // A command made ENTIRELY of pure echo/printf statements only prints — permit
+      // it (this is the false-positive the exemption exists for). Otherwise check the
+      // whole command for self-contained catastrophic sequences (fork bomb,
+      // pipe-to-shell, dd, mkfs, tee-to-device, find -delete) AND each non-echo
+      // statement for a dangerous command.
+      const allInert = statements.length > 0 && statements.every(isInertEcho);
       const blocked =
-        isDangerousRm(command) ||
-        isDangerousChown(command) ||
-        isDangerousChmod(command) ||
-        isForcePush(command) ||
-        DANGEROUS_PATTERNS.some((p) => p.test(command));
+        !allInert &&
+        (DANGEROUS_PATTERNS.some((p) => p.test(command)) ||
+          statements.some(
+            (s) =>
+              !isInertEcho(s) &&
+              (isDangerousRm(s) ||
+                isDangerousChown(s) ||
+                isDangerousChmod(s) ||
+                isForcePush(s)),
+          ));
       if (blocked) {
         return {
           allow: false,

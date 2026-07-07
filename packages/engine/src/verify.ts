@@ -13,7 +13,11 @@
  *   4. that seal's declared `finalLogLength` equals the actual log length;
  *   5. that seal's declared `workAnchor` (length + head) equals the loaded work
  *      spine's anchor — cryptographically binding the log to *this* spine's
- *      content, so a swapped or rolled-back spine is rejected.
+ *      content, so a swapped or rolled-back spine is rejected;
+ *   6. the seal's `outcome` agrees with the spine's terminal state;
+ *   7. the terminal transition's committed log-head matches the loaded log — the
+ *      spine→log direction, making the cross-binding bidirectional so a foreign
+ *      log is caught even if its seal's workAnchor was re-minted (unkeyed).
  */
 import type { WorkStateGraph } from "octopus-workstate";
 import type { EvidenceLog } from "./log.js";
@@ -93,5 +97,41 @@ export function verifyBinding(
         "seal's work-spine anchor does not match the loaded spine (swapped or truncated work spine)",
     };
   }
+
+  // The seal's outcome must agree with the spine's terminal state — a forged
+  // "completed" over a `failed` spine (unkeyed re-mint) is caught here.
+  const STATE_OUTCOME: Record<string, string> = {
+    done: "completed",
+    failed: "failed",
+    cancelled: "cancelled",
+  };
+  if (content.outcome !== STATE_OUTCOME[items[0]!.state]) {
+    return {
+      ok: false,
+      reason: `seal outcome "${String(content.outcome)}" does not match the spine terminal state "${items[0]!.state}"`,
+    };
+  }
+
+  // Bidirectional bind: every transition commits the log head at its time (a
+  // `reef.log-head` evidence ref). The terminal transition's committed head must
+  // match the loaded log, so a foreign log is rejected even if its seal's
+  // workAnchor was re-minted to match the spine.
+  const transitions = graph.transitions();
+  const terminal = transitions[transitions.length - 1];
+  const committedHead = terminal?.evidence?.find(
+    (e) => e.kind === "reef.log-head",
+  )?.evidenceId;
+  const headIdx = log.length - 3; // head captured just before the terminal transition event + seal
+  if (committedHead !== undefined && headIdx >= 0) {
+    const actualHead = log.records()[headIdx]?.link.hash;
+    if (committedHead !== actualHead) {
+      return {
+        ok: false,
+        reason:
+          "the spine's committed log-head does not match the loaded log (foreign or altered log)",
+      };
+    }
+  }
+
   return { ok: true, reason: "bound" };
 }
