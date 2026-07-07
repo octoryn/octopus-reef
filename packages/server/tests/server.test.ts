@@ -6,8 +6,33 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import http from "node:http";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ReefServer } from "../src/index.js";
 import type { ServerEvent } from "@octopus-reef/protocol";
+
+/** GET raw text (not JSON) — for static assets. */
+function getText(
+  port: number,
+  path: string,
+): Promise<{ status: number; type: string; body: string }> {
+  return new Promise((resolve, reject) => {
+    http
+      .get({ host: "127.0.0.1", port, path }, (res) => {
+        let raw = "";
+        res.on("data", (c) => (raw += c));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            type: String(res.headers["content-type"] ?? ""),
+            body: raw,
+          }),
+        );
+      })
+      .on("error", reject);
+  });
+}
 
 // Loose response shape — test ergonomics over precise typing of every route.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -148,6 +173,46 @@ test("M2: a keyed session verifies with the same secret over the wire", async ()
     const sealed = frames.at(-1);
     assert.equal(sealed?.type, "sealed");
     if (sealed?.type === "sealed") assert.equal(sealed.verify.ok, true);
+  } finally {
+    await server.close();
+  }
+});
+
+test("M5: serves the web SPA for non-API routes, confined, API still works", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-static-"));
+  writeFileSync(
+    join(dir, "index.html"),
+    "<!doctype html><title>reef</title>APP",
+  );
+  mkdirSync(join(dir, "assets"));
+  writeFileSync(join(dir, "assets", "app.js"), "console.log('reef')");
+
+  const server = new ReefServer({ staticDir: dir });
+  const port = await server.listen(0);
+  try {
+    // root → index.html
+    const root = await getText(port, "/");
+    assert.equal(root.status, 200);
+    assert.match(root.type, /text\/html/);
+    assert.match(root.body, /APP/);
+
+    // a real asset with the right content-type
+    const asset = await getText(port, "/assets/app.js");
+    assert.equal(asset.status, 200);
+    assert.match(asset.type, /javascript/);
+    assert.match(asset.body, /reef/);
+
+    // an unknown client route → SPA fallback (index.html)
+    const spa = await getText(port, "/sessions-view/abc");
+    assert.match(spa.body, /APP/);
+
+    // path traversal is confined — never serves outside the static root
+    const escape = await getText(port, "/../../../../etc/passwd");
+    assert.ok(!escape.body.includes("root:"), "must not leak /etc/passwd");
+
+    // the API still works alongside static serving
+    const created = await request(port, "POST", "/sessions", { task: "t" });
+    assert.equal(created.status, 201);
   } finally {
     await server.close();
   }

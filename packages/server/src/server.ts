@@ -23,7 +23,8 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { join } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { extname, join, relative, resolve } from "node:path";
 import {
   GovernedSession,
   MockDriver,
@@ -61,9 +62,27 @@ export interface ReefServerOptions {
    * swaps in a real agent driver here.
    */
   readonly driverFactory?: (task: string) => Driver;
+  /**
+   * Serve a built single-page app (the web surface) for non-API GET routes, so
+   * one container hosts both the governed backend and the UI. Unknown paths fall
+   * back to `index.html` (client-side routing).
+   */
+  readonly staticDir?: string;
 }
 
 const MAX_BODY = 64 * 1024;
+
+const CONTENT_TYPES: Readonly<Record<string, string>> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".png": "image/png",
+  ".woff2": "font/woff2",
+  ".map": "application/json; charset=utf-8",
+};
 
 /** A local daemon hosting the Reef engine for every surface to share. */
 export class ReefServer {
@@ -125,7 +144,32 @@ export class ReefServer {
         return this.#verify(res, rec);
       }
     }
+    // Non-API GETs fall through to the static SPA, when one is configured.
+    if (method === "GET" && this.#options.staticDir !== undefined) {
+      return this.#serveStatic(this.#options.staticDir, url.pathname, res);
+    }
     this.#fail(res, 404, "not found");
+  }
+
+  #serveStatic(dir: string, pathname: string, res: ServerResponse): void {
+    const root = resolve(dir);
+    const requested = resolve(root, `.${pathname}`);
+    // Path-traversal guard: never serve outside the static root.
+    const rel = relative(root, requested);
+    const inRoot =
+      rel === "" || (!rel.startsWith("..") && !/^([a-zA-Z]:)?[/\\]/.test(rel));
+    let file = inRoot ? requested : root;
+    // A directory or an unknown client-route path → the SPA entry point.
+    if (!existsSync(file) || statSync(file).isDirectory()) {
+      file = join(root, "index.html");
+    }
+    if (!existsSync(file)) return this.#fail(res, 404, "not found");
+    const body = readFileSync(file);
+    res.writeHead(200, {
+      "Content-Type":
+        CONTENT_TYPES[extname(file)] ?? "application/octet-stream",
+    });
+    res.end(body);
   }
 
   async #createSession(

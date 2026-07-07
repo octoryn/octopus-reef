@@ -1,0 +1,20 @@
+# Reef — one command up.
+#
+#   docker compose up
+#   → http://localhost:4300  (governed backend + web UI, offline & keyless)
+#
+# Uncomment the volume to persist sessions to the host; set ANTHROPIC_API_KEY
+# (and a real driver) for live agentic runs — the default is the offline mock.
+services:
+  reef:
+    build: .
+    image: octopus-reef:latest
+    ports:
+      - "4300:4300"
+    environment:
+      PORT: "4300"
+      HOST: "0.0.0.0"
+    # volumes:
+    #   - ./.reef-sessions:/app/sessions
+    # command: ["node", "packages/server/dist/bin.js", "--persist", "/app/sessions"]
+    restart: unless-stopped

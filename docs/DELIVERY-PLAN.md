@@ -93,10 +93,19 @@ governed session and its proof block.
 start). Session view, live evidence chain, gate prompts, `reef verify` command.
 - Acceptance: run + verify a governed session inside VS Code.
 
-## M5 — Docker one-click 🔜
-`docker/` — one image, `docker run` brings up server + web; local `reef` connects.
-- Keyless demo works out of the box (mock driver); mount a key for real agents.
-- Acceptance: `docker compose up` → open the browser → run + verify a session.
+## M5 — Docker one-click ✅
+`Dockerfile` + `docker-compose.yml` — one image, one command, server **and** web
+from a single process (`ReefServer` gained confined static-file serving so the
+daemon hosts the built SPA).
+- Multi-stage: build the libs (tsc) + web bundle (Vite), then a slim `node:22`
+  runtime with pruned deps, running as the unprivileged `node` user with a
+  `/health` HEALTHCHECK. Image ~360 MB.
+- Keyless/offline out of the box (mock driver); set a key + real driver for live
+  agents; optional `--persist` volume.
+- Acceptance MET (real build + run on Docker 29): `docker run -p 4300:4300
+  octopus-reef` → `GET /` serves the web UI, `POST /sessions` + `GET
+  /sessions/:id/verify` returns `ok / intact / intact / bound`. `docker compose
+  up` is the one-command form.
 
 ## M6 — Deepen stack integration 🔜
 Wire the remaining modules behind the engine's seams:

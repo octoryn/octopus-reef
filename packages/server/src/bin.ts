@@ -2,10 +2,11 @@
 /**
  * `reef-serve` — start the Reef daemon.
  *
- *   reef-serve [--port <n>] [--host <h>] [--persist <dir>]
+ *   reef-serve [--port <n>] [--host <h>] [--persist <dir>] [--static <dir>]
  *
  * Offline and keyless by default (the mock driver), so the Docker image serves
- * a working governed backend the moment it starts.
+ * a working governed backend — and, with --static, the web UI — the moment it
+ * starts.
  */
 import { ReefServer, type ReefServerOptions } from "./server.js";
 
@@ -16,10 +17,13 @@ function arg(flag: string): string | undefined {
 
 async function main(): Promise<void> {
   const port = Number(arg("--port") ?? process.env.PORT ?? 4300);
-  const host = arg("--host") ?? "127.0.0.1";
+  const host = arg("--host") ?? process.env.HOST ?? "127.0.0.1";
   const persistDir = arg("--persist");
-  const options: ReefServerOptions =
-    persistDir !== undefined ? { persistDir } : {};
+  const staticDir = arg("--static") ?? process.env.REEF_STATIC;
+  const options: ReefServerOptions = {
+    ...(persistDir !== undefined ? { persistDir } : {}),
+    ...(staticDir !== undefined ? { staticDir } : {}),
+  };
   const server = new ReefServer(options);
   const bound = await server.listen(port, host);
   process.stdout.write(
