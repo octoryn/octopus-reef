@@ -8,14 +8,37 @@
  * the OS sandbox (M1b-3) — after the 2026-07-06 incident, no unsandboxed shell.
  */
 import {
-  existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ActionRequest } from "./types.js";
+
+/**
+ * The workspace root, canonicalised: realpath the deepest EXISTING ancestor and
+ * re-append any not-yet-created suffix. This lets the executor bootstrap a
+ * missing root (the first `edit` creates it) instead of throwing an opaque
+ * ENOENT, while still resolving symlinks in the real part of the root path.
+ */
+function canonicalRoot(root: string): string {
+  const abs = resolve(root);
+  const missing: string[] = [];
+  let probe = abs;
+  for (;;) {
+    try {
+      const real = realpathSync(probe);
+      return missing.length > 0 ? join(real, ...missing) : real;
+    } catch {
+      const parent = dirname(probe);
+      if (parent === probe) return abs; // nothing on this path exists
+      missing.unshift(relative(parent, probe));
+      probe = parent;
+    }
+  }
+}
 
 export interface ExecOutcome {
   readonly ok: boolean;
@@ -48,19 +71,22 @@ export class WorkspaceExecutor implements ActionExecutor {
   readonly #root: string;
 
   constructor(root: string) {
-    this.#root = resolve(root);
+    this.#root = canonicalRoot(root);
   }
 
   /**
-   * Resolve `target` inside the root, or throw if it escapes — lexically AND via
-   * symlinks. A purely lexical check is not enough: `readFileSync`/`writeFileSync`
-   * follow symlinks, so a symlink inside the root (final target OR an intermediate
-   * directory component) can point outside. We realpath the deepest EXISTING
-   * ancestor and require it to stay within the realpath'd root, which catches both
-   * a symlinked target and a symlinked parent, for read and write alike.
+   * Resolve `target` inside the root, or throw if it escapes. Two independent
+   * guards: (1) a lexical check that the resolved path stays under the root, and
+   * (2) a symlink check — every EXISTING path component is `lstat`'d (which does
+   * NOT follow links) and ANY symlink component is rejected.
    *
-   * (A residual TOCTOU exists if a symlink is swapped between this check and the
-   * fs call; for a local single-user tool that is out of scope — the real
+   * Rejecting symlinks outright (rather than resolving them) is what closes the
+   * dangling-symlink hole: a link whose target does not exist yet is still an
+   * `lstat` symlink, even though `existsSync` reports it missing and a naive
+   * ancestor walk would climb straight past it and let the write follow it out.
+   *
+   * (A residual TOCTOU remains if a component is swapped between this check and
+   * the fs call; for a local single-user tool that is out of scope — the real
    * isolation boundary is the OS sandbox, M1b-3.)
    */
   #confine(target: string): string {
@@ -69,16 +95,19 @@ export class WorkspaceExecutor implements ActionExecutor {
     if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
       throw new Error(`path escapes the workspace: ${target}`);
     }
-    const realRoot = realpathSync(this.#root);
-    let probe = p;
-    while (!existsSync(probe)) {
-      const parent = dirname(probe);
-      if (parent === probe) break;
-      probe = parent;
-    }
-    const realRel = relative(realRoot, realpathSync(probe));
-    if (realRel !== "" && (realRel.startsWith("..") || isAbsolute(realRel))) {
-      throw new Error(`path escapes the workspace via a symlink: ${target}`);
+    let cur = this.#root;
+    for (const part of rel.split(sep)) {
+      if (part === "") continue;
+      cur = join(cur, part);
+      let stat;
+      try {
+        stat = lstatSync(cur);
+      } catch {
+        break; // this component doesn't exist yet — nothing below it can either
+      }
+      if (stat.isSymbolicLink()) {
+        throw new Error(`path escapes the workspace via a symlink: ${target}`);
+      }
     }
     return p;
   }

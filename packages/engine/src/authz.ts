@@ -69,6 +69,41 @@ const READ_ONLY: Readonly<Record<string, readonly string[] | "*">> = {
 /** Any shell operator, substitution, or redirection disqualifies a "simple" command. */
 const SHELL_OPS = /[;&|`$><\n]|\$\(/;
 
+/** git global options that consume the FOLLOWING token as their value. */
+const GIT_ARG_FLAGS = new Set([
+  "-C",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+]);
+
+/**
+ * The git subcommand, skipping benign global options (`--no-pager`, `-C <path>`,
+ * `--git-dir=…`, …) so `git --no-pager log` / `git -C /repo status` still parse.
+ * Returns null — a hard deny — for options that can run arbitrary code: `-c`/
+ * `--config-env` (config injection, e.g. a hostile `core.pager`) and
+ * `--exec-path` (relocates git's helper binaries).
+ */
+function gitSubcommand(tokens: readonly string[]): string | null {
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if (
+      t === "-c" ||
+      t.startsWith("--config-env") ||
+      t.startsWith("--exec-path")
+    ) {
+      return null; // code-execution vectors — never allow
+    }
+    if (GIT_ARG_FLAGS.has(t)) {
+      i++; // skip this flag's argument
+      continue;
+    }
+    if (t.startsWith("-")) continue; // boolean flag or --flag=value
+    return t; // first non-flag token is the subcommand
+  }
+  return null;
+}
+
 export interface ReefAllowlistOptions {
   /** Permit `edit` actions (writes are confined by the executor). Default true. */
   readonly allowEdit?: boolean;
@@ -107,7 +142,9 @@ export function reefAllowlist(options: ReefAllowlistOptions = {}): Authorizer {
       const allowed = commands[bin];
       if (allowed === undefined) return false;
       if (allowed === "*") return true;
-      return allowed.includes(tokens[1] ?? "");
+      const sub = bin === "git" ? gitSubcommand(tokens) : tokens[1];
+      if (sub === null || sub === undefined) return false;
+      return allowed.includes(sub);
     },
   };
 }
