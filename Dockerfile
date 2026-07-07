@@ -12,13 +12,16 @@ FROM node:22-slim AS build
 WORKDIR /app
 
 # Install with the full workspace lockfile for reproducible builds.
+# Every workspace's manifest must be present for `npm ci` to resolve the tree.
 COPY package.json package-lock.json ./
 COPY packages/engine/package.json packages/engine/
 COPY packages/protocol/package.json packages/protocol/
 COPY packages/driver-claude/package.json packages/driver-claude/
+COPY packages/adapter-runtime/package.json packages/adapter-runtime/
 COPY packages/server/package.json packages/server/
 COPY packages/cli/package.json packages/cli/
 COPY packages/web/package.json packages/web/
+COPY packages/ide/package.json packages/ide/
 RUN npm ci
 
 COPY . .
