@@ -1,0 +1,52 @@
+{
+  "name": "@octopus-reef/ide",
+  "displayName": "Reef — governed sessions",
+  "version": "0.1.0",
+  "description": "The Reef VS Code surface: run a governed agentic session and watch its tamper-evident evidence chain seal and verify, without leaving the editor.",
+  "license": "Apache-2.0",
+  "author": "Ran Tao <ran@octopusos.ai>",
+  "publisher": "octopus-reef",
+  "private": true,
+  "type": "module",
+  "main": "./dist/extension.cjs",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "reef.runSession",
+        "title": "Reef: Run Governed Session",
+        "category": "Reef"
+      },
+      {
+        "command": "reef.verifySession",
+        "title": "Reef: Verify Last Session",
+        "category": "Reef"
+      }
+    ],
+    "configuration": {
+      "title": "Reef",
+      "properties": {
+        "reef.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4300",
+          "description": "URL of the Reef daemon (`reef serve`)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@octopus-reef/protocol": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.24.0"
+  }
+}

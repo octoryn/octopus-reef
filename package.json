@@ -15,19 +15,22 @@
     "packages/driver-claude",
     "packages/server",
     "packages/cli",
-    "packages/web"
+    "packages/web",
+    "packages/ide"
   ],
   "scripts": {
     "build": "tsc -b packages/engine packages/protocol packages/driver-claude packages/server packages/cli",
     "build:web": "npm run build --workspace @octopus-reef/web",
+    "build:ide": "npm run build --workspace @octopus-reef/ide",
     "typecheck": "tsc -b packages/engine packages/protocol packages/driver-claude packages/server packages/cli --noEmit || tsc -b packages/engine packages/protocol packages/driver-claude packages/server packages/cli",
     "typecheck:web": "tsc --noEmit -p packages/web",
-    "test": "node --import tsx --test packages/engine/tests/*.test.ts packages/driver-claude/tests/*.test.ts packages/server/tests/*.test.ts packages/web/tests/*.test.ts",
+    "typecheck:ide": "tsc --noEmit -p packages/ide",
+    "test": "node --import tsx --test packages/engine/tests/*.test.ts packages/driver-claude/tests/*.test.ts packages/server/tests/*.test.ts packages/web/tests/*.test.ts packages/ide/tests/*.test.ts",
     "format": "prettier --write \"packages/*/src/**/*.{ts,tsx}\" \"packages/*/tests/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"packages/*/src/**/*.{ts,tsx}\" \"packages/*/tests/**/*.{ts,tsx}\"",
     "lint": "eslint packages",
     "reef": "tsx packages/cli/src/cli.ts",
-    "verify:all": "npm run typecheck && npm run typecheck:web && npm run format:check && npm run lint && npm test && npm run build && npm run build:web"
+    "verify:all": "npm run typecheck && npm run typecheck:web && npm run typecheck:ide && npm run format:check && npm run lint && npm test && npm run build && npm run build:web && npm run build:ide"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

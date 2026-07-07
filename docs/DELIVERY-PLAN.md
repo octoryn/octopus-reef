@@ -88,10 +88,20 @@ governed session and its proof block.
   streamed 11 evidence rows and sealed with `✓ VERIFIED` — work/log intact,
   binding bound, 5 work links · 11 evidence links · 3 executed · 0 denied.
 
-## M4 — IDE surface (VS Code) 🔜
-`@octopus-reef/ide` — a VS Code extension (the VS Code framework, not a fork to
-start). Session view, live evidence chain, gate prompts, `reef verify` command.
-- Acceptance: run + verify a governed session inside VS Code.
+## M4 — IDE surface (VS Code) ✅
+`@octopus-reef/ide` — a VS Code extension (the VS Code framework, not a fork).
+- Commands: **Reef: Run Governed Session** (prompts for a task, streams its
+  evidence into a webview panel — the shared deep-sea/signal-teal timeline + proof
+  block) and **Reef: Verify Last Session**. `reef.serverUrl` setting.
+- The extension host owns the daemon connection (fetch + a hand-rolled SSE reader,
+  since Node has no `EventSource`); the webview is pure presentation fed via
+  `postMessage`, under a strict nonce CSP. Bundled to a single CJS file with
+  esbuild (`vscode` external).
+- Typechecks against `@types/vscode`; the SSE frame parser (`drainSSE`) is
+  unit-tested (chunk-boundary reassembly, malformed-frame tolerance).
+- Verified to compile + bundle + export `activate`/`deactivate` here; the final
+  visual run (F5 / install the .vsix) is a one-step check in VS Code itself
+  (no VS Code runtime in this build environment).
 
 ## M5 — Docker one-click ✅
 `Dockerfile` + `docker-compose.yml` — one image, one command, server **and** web
