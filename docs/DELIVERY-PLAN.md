@@ -117,21 +117,32 @@ daemon hosts the built SPA).
   /sessions/:id/verify` returns `ok / intact / intact / bound`. `docker compose
   up` is the one-command form.
 
-## M6 — Deepen stack integration 🔨 (Replay ✅)
-Wire the remaining modules behind the engine's seams. Delivered first: the one
-that's fully self-contained and central to the positioning.
+## M6 — Deepen stack integration 🔨 (4 of 7 integrated)
+Wire the stack modules behind the engine's seams — the light, well-fitting ones
+first; the heavy/ill-shaped ones deferred with honest reasons.
 - ✅ **Replay** — byte-for-byte session reconstruction from the evidence log.
   `replaySession(dir)` / `reef replay <dir>`: load + re-verify store-untrusting,
-  then reconstruct the full `ReefEvent` timeline from the verified log —
-  deterministically and totally (the reconstructed events equal what the session
-  emitted live; a tampered log cannot be replayed). Proven byte-for-byte by a
-  deep-equal regression test; tamper + keyed cases covered.
-- 🔜 **Runtime** — the `Authorizer`/`Principal` ports are already structurally
-  identical to `octopus-runtime@0.7.0`, so a real RBAC/OIDC gate drops in behind
-  the same interface with the engine still offline. Next: a thin adapter package.
-- 🔜 **Blackboard / Observe / Experience / Scout / Inspect** — each is a published
-  module (`octopus-blackboard@0.3`, `octopus-observe@0.9`, …) integrated behind an
-  engine seam, incrementally, one module + review at a time.
+  then reconstruct the full `ReefEvent` timeline from the verified log
+  (reconstructed events equal what the session emitted live; a tampered log cannot
+  be replayed). Deep-equal regression test; tamper + keyed cases covered.
+- ✅ **Runtime** — `octopus-runtime@0.7.0`'s `Authorizer` is byte-identical to the
+  engine's port. `requireAll` stacks the command allowlist under it;
+  `@octopus-reef/adapter-runtime` (where the dep lives) proves a runtime authorizer
+  governs a real session (`satisfies` = compile-time compat proof).
+- ✅ **Inspect** — `reef inspect [<dir>]` runs `octopus-inspect`'s static
+  governance linter (secrets, agentic-OWASP 2026); exits non-zero on error-level
+  holes. octopus-inspect only pulls octopus-evidence — no new heavy deps.
+- ✅ **Observe** — `@octopus-reef/adapter-observe`: the INPUT boundary. An
+  untrusted agent input (tool call / action) is validated into a canonical
+  Observation via `octopus-observe` and bridged to evidence; malformed input is
+  rejected at the boundary. Ready for an ingesting driver to route inputs through.
+- ⏸ **Blackboard / Experience** — real integrations, but each needs `better-sqlite3`
+  (a native module — complicates the slim Docker image + CI) AND a
+  multi-agent/causal-memory session model that's a larger design. Deferred as a
+  focused follow-on, not rushed.
+- ⏸ **Scout** — a full web/PDF ingestion **service** (fastify + playwright +
+  postgres + redis). Embedding it is the wrong shape; the right integration is
+  Reef *calling* a running Scout for session context, not bundling it.
 
 ## M7 — Harden & publish 🔨
 - ✅ **CI** — `.github/workflows/ci.yml`: the full house gate (`verify:all` —

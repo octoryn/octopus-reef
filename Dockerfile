@@ -18,6 +18,7 @@ COPY packages/engine/package.json packages/engine/
 COPY packages/protocol/package.json packages/protocol/
 COPY packages/driver-claude/package.json packages/driver-claude/
 COPY packages/adapter-runtime/package.json packages/adapter-runtime/
+COPY packages/adapter-observe/package.json packages/adapter-observe/
 COPY packages/server/package.json packages/server/
 COPY packages/cli/package.json packages/cli/
 COPY packages/web/package.json packages/web/
