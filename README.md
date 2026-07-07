@@ -12,7 +12,7 @@ from its evidence log** (`reef replay <dir>`): a persisted session is
 re-verified store-untrusting, then its entire timeline is reconstructed, exactly
 as it was emitted. Replay only succeeds on a log that verifies.
 
-> **Part of [Octopus Core](https://github.com/octoryn) — the open infrastructure stack for governed AI.** Reef is the *workspace surface* that composes the stack into one product. It never reinvents hashing, chains, or the work state machine — it builds on [`octopus-evidence`](https://github.com/octoryn/octopus-evidence) and [`octopus-workstate`](https://github.com/octoryn/octopus-workstate), and (on the roadmap) Runtime, Blackboard, Replay, Observe, Experience, Scout, and Inspect.
+> **Part of [Octopus Core](https://github.com/octoryn) — the open infrastructure stack for governed AI.** Reef is the *workspace surface* that composes the stack into one product. It never reinvents hashing, chains, or the work state machine — it builds on [`octopus-evidence`](https://github.com/octoryn/octopus-evidence) and [`octopus-workstate`](https://github.com/octoryn/octopus-workstate); Replay is native, and Runtime, Blackboard, Observe, Experience, Scout, and Inspect integrate incrementally.
 
 ## Show vs prove
 
@@ -29,15 +29,28 @@ ships the substrate underneath:
 
 ## Quickstart
 
+The whole workspace — governed backend **and** web UI — in one command:
+
 ```bash
-npm install
-npm run build
+docker compose up      # → http://localhost:4300  (offline, keyless)
+```
+
+Or from source (Node ≥ 22):
+
+```bash
+npm install && npm run build
 
 # Run a governed session (fully offline, no API key — mock driver)
 node packages/cli/dist/cli.js run "add rate limiting to the API" --out ./.reef/demo
 
 # Independently re-verify it, store-untrusting
 node packages/cli/dist/cli.js verify ./.reef/demo
+
+# Re-verify AND reconstruct the full timeline, byte-for-byte, from the log
+node packages/cli/dist/cli.js replay ./.reef/demo
+
+# Serve the daemon (HTTP + SSE) that the web/IDE surfaces share
+node packages/cli/dist/cli.js serve 4300
 
 # See the gate deny a dangerous action
 node packages/cli/dist/cli.js run "clean up the machine" --demo-denial
@@ -73,13 +86,13 @@ Reef is driver- and surface-agnostic; the governance lives in one engine
 
 | Surface | Package | Status |
 |---|---|---|
-| **CLI** | `@octopus-reef/cli` | ✅ working (this repo) |
-| **Engine** | `@octopus-reef/engine` | ✅ working (this repo) |
-| Real agent driver (Claude Agent SDK) | `@octopus-reef/engine` | 🔜 roadmap M1 |
-| **Server** (local daemon, one backend for all surfaces) | `@octopus-reef/server` | 🔜 roadmap M2 |
-| **Web** | `@octopus-reef/web` | 🔜 roadmap M3 |
-| **IDE** (VS Code) | `@octopus-reef/ide` | 🔜 roadmap M4 |
-| **Docker** one-click | `docker/` | 🔜 roadmap M5 |
+| **Engine** (governance: evidence + workstate + gate + executor + replay) | `@octopus-reef/engine` | ✅ |
+| **CLI** (`run` · `verify` · `replay` · `serve`) | `@octopus-reef/cli` | ✅ |
+| **Real agent driver** (Claude) | `@octopus-reef/driver-claude` | ✅ |
+| **Server** (daemon — one backend for all surfaces) | `@octopus-reef/server` | ✅ |
+| **Web** (Vite + React) | `@octopus-reef/web` | ✅ |
+| **IDE** (VS Code) | `@octopus-reef/ide` | ✅ |
+| **Docker** one-click | `Dockerfile` · `docker-compose.yml` | ✅ |
 | Mobile | — | on hold |
 
 See [docs/DELIVERY-PLAN.md](docs/DELIVERY-PLAN.md) for the full roadmap and
