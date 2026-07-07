@@ -26,7 +26,7 @@
     "typecheck": "tsc -b packages/engine packages/protocol packages/driver-claude packages/adapter-runtime packages/server packages/cli --noEmit || tsc -b packages/engine packages/protocol packages/driver-claude packages/adapter-runtime packages/server packages/cli",
     "typecheck:web": "tsc --noEmit -p packages/web",
     "typecheck:ide": "tsc --noEmit -p packages/ide",
-    "test": "node --import tsx --test packages/engine/tests/*.test.ts packages/driver-claude/tests/*.test.ts packages/adapter-runtime/tests/*.test.ts packages/server/tests/*.test.ts packages/web/tests/*.test.ts packages/ide/tests/*.test.ts",
+    "test": "node --import tsx --test packages/engine/tests/*.test.ts packages/driver-claude/tests/*.test.ts packages/adapter-runtime/tests/*.test.ts packages/server/tests/*.test.ts packages/cli/tests/*.test.ts packages/web/tests/*.test.ts packages/ide/tests/*.test.ts",
     "format": "prettier --write \"packages/*/src/**/*.{ts,tsx}\" \"packages/*/tests/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"packages/*/src/**/*.{ts,tsx}\" \"packages/*/tests/**/*.{ts,tsx}\"",
     "lint": "eslint packages",

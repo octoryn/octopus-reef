@@ -25,6 +25,7 @@ import {
 } from "@octopus-reef/engine";
 import { ClaudeDriver } from "@octopus-reef/driver-claude";
 import { ReefServer } from "@octopus-reef/server";
+import { inspect, shouldFail } from "octopus-inspect";
 import {
   banner,
   c,
@@ -89,6 +90,7 @@ function help(): void {
       `  reef run "<task>" [--out <dir>] [--secret <key>] [--demo-denial] [--json]`,
       `  reef verify <dir> [--secret <key>] [--json]`,
       `  reef replay <dir> [--secret <key>] [--json]`,
+      `  reef inspect [<dir>] [--json]`,
       `  reef serve [<port>] [--out <dir>]`,
       ``,
       `${c.bold("COMMANDS")}`,
@@ -96,6 +98,7 @@ function help(): void {
       `          tamper-evident evidence link over a governed work spine.`,
       `  ${c.signal("verify")}  Load a persisted session and re-verify it store-untrusting.`,
       `  ${c.signal("replay")}  Re-verify AND reconstruct a session's full timeline from the log.`,
+      `  ${c.signal("inspect")} Static governance lint over a workspace (secrets, agentic-OWASP).`,
       `  ${c.signal("serve")}   Start the daemon (HTTP + SSE) that every surface shares.`,
       ``,
       `${c.bold("FLAGS")}`,
@@ -323,6 +326,58 @@ function replayCommand(flags: Flags): number {
   }
 }
 
+async function inspectCommand(flags: Flags): Promise<number> {
+  const dir = flags._[1] ?? ".";
+  let report: Awaited<ReturnType<typeof inspect>>;
+  try {
+    report = await inspect(dir);
+  } catch (err) {
+    process.stderr.write(
+      c.danger(`error: ${err instanceof Error ? err.message : String(err)}\n`),
+    );
+    return 2;
+  }
+  const failed = shouldFail(report);
+  if (flags.json) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    return failed ? 1 : 0;
+  }
+
+  const counts = { error: 0, warning: 0, info: 0 };
+  for (const f of report.findings) counts[f.severity]++;
+  const sevTag = (s: "error" | "warning" | "info"): string =>
+    s === "error"
+      ? c.danger("error  ")
+      : s === "warning"
+        ? c.amber("warning")
+        : c.muted("info   ");
+
+  process.stdout.write(banner());
+  process.stdout.write(`${rule("governance inspect")}\n`);
+  process.stdout.write(
+    `  ${c.muted("workspace")} ${c.ink(report.root)}   ` +
+      `${c.muted("files")} ${c.ink(String(report.fileCount))}   ` +
+      `${c.muted("rules")} ${c.ink(String(report.ruleCount))}\n\n`,
+  );
+  if (report.findings.length === 0) {
+    process.stdout.write(`  ${c.signal("✓ no governance holes found")}\n\n`);
+    return 0;
+  }
+  for (const f of report.findings) {
+    const loc = c.muted(`${f.file}${f.line !== undefined ? `:${f.line}` : ""}`);
+    process.stdout.write(
+      `  ${sevTag(f.severity)}  ${c.ink(f.ruleId)}  ${f.message}  ${loc}\n`,
+    );
+  }
+  const tally = [
+    counts.error > 0 ? c.danger(`${counts.error} error`) : "",
+    counts.warning > 0 ? c.amber(`${counts.warning} warning`) : "",
+    counts.info > 0 ? c.muted(`${counts.info} info`) : "",
+  ].filter((s) => s.length > 0);
+  process.stdout.write(`\n  ${tally.join("   ")}\n\n`);
+  return failed ? 1 : 0;
+}
+
 async function main(): Promise<number> {
   const flags = parse(process.argv.slice(2));
   const command = flags._[0];
@@ -335,6 +390,8 @@ async function main(): Promise<number> {
       return verifyCommand(flags);
     case "replay":
       return replayCommand(flags);
+    case "inspect":
+      return inspectCommand(flags);
     case undefined:
     case "help":
     case "--help":
