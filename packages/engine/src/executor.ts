@@ -28,7 +28,7 @@ import type { ActionRequest } from "./types.js";
  * root that is itself a broken/not-yet-created symlink still bootstraps rather
  * than false-rejecting every operation. The hop count defuses symlink cycles.
  */
-function canonicalRoot(root: string): string {
+export function canonicalRoot(root: string): string {
   const missing: string[] = [];
   let probe = resolve(root);
   for (let hops = 0; hops < 64; hops++) {

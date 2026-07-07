@@ -12,11 +12,13 @@
 import {
   GovernedSession,
   MockDriver,
+  SandboxExecutor,
   UnsafeDemoDriver,
   WorkspaceExecutor,
   loadSession,
   persistSession,
   reefAllowlist,
+  type ActionExecutor,
   type Driver,
   type ReefEvent,
 } from "@octopus-reef/engine";
@@ -38,6 +40,7 @@ interface Flags {
   readonly demoDenial: boolean;
   readonly claude: boolean;
   readonly workspace: string | undefined;
+  readonly sandbox: boolean;
 }
 
 function parse(argv: readonly string[]): Flags {
@@ -48,6 +51,7 @@ function parse(argv: readonly string[]): Flags {
   let demoDenial = false;
   let claude = false;
   let workspace: string | undefined;
+  let sandbox = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--out") out = argv[++i];
@@ -56,9 +60,19 @@ function parse(argv: readonly string[]): Flags {
     else if (a === "--demo-denial") demoDenial = true;
     else if (a === "--claude") claude = true;
     else if (a === "--workspace") workspace = argv[++i];
+    else if (a === "--sandbox") sandbox = true;
     else positional.push(a);
   }
-  return { _: positional, out, secret, json, demoDenial, claude, workspace };
+  return {
+    _: positional,
+    out,
+    secret,
+    json,
+    demoDenial,
+    claude,
+    workspace,
+    sandbox,
+  };
 }
 
 function sessionId(): string {
@@ -82,7 +96,9 @@ function help(): void {
       `  --out <dir>     Persist the session (workstate.jsonl + session.log.jsonl).`,
       `  --secret <key>  Keyed mode: bind every link with an HMAC.`,
       `  --claude        Use the real Claude agent driver (needs ANTHROPIC_API_KEY; plans under governance, does not execute yet).`,
-      `  --workspace <dir>  Enable real execution under the allowlist: confined file read/edit in <dir> (no shell yet).`,
+      `  --workspace <dir>  Enable real execution under the allowlist: confined file read/edit in <dir>.`,
+      `  --sandbox       With --workspace, also run allowlisted read-only commands in an OS sandbox`,
+      `                  (macOS sandbox-exec: no network, writes confined to <dir>, timeout, scrubbed env).`,
       `  --demo-denial   Use a driver that proposes a dangerous command, to show the gate.`,
       `  --json          Machine-readable output.`,
       ``,
@@ -118,16 +134,21 @@ async function runCommand(flags: Flags): Promise<number> {
     );
   }
 
+  const workspaceWiring =
+    flags.workspace !== undefined
+      ? {
+          authorizer: reefAllowlist(),
+          executor: (flags.sandbox
+            ? new SandboxExecutor(flags.workspace)
+            : new WorkspaceExecutor(flags.workspace)) as ActionExecutor,
+        }
+      : {};
+
   const session = new GovernedSession({
     id,
     task,
     driver,
-    ...(flags.workspace !== undefined
-      ? {
-          authorizer: reefAllowlist(),
-          executor: new WorkspaceExecutor(flags.workspace),
-        }
-      : {}),
+    ...workspaceWiring,
     ...(flags.secret !== undefined ? { integritySecret: flags.secret } : {}),
     onEvent: (e) => {
       events.push(e);

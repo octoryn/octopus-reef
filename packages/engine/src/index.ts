@@ -18,8 +18,20 @@ export type { ActionGate } from "./gate.js";
 export { reefAllowlist, allowAll, LOCAL_PRINCIPAL } from "./authz.js";
 export type { Authorizer, Principal, ReefAllowlistOptions } from "./authz.js";
 
-export { NoopExecutor, WorkspaceExecutor } from "./executor.js";
+export { NoopExecutor, WorkspaceExecutor, canonicalRoot } from "./executor.js";
 export type { ActionExecutor, ExecOutcome } from "./executor.js";
+
+export {
+  SandboxExecutor,
+  defaultRunner,
+  darwinSandboxRunner,
+  subprocessRunner,
+} from "./sandbox.js";
+export type {
+  CommandRunner,
+  CommandResult,
+  SandboxOptions,
+} from "./sandbox.js";
 
 export { MockDriver, UnsafeDemoDriver } from "./driver.js";
 
