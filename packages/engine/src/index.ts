@@ -15,7 +15,12 @@ export type { EvidenceLogOptions, LogRecord, VerifyLogOptions } from "./log.js";
 export { DefaultGate } from "./gate.js";
 export type { ActionGate } from "./gate.js";
 
-export { reefAllowlist, allowAll, LOCAL_PRINCIPAL } from "./authz.js";
+export {
+  reefAllowlist,
+  allowAll,
+  requireAll,
+  LOCAL_PRINCIPAL,
+} from "./authz.js";
 export type { Authorizer, Principal, ReefAllowlistOptions } from "./authz.js";
 
 export { NoopExecutor, WorkspaceExecutor, canonicalRoot } from "./executor.js";

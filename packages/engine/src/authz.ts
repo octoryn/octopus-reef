@@ -42,6 +42,25 @@ export const LOCAL_PRINCIPAL: Principal = Object.freeze({
 export const allowAll: Authorizer = { can: (): boolean => true };
 
 /**
+ * Combine authorizers so an action is permitted only if EVERY one allows it,
+ * short-circuiting on the first denial. This is how the command allowlist
+ * (`reefAllowlist` — *what* may run) stacks under an RBAC/OIDC authorizer (e.g.
+ * `octopus-runtime`'s — *who* may act): both must agree. With no authorizers it
+ * denies (an empty conjunction that grants nothing is the safe default here).
+ */
+export function requireAll(...authorizers: readonly Authorizer[]): Authorizer {
+  return {
+    async can(principal, action, resource) {
+      if (authorizers.length === 0) return false;
+      for (const authorizer of authorizers) {
+        if (!(await authorizer.can(principal, action, resource))) return false;
+      }
+      return true;
+    },
+  };
+}
+
+/**
  * The command allowlist: a SMALL set of build/VCS tools. `"*"` = any args;
  * array = allowed subcommands.
  *
