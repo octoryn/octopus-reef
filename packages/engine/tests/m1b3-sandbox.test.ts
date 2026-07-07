@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { toolchainReadRoots } from "../src/sandbox.js";
 import {
   GovernedSession,
   SandboxExecutor,
@@ -306,6 +307,32 @@ test("M1b-3 review: dispose() removes the throwaway HOME (no temp-dir leak)", ()
   ex.dispose();
   assert.equal(existsSync(home), false, "throwaway HOME must be removed");
   ex.dispose(); // idempotent
+});
+
+// ---- R4 HIGH: the toolchain read-allow excludes the prefix config dir (etc) ----
+test("M1b-3 R4: toolchain read-allow covers bin/lib but NOT the prefix or its etc", () => {
+  const home = "/Users/x";
+  const prefix = "/Users/x/.nvm/versions/node/v22";
+  const roots = toolchainReadRoots(`${prefix}/bin/node`, home);
+  assert.ok(roots.includes(`${prefix}/bin`));
+  assert.ok(roots.includes(`${prefix}/lib`));
+  assert.ok(
+    !roots.includes(prefix),
+    "must NOT re-allow the whole prefix (would expose $PREFIX/etc/npmrc)",
+  );
+  assert.ok(
+    !roots.some((r) => r.endsWith("/etc")),
+    "must NOT re-allow the config dir where a registry token can live",
+  );
+  // a toolchain OUTSIDE home also expands to its standard subdirs (harmless —
+  // reads there are default-allowed anyway since the HOME deny doesn't reach it).
+  assert.deepEqual(toolchainReadRoots("/opt/homebrew/bin/git", "/Users/x"), [
+    "/opt/homebrew/bin",
+    "/opt/homebrew/lib",
+    "/opt/homebrew/libexec",
+    "/opt/homebrew/include",
+    "/opt/homebrew/share",
+  ]);
 });
 
 // ---- R3 HIGH: refuse commands when the workspace root would un-confine HOME ----

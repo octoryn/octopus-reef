@@ -357,17 +357,30 @@ function safeReadAllow(p: string, home: string): boolean {
   return rel !== "" && (rel.startsWith("..") || isAbsolute(rel));
 }
 
+/** Standard install subdirs a toolchain reads to run — executables + libraries,
+ * NOT config (`etc`, e.g. a `$PREFIX/etc/npmrc` holding a registry token). */
+const TOOLCHAIN_SUBDIRS = [
+  "bin",
+  "lib",
+  "libexec",
+  "include",
+  "share",
+] as const;
+
 /**
- * The narrowest toolchain directory to re-allow reads for so the binary at
- * `bin` can load its libraries, without ever re-opening HOME. Prefers the
- * install prefix (dirname²), falling back to the bin dir.
+ * The directories to re-allow reads for so the binary at `bin` can load itself
+ * and its libraries, WITHOUT re-opening HOME or the prefix's config dir. Reads
+ * only ever need narrowing when the toolchain lives under the read-denied HOME
+ * (e.g. node under `~/.nvm`); a `(subpath prefix)` allow would be too broad and
+ * expose `$PREFIX/etc`, so we allow only the standard executable/library subdirs.
  */
-function toolchainReadAllow(bin: string, home: string): string | undefined {
+export function toolchainReadRoots(bin: string, home: string): string[] {
   const prefix = dirname(dirname(bin));
-  if (safeReadAllow(prefix, home)) return prefix;
+  if (safeReadAllow(prefix, home)) {
+    return TOOLCHAIN_SUBDIRS.map((sub) => join(prefix, sub));
+  }
   const binDir = dirname(bin);
-  if (safeReadAllow(binDir, home)) return binDir;
-  return undefined;
+  return safeReadAllow(binDir, home) ? [binDir] : [];
 }
 
 export interface SandboxOptions {
@@ -476,9 +489,9 @@ export class SandboxExecutor implements ActionExecutor {
     const readable = new Set<string>([this.#root, this.#home]);
     for (const name of [argv[0]!, "node"]) {
       const bin = resolveBinary(name, this.#env.PATH);
-      const toolchain =
-        bin !== undefined ? toolchainReadAllow(bin, home) : undefined;
-      if (toolchain !== undefined) readable.add(toolchain);
+      if (bin !== undefined) {
+        for (const dir of toolchainReadRoots(bin, home)) readable.add(dir);
+      }
     }
     const readableRoots = [...readable];
     const result = await this.#runner.run(argv, {
@@ -489,9 +502,11 @@ export class SandboxExecutor implements ActionExecutor {
       readableRoots,
     });
     if (result.timedOut) {
+      const partial = result.stdout.trim();
       return {
         ok: false,
         error: `command timed out after ${this.#timeoutMs}ms`,
+        ...(partial.length > 0 ? { output: partial } : {}),
         ...(result.code !== null ? { exitCode: result.code } : {}),
       };
     }
