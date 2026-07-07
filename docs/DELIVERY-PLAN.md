@@ -24,16 +24,28 @@ The provable substrate, working end-to-end.
 - ✅ `MockDriver` / `UnsafeDemoDriver` — offline, keyless; exercises the whole substrate.
 - ✅ JSONL persistence + `loadSession` re-verification.
 - ✅ `@octopus-reef/cli`: `reef run` / `reef verify`, live event stream, proof block.
-- ✅ 16 tests green; full gate green.
+- ✅ 34 tests green; full gate green; hardened over 4 adversarial review rounds
+  (R1 22 HIGH → R2 5 → R3 1 → R4 gate-only, reframed).
 
-## M1 — Real agent driver (Claude Agent SDK) 🔜
+**Gate scope decision (R4, founder-approved):** `DefaultGate` is a best-effort
+*accident tripwire*, NOT a security boundary — a shell denylist can never be
+complete, and chasing bypasses (quoting, `${IFS}`, pipes, …) does not converge.
+It catches obvious catastrophic commands and is scoped honestly. **Real
+command-execution safety is M1's job** (allowlist + sandbox), see below.
+
+## M1 — Real agent driver (Claude Agent SDK) + real execution safety 🔜
 Make `reef run` do real agentic coding when `ANTHROPIC_API_KEY` is present,
 behind the identical `Driver` interface. Mock stays the default (offline/CI/Docker).
-- ClaudeDriver wrapping the Claude Agent SDK; tool calls surface as `ActionRequest`s
-  that pass through the gate before executing.
+- ClaudeDriver wrapping the Claude Agent SDK; tool calls surface as `ActionRequest`s.
 - Streaming turns → `DriverStep`s → evidence links.
 - Read the `claude-api` skill before implementing; pin the model id.
-- Acceptance: a real task edits real files under governance; session verifies.
+- **Execution safety (the real gate, replacing reliance on the denylist):** a
+  real command NEVER runs on `DefaultGate`'s say-so. It must pass an
+  **allowlist policy** (`octopus-runtime` Principal/decision — allow-known-safe,
+  else deny-or-ask) AND run inside an **OS sandbox** (restricted fs/network).
+  `DefaultGate` stays as a cheap pre-filter tripwire behind that.
+- Acceptance: a real task edits real files under governance; a disallowed/unknown
+  command is denied or requires approval (never silently executed); session verifies.
 
 ## M2 — Server daemon 🔜
 `@octopus-reef/server` — a local HTTP + WebSocket daemon hosting the engine so

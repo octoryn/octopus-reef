@@ -1,15 +1,18 @@
 /**
- * The action gate — Reef's "gate before execute" seam.
+ * DefaultGate — a best-effort ACCIDENT TRIPWIRE, **not** a security boundary.
  *
- * Every action an agent proposes passes through a gate BEFORE it runs. A denied
- * action is never executed; the denial itself is recorded as evidence.
+ * ⚠️ This catches obvious, unobfuscated catastrophic commands (`rm -rf /`, fork
+ * bombs, pipe-to-shell, raw-disk overwrites) so an agent does not destroy the
+ * machine BY ACCIDENT. It is a denylist, and a denylist over shell can never be
+ * complete: a determined caller can obfuscate around it (quoting, `${IFS}`,
+ * base64, `eval`, novel tools). **Do NOT rely on it to contain an adversarial
+ * agent.** After review rounds R1–R4 kept finding shell bypasses, we stopped
+ * treating denylist-completeness as a convergence goal and scoped this honestly.
  *
- * IMPORTANT — honest scope: {@link DefaultGate} is a conservative *denylist
- * backstop*, not a sandbox. A denylist of shell patterns can never be complete;
- * a determined caller can obfuscate around any rule. The real, allowlist-based
- * policy gate is `octopus-runtime` (Principal + decision), wired in behind this
- * same {@link ActionGate} interface at milestone M6 (see docs/DELIVERY-PLAN.md).
- * Until then this catches the obvious catastrophic patterns and nothing more.
+ * Real command-execution safety is the driver's responsibility (M1): commands
+ * run under `octopus-runtime`'s allowlist policy AND an OS sandbox, never on the
+ * strength of this pattern match. See docs/DELIVERY-PLAN.md (M1) and the
+ * {@link ActionGate} interface — a stricter gate drops in behind it unchanged.
  */
 import type { ActionRequest, GateVerdict } from "./types.js";
 
@@ -31,24 +34,48 @@ const DANGEROUS_TARGETS = new Set([
 const DANGEROUS_ROOT_DIR =
   /^\/(?:root|etc|usr|var|bin|lib|home|boot|sys|opt|dev|sbin|proc)\b/i;
 
+/**
+ * Normalise a command for detection: drop quotes and expand `${IFS}`/`$IFS` so
+ * `rm '-rf' '/'` and `rm${IFS}-rf${IFS}/` read like `rm -rf /`. (Structural
+ * splitting/echo-detection runs on the RAW command; only the danger predicates
+ * see this normalised form.)
+ */
+function normalizeCmd(s: string): string {
+  return s
+    .replace(/["']/g, "")
+    .replace(/\$\{IFS\}|\$IFS/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+}
+
+/** Collapse root aliases (`//`, `/.`, `/./`, trailing slash) to detect root. */
+function isRootTarget(operand: string): boolean {
+  let p = operand
+    .replace(/\/{2,}/g, "/")
+    .replace(/\/\.(?=\/|$)/g, "/")
+    .replace(/\/{2,}/g, "/");
+  if (p.length > 1) p = p.replace(/\/+$/, "");
+  if (p === "") p = "/";
+  return (
+    DANGEROUS_TARGETS.has(operand) ||
+    DANGEROUS_TARGETS.has(p) ||
+    DANGEROUS_ROOT_DIR.test(p)
+  );
+}
+
 /** The substring after the first occurrence of `keyword`, or null. */
 function after(command: string, keyword: string): string | null {
   const m = new RegExp(`\\b${keyword}\\b`, "i").exec(command);
   return m ? command.slice(m.index + m[0].length) : null;
 }
 
-/** Non-flag operands of a command tail, unquoted. */
+/** Non-flag operands of a command tail. */
 function operandsOf(rest: string): string[] {
-  return rest
-    .split(/\s+/)
-    .filter((t) => t.length > 0 && !t.startsWith("-"))
-    .map((t) => t.replace(/^["']|["']$/g, ""));
+  return rest.split(/\s+/).filter((t) => t.length > 0 && !t.startsWith("-"));
 }
 
 function targetsRoot(rest: string): boolean {
-  return operandsOf(rest).some(
-    (t) => DANGEROUS_TARGETS.has(t) || DANGEROUS_ROOT_DIR.test(t),
-  );
+  return operandsOf(rest).some(isRootTarget);
 }
 
 /** `rm` with recursive AND force flags against a root-ish target. */
@@ -91,22 +118,19 @@ function isForcePush(command: string): boolean {
   return forceFlag || plusRefspec;
 }
 
-/** Non-rm/chown/chmod/git catastrophic patterns, matched case-insensitively. */
+/** Self-contained catastrophic sequences (matched against the whole command). */
 const DANGEROUS_PATTERNS: readonly RegExp[] = [
   /:\s*\(\)\s*\{\s*:\s*\|\s*:?\s*&?\s*\}\s*;/, // fork bomb
   /\bmkfs\.\w+\b|\bmke2fs\b/i, // format a filesystem
   /\bdd\b[^\n]*\bof=\/dev\/[a-z]/i, // dd to a raw device
-  /\b(?:curl|wget|fetch)\b[^\n]*\|[^\n]*\b(?:sh|bash|zsh|dash|python[0-9.]*|perl|ruby|node)\b/i, // pipe-to-shell (any stages)
-  /(?:>|\btee\b[^\n]*)\s*\/dev\/(?:sd|nvme|hd|disk|vd)[a-z0-9]/i, // overwrite a raw disk (redirect or tee)
+  /\b(?:curl|wget|fetch)\b[^\n]*\|[^\n]*\b(?:sh|bash|zsh|dash|python[0-9.]*|perl|ruby|node)\b/i, // fetch → interpreter
+  /\|[^\n]*\b(?:sh|bash|zsh|dash|ksh)\b\s*(?:$|[|;&])/i, // anything piped into a bare shell (echo|sh, cat|bash)
+  /\bxargs\b[^\n]*\brm\b/i, // piped mass deletion (find / | xargs rm)
+  /(?:>|\btee\b[^\n]*)\s*\/dev\/(?:sd|nvme|hd|disk|vd)[a-z0-9]/i, // overwrite a raw disk
   /\bfind\s+(?:\/|~|\$HOME)[^\n]*(?:-delete\b|-exec\s+rm\b)/i, // find / ... -delete | -exec rm
 ];
 
-/**
- * Extract a normalised command string. Spaces/tabs are collapsed, but NEWLINES
- * are PRESERVED so a multi-statement command can be split and checked
- * statement-by-statement (review R3 HIGH: collapsing `\n` to a space let a
- * dangerous second line hide behind an `echo` prefix).
- */
+/** Extract a command string, spaces/tabs collapsed but NEWLINES PRESERVED. */
 function commandText(action: ActionRequest): string | undefined {
   if (action.type !== "command") return undefined;
   const raw =
@@ -122,14 +146,11 @@ function commandText(action: ActionRequest): string | undefined {
     .trim();
 }
 
-/** Shell separators that start a NEW statement (a single `|` pipe is NOT one). */
+/** Shell separators that start a NEW statement (a single `|` pipe is NOT one — a
+ * pipe stays within a statement so pipe-to-shell patterns can see it). */
 const STATEMENT_SEP = /[\n;&]|&&|\|\|/;
 
-/**
- * A single statement that is a pure `echo`/`printf`: it prints, it cannot execute
- * a subcommand (no pipe, backtick, `$(…)`, redirect, or newline). Applied per
- * statement, so a later dangerous statement can never ride on an echo prefix.
- */
+/** A single statement that is a pure `echo`/`printf` — prints, can't execute. */
 function isInertEcho(statement: string): boolean {
   return (
     /^(?:echo|printf)\b/i.test(statement) && !/[|`\n]|\$\(|>/.test(statement)
@@ -151,23 +172,20 @@ export class DefaultGate implements ActionGate {
         .split(STATEMENT_SEP)
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
-      // A command made ENTIRELY of pure echo/printf statements only prints — permit
-      // it (this is the false-positive the exemption exists for). Otherwise check the
-      // whole command for self-contained catastrophic sequences (fork bomb,
-      // pipe-to-shell, dd, mkfs, tee-to-device, find -delete) AND each non-echo
-      // statement for a dangerous command.
       const allInert = statements.length > 0 && statements.every(isInertEcho);
       const blocked =
         !allInert &&
-        (DANGEROUS_PATTERNS.some((p) => p.test(command)) ||
-          statements.some(
-            (s) =>
-              !isInertEcho(s) &&
-              (isDangerousRm(s) ||
-                isDangerousChown(s) ||
-                isDangerousChmod(s) ||
-                isForcePush(s)),
-          ));
+        (DANGEROUS_PATTERNS.some((p) => p.test(normalizeCmd(command))) ||
+          statements.some((s) => {
+            if (isInertEcho(s)) return false;
+            const n = normalizeCmd(s);
+            return (
+              isDangerousRm(n) ||
+              isDangerousChown(n) ||
+              isDangerousChmod(n) ||
+              isForcePush(n)
+            );
+          }));
       if (blocked) {
         return {
           allow: false,

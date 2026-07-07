@@ -109,3 +109,44 @@ test("pure echo/printf commands stay permitted (no false positive)", () => {
     );
   }
 });
+
+test("R4: quoting / IFS / root-alias obfuscations of rm -rf / are denied", () => {
+  const dangerous = [
+    "rm '-rf' '/'",
+    'rm "-rf" /',
+    "rm -r -f /",
+    "rm -rf //",
+    "rm -rf /.",
+    "rm -rf /./",
+    "rm -rf ${IFS}/",
+    "rm${IFS}-rf${IFS}/",
+  ];
+  for (const c of dangerous) {
+    assert.equal(gate.check(command(c)).allow, false, `must DENY: ${c}`);
+  }
+});
+
+test("R4: piped mass-deletion and pipe-to-shell are denied", () => {
+  const dangerous = [
+    "find / | xargs rm -rf",
+    "ls / | xargs rm -rf",
+    'echo "rm -rf /" | sh',
+    "cat payload | bash",
+  ];
+  for (const c of dangerous) {
+    assert.equal(gate.check(command(c)).allow, false, `must DENY: ${c}`);
+  }
+});
+
+test("R4: legitimate quoted / piped commands stay permitted", () => {
+  const safe = [
+    "rm -rf './build'",
+    "chown -R app ./data",
+    "cat data.json | jq .",
+    "cat input | node process.js",
+    'echo "rm -rf / is scary"',
+  ];
+  for (const c of safe) {
+    assert.equal(gate.check(command(c)).allow, true, `must ALLOW: ${c}`);
+  }
+});
