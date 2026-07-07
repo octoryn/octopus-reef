@@ -222,6 +222,14 @@ export class GovernedSession {
     } catch (err) {
       outcome = "failed";
       reason = `driver error: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      // Finalize the driver generator on any early exit (break/throw) so its
+      // own try/finally cleanup runs — `for await` did this automatically.
+      try {
+        await it.return?.(undefined);
+      } catch {
+        /* ignore cleanup errors from the driver */
+      }
     }
 
     // Cancellation wins over the driver's outcome and over the failure default,

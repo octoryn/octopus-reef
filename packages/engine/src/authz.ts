@@ -59,16 +59,11 @@ const READ_ONLY: Readonly<Record<string, readonly string[] | "*">> = {
   node: ["--version", "-v"],
   npm: ["--version", "-v", "list", "ls"],
   python3: ["--version"],
-  git: [
-    "status",
-    "diff",
-    "log",
-    "branch",
-    "show",
-    "rev-parse",
-    "remote",
-    "ls-files",
-  ],
+  // Only git subcommands that are read-only for ALL arguments. `remote` and
+  // `branch` are excluded: `remote add`/`set-url` write config + reach the
+  // network and `branch -D` deletes — the subcommand alone can't distinguish
+  // their read-only forms (review M1b MED).
+  git: ["status", "diff", "log", "show", "rev-parse", "ls-files"],
 };
 
 /** Any shell operator, substitution, or redirection disqualifies a "simple" command. */

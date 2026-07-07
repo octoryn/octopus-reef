@@ -7,7 +7,13 @@
  * confined to a workspace root; `command` execution is intentionally deferred to
  * the OS sandbox (M1b-3) — after the 2026-07-06 incident, no unsandboxed shell.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { ActionRequest } from "./types.js";
 
@@ -45,12 +51,34 @@ export class WorkspaceExecutor implements ActionExecutor {
     this.#root = resolve(root);
   }
 
-  /** Resolve `target` inside the root, or throw if it escapes. */
+  /**
+   * Resolve `target` inside the root, or throw if it escapes — lexically AND via
+   * symlinks. A purely lexical check is not enough: `readFileSync`/`writeFileSync`
+   * follow symlinks, so a symlink inside the root (final target OR an intermediate
+   * directory component) can point outside. We realpath the deepest EXISTING
+   * ancestor and require it to stay within the realpath'd root, which catches both
+   * a symlinked target and a symlinked parent, for read and write alike.
+   *
+   * (A residual TOCTOU exists if a symlink is swapped between this check and the
+   * fs call; for a local single-user tool that is out of scope — the real
+   * isolation boundary is the OS sandbox, M1b-3.)
+   */
   #confine(target: string): string {
     const p = resolve(this.#root, target);
     const rel = relative(this.#root, p);
     if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
       throw new Error(`path escapes the workspace: ${target}`);
+    }
+    const realRoot = realpathSync(this.#root);
+    let probe = p;
+    while (!existsSync(probe)) {
+      const parent = dirname(probe);
+      if (parent === probe) break;
+      probe = parent;
+    }
+    const realRel = relative(realRoot, realpathSync(probe));
+    if (realRel !== "" && (realRel.startsWith("..") || isAbsolute(realRel))) {
+      throw new Error(`path escapes the workspace via a symlink: ${target}`);
     }
     return p;
   }
