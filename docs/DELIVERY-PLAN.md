@@ -33,7 +33,7 @@ complete, and chasing bypasses (quoting, `${IFS}`, pipes, …) does not converge
 It catches obvious catastrophic commands and is scoped honestly. **Real
 command-execution safety is M1's job** (allowlist + sandbox), see below.
 
-## M1 — Real agent driver (Claude) + real execution safety 🔨
+## M1 — Real agent driver (Claude) + real execution safety ✅
 Make `reef run` do real agentic coding when `ANTHROPIC_API_KEY` is present,
 behind the identical `Driver` interface. Mock stays the default (offline/CI/Docker).
 - ✅ **M1a — governed planning**: `@octopus-reef/driver-claude` `ClaudeDriver`
@@ -41,9 +41,15 @@ behind the identical `Driver` interface. Mock stays the default (offline/CI/Dock
   plan) and maps the plan to gated, evidence-chained `DriverStep`s. `reef run
   --claude`. No real execution yet — a dangerous planned command is still denied
   by the gate; no key → session fails gracefully. Network-free unit tests.
-- 🔜 **M1b — real execution safety**: bidirectional gate protocol (driver
-  proposes → session gates → executes only if allowed → result back to Claude),
-  `octopus-runtime` allowlist, and an OS sandbox. Only then does a real command run.
+- ✅ **M1b — real execution safety** (converged over two 5-round adversarial
+  campaigns): bidirectional gate protocol (driver proposes → session gates →
+  executes only if allowed → result back to the driver); the `reefAllowlist`
+  (allow-known-safe, `octopus-runtime`-compatible ports); a `WorkspaceExecutor`
+  (symlink-safe path confinement, resolve-and-contain); and a `SandboxExecutor`
+  (M1b-3) that runs allowlisted commands shell-free, no-network, writes confined
+  to the workspace, reads of the real HOME denied (secret contents), git config
+  code-exec neutralised, throwaway HOME, process-group timeout. `reef run
+  --workspace <dir> --sandbox`. Full untrusted-repo isolation → the container (M5).
 - Streaming turns → `DriverStep`s → evidence links.
 - **Execution safety (the real gate, replacing reliance on the denylist):** a
   real command NEVER runs on `DefaultGate`'s say-so. It must pass an
@@ -69,11 +75,18 @@ IDE, and Web share one governed session backend.
   independent clients observe one live session and both verify it (`ok`,
   `work: intact`, `log: intact`, `binding: bound`).
 
-## M3 — Web surface 🔜
+## M3 — Web surface ✅
 `@octopus-reef/web` — Vite + React, the Kiro-web equivalent. Connects to the
-server over WS; renders the live governed session (the landing-page panel, real).
-- Reuses the "forensic instrument" design language.
-- Acceptance: run a session from the browser; watch the chain grow; verify green.
+daemon over HTTP + SSE (via `@octopus-reef/protocol` types); renders the live
+governed session and its proof block.
+- Reuses the "forensic instrument" design language (deep-sea + signal-teal).
+- Start a task → the evidence timeline streams in live → a proof block seals with
+  the verdict (work/log/binding) and the chain lengths.
+- Same-origin by default (Vite dev-proxies `/sessions`; the Docker image will
+  serve the built assets from the daemon), `VITE_REEF_SERVER` for a remote daemon.
+- Acceptance MET (driven in a real browser against `reef serve`): running a task
+  streamed 11 evidence rows and sealed with `✓ VERIFIED` — work/log intact,
+  binding bound, 5 work links · 11 evidence links · 3 executed · 0 denied.
 
 ## M4 — IDE surface (VS Code) 🔜
 `@octopus-reef/ide` — a VS Code extension (the VS Code framework, not a fork to
