@@ -14,7 +14,7 @@ import {
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { ActionRequest } from "./types.js";
 
 /**
@@ -75,15 +75,17 @@ export class WorkspaceExecutor implements ActionExecutor {
   }
 
   /**
-   * Resolve `target` inside the root, or throw if it escapes. Two independent
-   * guards: (1) a lexical check that the resolved path stays under the root, and
-   * (2) a symlink check — every EXISTING path component is `lstat`'d (which does
-   * NOT follow links) and ANY symlink component is rejected.
+   * Resolve `target` inside the root, or throw if it escapes. Guards, in order:
+   *   1. lexical — the resolved path must stay under the root;
+   *   2. symlink — resolve every symlink in the path's EXISTING prefix and
+   *      require the true location to stay under the root.
    *
-   * Rejecting symlinks outright (rather than resolving them) is what closes the
-   * dangling-symlink hole: a link whose target does not exist yet is still an
-   * `lstat` symlink, even though `existsSync` reports it missing and a naive
-   * ancestor walk would climb straight past it and let the write follow it out.
+   * The existing prefix is found with `lstat` (not `existsSync`), so a DANGLING
+   * symlink counts as existing — otherwise `existsSync` follows it, reports it
+   * missing, and a write follows it straight out of the root. A dangling link
+   * can't be resolved (`realpath` throws) so it is rejected outright. A link
+   * that resolves to a path still UNDER the root (e.g. `latest -> v1`) is
+   * allowed — only links that resolve OUTSIDE the root escape.
    *
    * (A residual TOCTOU remains if a component is swapped between this check and
    * the fs call; for a local single-user tool that is out of scope — the real
@@ -95,19 +97,30 @@ export class WorkspaceExecutor implements ActionExecutor {
     if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
       throw new Error(`path escapes the workspace: ${target}`);
     }
-    let cur = this.#root;
-    for (const part of rel.split(sep)) {
-      if (part === "") continue;
-      cur = join(cur, part);
-      let stat;
+    // Deepest existing component (a dangling symlink lstat's fine, so it counts).
+    let probe = p;
+    for (;;) {
       try {
-        stat = lstatSync(cur);
+        lstatSync(probe);
+        break;
       } catch {
-        break; // this component doesn't exist yet — nothing below it can either
+        const parent = dirname(probe);
+        if (parent === probe) break;
+        probe = parent;
       }
-      if (stat.isSymbolicLink()) {
-        throw new Error(`path escapes the workspace via a symlink: ${target}`);
-      }
+    }
+    // Resolve symlinks in the existing prefix; a dangling link can't resolve.
+    let real: string;
+    try {
+      real = realpathSync(probe);
+    } catch {
+      throw new Error(`path escapes the workspace via a symlink: ${target}`);
+    }
+    // True final location = resolved prefix + the not-yet-created tail.
+    const resolved = probe === p ? real : join(real, relative(probe, p));
+    const realRel = relative(this.#root, resolved);
+    if (realRel !== "" && (realRel.startsWith("..") || isAbsolute(realRel))) {
+      throw new Error(`path escapes the workspace via a symlink: ${target}`);
     }
     return p;
   }

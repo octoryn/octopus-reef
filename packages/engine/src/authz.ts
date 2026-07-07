@@ -88,7 +88,7 @@ function gitSubcommand(tokens: readonly string[]): string | null {
   for (let i = 1; i < tokens.length; i++) {
     const t = tokens[i]!;
     if (
-      t === "-c" ||
+      t.startsWith("-c") || // -c <cfg> and any attached -c<cfg> form
       t.startsWith("--config-env") ||
       t.startsWith("--exec-path")
     ) {
