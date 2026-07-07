@@ -53,13 +53,21 @@ behind the identical `Driver` interface. Mock stays the default (offline/CI/Dock
 - Acceptance: a real task edits real files under governance; a disallowed/unknown
   command is denied or requires approval (never silently executed); session verifies.
 
-## M2 — Server daemon 🔜
-`@octopus-reef/server` — a local HTTP + WebSocket daemon hosting the engine so
-CLI, IDE, and Web share one governed session backend.
-- Wire protocol package `@octopus-reef/protocol` (Session/Turn/Event/Action).
-- WS event stream = the same `ReefEvent`s the engine emits.
+## M2 — Server daemon ✅
+`@octopus-reef/server` — a local HTTP + SSE daemon hosting the engine so CLI,
+IDE, and Web share one governed session backend.
+- Wire protocol package `@octopus-reef/protocol` — the shared request/event
+  contract, re-exporting the engine's own value types so clients never drift.
+- Live event stream = the same `ReefEvent`s the engine emits, streamed over
+  Server-Sent Events (replayed to late subscribers so a client always sees the
+  whole session). SSE, not WebSocket: no dependency, works in browser/Node/IDE,
+  minimal supply chain for a governed tool. Clients act via POST, observe via SSE.
 - `GET /sessions/:id/verify` → store-untrusting verification over the wire.
-- Acceptance: two clients observe one live session; both can verify it.
+- `reef serve [<port>]` (and a `reef-serve` bin) start it; offline/keyless by
+  default (mock driver) so the Docker image serves a working backend immediately.
+- Acceptance MET: a test drives real HTTP against an ephemeral port where two
+  independent clients observe one live session and both verify it (`ok`,
+  `work: intact`, `log: intact`, `binding: bound`).
 
 ## M3 — Web surface 🔜
 `@octopus-reef/web` — Vite + React, the Kiro-web equivalent. Connects to the

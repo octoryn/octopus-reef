@@ -1,0 +1,24 @@
+{
+  "name": "@octopus-reef/server",
+  "version": "0.1.0",
+  "description": "The Reef server daemon: one governed-session backend, hosted over plain HTTP + Server-Sent Events, that every surface (CLI, IDE, Web) shares. Live evidence streaming and store-untrusting verification over the wire. Zero runtime dependencies beyond the engine.",
+  "license": "Apache-2.0",
+  "author": "Ran Tao <ran@octopusos.ai>",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "reef-serve": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "dependencies": {
+    "@octopus-reef/engine": "^0.1.0",
+    "@octopus-reef/protocol": "^0.1.0"
+  }
+}

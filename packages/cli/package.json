@@ -12,6 +12,7 @@
   "files": ["dist", "README.md", "LICENSE"],
   "dependencies": {
     "@octopus-reef/driver-claude": "^0.1.0",
-    "@octopus-reef/engine": "^0.1.0"
+    "@octopus-reef/engine": "^0.1.0",
+    "@octopus-reef/server": "^0.1.0"
   }
 }

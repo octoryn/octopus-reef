@@ -23,6 +23,7 @@ import {
   type ReefEvent,
 } from "@octopus-reef/engine";
 import { ClaudeDriver } from "@octopus-reef/driver-claude";
+import { ReefServer } from "@octopus-reef/server";
 import {
   banner,
   c,
@@ -86,11 +87,13 @@ function help(): void {
       `${c.bold("USAGE")}`,
       `  reef run "<task>" [--out <dir>] [--secret <key>] [--demo-denial] [--json]`,
       `  reef verify <dir> [--secret <key>] [--json]`,
+      `  reef serve [<port>] [--out <dir>]`,
       ``,
       `${c.bold("COMMANDS")}`,
       `  ${c.signal("run")}     Run a governed agentic session. Every step becomes a`,
       `          tamper-evident evidence link over a governed work spine.`,
       `  ${c.signal("verify")}  Load a persisted session and re-verify it store-untrusting.`,
+      `  ${c.signal("serve")}   Start the daemon (HTTP + SSE) that every surface shares.`,
       ``,
       `${c.bold("FLAGS")}`,
       `  --out <dir>     Persist the session (workstate.jsonl + session.log.jsonl).`,
@@ -250,12 +253,39 @@ function verifyCommand(flags: Flags): number {
   }
 }
 
+async function serveCommand(flags: Flags): Promise<number> {
+  const portArg = flags._[1];
+  const port = portArg !== undefined ? Number(portArg) : 4300;
+  if (Number.isNaN(port)) {
+    process.stderr.write(c.danger(`error: invalid port: ${portArg}\n`));
+    return 2;
+  }
+  const server = new ReefServer(
+    flags.out !== undefined ? { persistDir: flags.out } : {},
+  );
+  const bound = await server.listen(port);
+  process.stdout.write(banner());
+  process.stdout.write(
+    `  ${c.muted("serving")} ${c.ink(`http://127.0.0.1:${bound}`)}   ${c.dim("(Ctrl-C to stop)")}\n` +
+      `  ${c.muted("POST")} ${c.ink("/sessions")}   ${c.muted("GET")} ${c.ink("/sessions/:id/events")}   ${c.muted("GET")} ${c.ink("/sessions/:id/verify")}\n\n`,
+  );
+  return new Promise<number>((resolve) => {
+    const stop = (): void => {
+      void server.close().then(() => resolve(0));
+    };
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+  });
+}
+
 async function main(): Promise<number> {
   const flags = parse(process.argv.slice(2));
   const command = flags._[0];
   switch (command) {
     case "run":
       return runCommand(flags);
+    case "serve":
+      return serveCommand(flags);
     case "verify":
       return verifyCommand(flags);
     case undefined:
