@@ -7,6 +7,7 @@
  * pure presentation, fed via postMessage.
  */
 import * as vscode from "vscode";
+import { randomUUID } from "node:crypto";
 import { createSession, streamEvents, type ServerEvent } from "./client.js";
 import { webviewHtml } from "./webview.js";
 
@@ -17,13 +18,8 @@ function serverUrl(): string {
 }
 
 function nonce(): string {
-  const chars =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let s = "";
-  for (let i = 0; i < 24; i++) {
-    s += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return s;
+  // A CSP nonce must be unpredictable — use a CSPRNG, not Math.random().
+  return randomUUID().replace(/-/g, "");
 }
 
 export function activate(context: vscode.ExtensionContext): void {

@@ -68,9 +68,15 @@ export interface ReefServerOptions {
    * back to `index.html` (client-side routing).
    */
   readonly staticDir?: string;
+  /** Max resident sessions before the oldest sealed one is evicted. Default 500. */
+  readonly maxSessions?: number;
+  /** Max concurrent SSE subscribers per session. Default 64. */
+  readonly maxSubscribers?: number;
 }
 
 const MAX_BODY = 64 * 1024;
+const DEFAULT_MAX_SESSIONS = 500;
+const DEFAULT_MAX_SUBSCRIBERS = 64;
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".html": "text/html; charset=utf-8",
@@ -98,6 +104,16 @@ export class ReefServer {
         this.#fail(res, 500, err instanceof Error ? err.message : String(err));
       });
     });
+    // Bound resource use against an unauthenticated client: cap concurrent
+    // sockets, and time out slow/idle request headers + bodies (an SSE response
+    // is long-lived, but the REQUEST that opened it must arrive promptly).
+    this.#http.maxConnections = 1024;
+    this.#http.headersTimeout = 15_000;
+    this.#http.requestTimeout = 30_000;
+  }
+
+  #maxSessions(): number {
+    return this.#options.maxSessions ?? DEFAULT_MAX_SESSIONS;
   }
 
   /** Start listening. Pass 0 for an ephemeral port; resolves with the bound port. */
@@ -189,6 +205,21 @@ export class ReefServer {
     const task = typeof body.task === "string" ? body.task.trim() : "";
     if (task === "") return this.#fail(res, 400, "task is required");
 
+    // Bound memory: evict the oldest SEALED session when at capacity (Map
+    // iteration is insertion order). If everything resident is still running,
+    // refuse rather than grow without bound.
+    if (this.#sessions.size >= this.#maxSessions()) {
+      let evicted = false;
+      for (const [key, old] of this.#sessions) {
+        if (old.status === "sealed") {
+          this.#sessions.delete(key);
+          evicted = true;
+          break;
+        }
+      }
+      if (!evicted) return this.#fail(res, 503, "too many active sessions");
+    }
+
     const id = `sess-${(this.#counter++).toString(36)}-${Date.now().toString(36)}`;
     const driver = this.#options.driverFactory?.(task) ?? new MockDriver();
     const rec: SessionRecord = {
@@ -252,6 +283,12 @@ export class ReefServer {
     res: ServerResponse,
     rec: SessionRecord,
   ): void {
+    // A running session only ever holds a bounded set of live subscribers; a
+    // sealed one replays + closes immediately (no retained socket) so it's exempt.
+    const max = this.#options.maxSubscribers ?? DEFAULT_MAX_SUBSCRIBERS;
+    if (rec.status !== "sealed" && rec.subscribers.size >= max) {
+      return this.#fail(res, 429, "too many subscribers for this session");
+    }
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",

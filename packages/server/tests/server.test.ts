@@ -218,6 +218,39 @@ test("M5: serves the web SPA for non-API routes, confined, API still works", asy
   }
 });
 
+test("surface review: sessions are evicted at capacity (bounded memory)", async () => {
+  // maxSessions=2: after three sealed sessions, the oldest is evicted.
+  const server = new ReefServer({ maxSessions: 2 });
+  const port = await server.listen(0);
+  try {
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const created = await request(port, "POST", "/sessions", {
+        task: `t${i}`,
+      });
+      assert.equal(created.status, 201);
+      // wait for it to seal (so the next create sees it as evictable)
+      await collectSSE(port, `/sessions/${created.json.id}/events`);
+      ids.push(created.json.id as string);
+    }
+    // the oldest is gone; the two most recent remain
+    assert.equal(
+      (await request(port, "GET", `/sessions/${ids[0]}`)).status,
+      404,
+    );
+    assert.equal(
+      (await request(port, "GET", `/sessions/${ids[1]}`)).status,
+      200,
+    );
+    assert.equal(
+      (await request(port, "GET", `/sessions/${ids[2]}`)).status,
+      200,
+    );
+  } finally {
+    await server.close();
+  }
+});
+
 test("M2: health, unknown session, and bad requests", async () => {
   const server = new ReefServer();
   const port = await server.listen(0);

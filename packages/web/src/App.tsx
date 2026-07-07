@@ -61,9 +61,16 @@ export function App(): JSX.Element {
     setPhase("running");
     try {
       const id = await createSession(BASE, task.trim());
-      sub.current = subscribeEvents(BASE, id, onFrame, () => {
-        setPhase((p) => (p === "running" ? "sealed" : p));
-      });
+      sub.current = subscribeEvents(
+        BASE,
+        id,
+        onFrame,
+        () => setPhase((p) => (p === "running" ? "sealed" : p)),
+        (reason) => {
+          setPhase((p) => (p === "sealed" ? p : "error"));
+          setError(reason);
+        },
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setPhase("error");

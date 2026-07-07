@@ -62,6 +62,7 @@ export function subscribeEvents(
   id: string,
   onEvent: (event: ServerEvent) => void,
   onDone: () => void,
+  onError: (reason: string) => void,
 ): Subscription {
   const source = new EventSource(`${baseUrl}/sessions/${id}/events`);
   let sealed = false;
@@ -76,10 +77,13 @@ export function subscribeEvents(
     onEvent(frame);
   };
   // The server ends the stream after sealing; EventSource surfaces the close as
-  // an error and would otherwise auto-reconnect, so close it ourselves.
+  // an error and would otherwise auto-reconnect, so close it ourselves. If it
+  // closes BEFORE sealing (the daemon died / the session hung), that's a real
+  // failure — report it so the UI doesn't sit on "running" forever.
   source.onerror = () => {
     source.close();
     if (sealed) onDone();
+    else onError("connection to the daemon was lost before the session sealed");
   };
   return { close: () => source.close() };
 }

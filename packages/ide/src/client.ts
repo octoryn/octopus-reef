@@ -62,9 +62,34 @@ export async function createSession(
   return body.id;
 }
 
+/** A single SSE frame (or the pending tail) must fit in this much memory. */
+const MAX_BUFFER = 1_000_000;
+/** Abort the stream if no bytes arrive for this long (a hung daemon). */
+const IDLE_MS = 120_000;
+
+async function readWithTimeout<T>(
+  reader: ReadableStreamDefaultReader<T>,
+  ms: number,
+): Promise<ReadableStreamReadResult<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("event stream idle timeout")),
+      ms,
+    );
+  });
+  try {
+    return await Promise.race([reader.read(), timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 /**
  * Stream a session's evidence to `onEvent` until it seals (or `signal` aborts).
  * Reads the SSE body off `fetch` — no EventSource needed in the extension host.
+ * Bounded: a delimiter-less flood can't grow memory without limit, and a hung
+ * daemon trips the idle timeout instead of blocking forever.
  */
 export async function streamEvents(
   baseUrl: string,
@@ -80,10 +105,17 @@ export async function streamEvents(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    buffer = drainSSE(buffer, onEvent);
+  try {
+    for (;;) {
+      const { done, value } = await readWithTimeout(reader, IDLE_MS);
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      buffer = drainSSE(buffer, onEvent);
+      if (buffer.length > MAX_BUFFER) {
+        throw new Error("event stream exceeded the frame size limit");
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
   }
 }
