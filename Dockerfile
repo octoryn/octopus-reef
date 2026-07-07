@@ -19,6 +19,8 @@ COPY packages/protocol/package.json packages/protocol/
 COPY packages/driver-claude/package.json packages/driver-claude/
 COPY packages/adapter-runtime/package.json packages/adapter-runtime/
 COPY packages/adapter-observe/package.json packages/adapter-observe/
+COPY packages/adapter-blackboard/package.json packages/adapter-blackboard/
+COPY packages/adapter-experience/package.json packages/adapter-experience/
 COPY packages/server/package.json packages/server/
 COPY packages/cli/package.json packages/cli/
 COPY packages/web/package.json packages/web/

@@ -1,0 +1,13 @@
+{
+  "name": "@octopus-reef/adapter-blackboard",
+  "version": "0.1.0",
+  "description": "Shared cognition for parallel agents on one Reef session: a blackboard (octopus-blackboard) where agents claim tasks and note progress on a hash-chained timeline, so multi-agent coordination is itself auditable. Not an orchestrator — a shared memory.",
+  "license": "Apache-2.0",
+  "author": "Ran Tao <ran@octopusos.ai>",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "files": ["dist", "README.md", "LICENSE"],
+  "dependencies": { "octopus-blackboard": "^0.3.1" }
+}

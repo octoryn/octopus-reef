@@ -117,7 +117,7 @@ daemon hosts the built SPA).
   /sessions/:id/verify` returns `ok / intact / intact / bound`. `docker compose
   up` is the one-command form.
 
-## M6 — Deepen stack integration 🔨 (4 of 7 integrated)
+## M6 — Deepen stack integration 🔨 (6 of 7 integrated)
 Wire the stack modules behind the engine's seams — the light, well-fitting ones
 first; the heavy/ill-shaped ones deferred with honest reasons.
 - ✅ **Replay** — byte-for-byte session reconstruction from the evidence log.
@@ -136,10 +136,16 @@ first; the heavy/ill-shaped ones deferred with honest reasons.
   untrusted agent input (tool call / action) is validated into a canonical
   Observation via `octopus-observe` and bridged to evidence; malformed input is
   rejected at the boundary. Ready for an ingesting driver to route inputs through.
-- ⏸ **Blackboard / Experience** — real integrations, but each needs `better-sqlite3`
-  (a native module — complicates the slim Docker image + CI) AND a
-  multi-agent/causal-memory session model that's a larger design. Deferred as a
-  focused follow-on, not rushed.
+- ✅ **Blackboard** — `@octopus-reef/adapter-blackboard`: shared cognition for
+  PARALLEL agents on one session. Agents `claim` tasks (a conflict prevents two
+  doing the same work), `release` them, and `note` progress on a hash-chained
+  timeline — multi-agent coordination that is itself auditable. Uses
+  `octopus-blackboard` (better-sqlite3, which ships a prebuilt binary — installs
+  clean on the slim Docker image, no build tools).
+- ✅ **Experience** — `@octopus-reef/adapter-experience`: causal project memory
+  (`octopus-experience`). `rememberDecision(memory, title, why)` records why a
+  choice was made; `recall(memory, query)` surfaces the relevant prior context at
+  session open. Ask *why*, not just *what*. `:memory:` or a persistent sqlite file.
 - ⏸ **Scout** — a full web/PDF ingestion **service** (fastify + playwright +
   postgres + redis). Embedding it is the wrong shape; the right integration is
   Reef *calling* a running Scout for session context, not bundling it.
