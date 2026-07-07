@@ -13,8 +13,10 @@ import {
   GovernedSession,
   MockDriver,
   UnsafeDemoDriver,
+  WorkspaceExecutor,
   loadSession,
   persistSession,
+  reefAllowlist,
   type Driver,
   type ReefEvent,
 } from "@octopus-reef/engine";
@@ -35,6 +37,7 @@ interface Flags {
   readonly json: boolean;
   readonly demoDenial: boolean;
   readonly claude: boolean;
+  readonly workspace: string | undefined;
 }
 
 function parse(argv: readonly string[]): Flags {
@@ -44,6 +47,7 @@ function parse(argv: readonly string[]): Flags {
   let json = false;
   let demoDenial = false;
   let claude = false;
+  let workspace: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--out") out = argv[++i];
@@ -51,9 +55,10 @@ function parse(argv: readonly string[]): Flags {
     else if (a === "--json") json = true;
     else if (a === "--demo-denial") demoDenial = true;
     else if (a === "--claude") claude = true;
+    else if (a === "--workspace") workspace = argv[++i];
     else positional.push(a);
   }
-  return { _: positional, out, secret, json, demoDenial, claude };
+  return { _: positional, out, secret, json, demoDenial, claude, workspace };
 }
 
 function sessionId(): string {
@@ -77,6 +82,7 @@ function help(): void {
       `  --out <dir>     Persist the session (workstate.jsonl + session.log.jsonl).`,
       `  --secret <key>  Keyed mode: bind every link with an HMAC.`,
       `  --claude        Use the real Claude agent driver (needs ANTHROPIC_API_KEY; plans under governance, does not execute yet).`,
+      `  --workspace <dir>  Enable real execution under the allowlist: confined file read/edit in <dir> (no shell yet).`,
       `  --demo-denial   Use a driver that proposes a dangerous command, to show the gate.`,
       `  --json          Machine-readable output.`,
       ``,
@@ -116,6 +122,12 @@ async function runCommand(flags: Flags): Promise<number> {
     id,
     task,
     driver,
+    ...(flags.workspace !== undefined
+      ? {
+          authorizer: reefAllowlist(),
+          executor: new WorkspaceExecutor(flags.workspace),
+        }
+      : {}),
     ...(flags.secret !== undefined ? { integritySecret: flags.secret } : {}),
     onEvent: (e) => {
       events.push(e);

@@ -39,6 +39,24 @@ export interface GateVerdict {
   readonly policy: string;
 }
 
+/**
+ * The outcome of a proposed action after the full pipeline (tripwire →
+ * allowlist → executor). Fed back to the driver so a real agent can react to
+ * what actually happened (the value of a `yield {type:"action"}` step).
+ */
+export interface ActionResult {
+  /** Passed the tripwire AND the allowlist. */
+  readonly allowed: boolean;
+  /** An executor ran (only possible when `allowed`). */
+  readonly executed: boolean;
+  readonly reason: string;
+  readonly policy: string;
+  /** Executor output (e.g. file contents, a short result summary). */
+  readonly output?: string;
+  readonly error?: string;
+  readonly exitCode?: number;
+}
+
 /** How a session ended. Only `completed` is a success. */
 export type SessionOutcome = "completed" | "failed" | "cancelled";
 

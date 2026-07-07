@@ -23,8 +23,18 @@ import { EvidenceLog } from "./log.js";
 import { DefaultGate, type ActionGate } from "./gate.js";
 import { assertJsonObject, EngineError } from "./json.js";
 import { verifyBinding } from "./verify.js";
+import {
+  allowAll,
+  LOCAL_PRINCIPAL,
+  type Authorizer,
+  type Principal,
+} from "./authz.js";
+import { NoopExecutor, type ActionExecutor } from "./executor.js";
 import type {
+  ActionRequest,
+  ActionResult,
   Driver,
+  DriverStep,
   ReefEvent,
   ReefEventKind,
   SessionOutcome,
@@ -47,6 +57,16 @@ export interface SessionOptions {
   /** Who is accountable for the work. Defaults to the driver, as an agent actor. */
   readonly actor?: Actor;
   readonly gate?: ActionGate;
+  /**
+   * The real "may this run?" allowlist. Default is `allowAll` — safe ONLY
+   * because the default executor runs nothing; wire `reefAllowlist()` whenever
+   * you wire a real executor.
+   */
+  readonly authorizer?: Authorizer;
+  /** What actually runs an authorized action. Default {@link NoopExecutor} (runs nothing). */
+  readonly executor?: ActionExecutor;
+  /** Who is authorized. Defaults to the local single-user owner. */
+  readonly principal?: Principal;
   /** Keyed mode: bind every evidence and both chains tamper-evidently. */
   readonly integritySecret?: string;
   /** Clock injection for deterministic sessions/tests. */
@@ -70,6 +90,9 @@ export class GovernedSession {
 
   readonly #driver: Driver;
   readonly #gate: ActionGate;
+  readonly #authorizer: Authorizer;
+  readonly #executor: ActionExecutor;
+  readonly #principal: Principal;
   readonly #actor: Actor;
   readonly #graph: WorkStateGraph;
   readonly #log: EvidenceLog;
@@ -88,6 +111,9 @@ export class GovernedSession {
     this.workItemId = `work-${options.id}`;
     this.#driver = options.driver;
     this.#gate = options.gate ?? new DefaultGate();
+    this.#authorizer = options.authorizer ?? allowAll;
+    this.#executor = options.executor ?? new NoopExecutor();
+    this.#principal = options.principal ?? LOCAL_PRINCIPAL;
     this.#actor = options.actor ?? {
       id: options.driver.name,
       kind: "agent",
@@ -146,11 +172,22 @@ export class GovernedSession {
       };
     }
 
+    // Drive the generator manually so each action's ActionResult can be fed
+    // back to the driver (a real agent reacts to what actually happened).
+    const steps = this.#driver.run({ sessionId: this.id, task: this.task });
+    const it = steps[Symbol.asyncIterator]() as AsyncIterator<
+      DriverStep,
+      void,
+      ActionResult | undefined
+    >;
+    let sent: ActionResult | undefined;
     try {
-      for await (const step of this.#driver.run({
-        sessionId: this.id,
-        task: this.task,
-      })) {
+      for (;;) {
+        const next = await it.next(sent);
+        sent = undefined;
+        if (next.done === true) break;
+        const step = next.value;
+
         if (this.#signal?.aborted) {
           outcome = "cancelled";
           reason = "session was cancelled";
@@ -169,29 +206,12 @@ export class GovernedSession {
           reason = step.summary;
           break;
         } else if (step.type === "action") {
-          const verdict = this.#gate.check(step.action);
-          if (verdict.allow) {
-            this.#actionsExecuted++;
-            this.#emit("action.executed", step.action.summary, {
-              actionType: step.action.type,
-              ...(step.action.target !== undefined
-                ? { target: step.action.target }
-                : {}),
-              policy: verdict.policy,
-            });
-          } else {
-            this.#actionsDenied++;
-            this.#emit("action.denied", `DENIED: ${step.action.summary}`, {
-              actionType: step.action.type,
-              required: step.action.required === true,
-              reason: verdict.reason,
-              policy: verdict.policy,
-            });
-            if (step.action.required === true) {
-              outcome = "failed";
-              reason = `a required action was denied by the gate: ${step.action.summary}`;
-              break;
-            }
+          const result = await this.#handleAction(step.action);
+          sent = result;
+          if (!result.allowed && step.action.required === true) {
+            outcome = "failed";
+            reason = `a required action was denied: ${step.action.summary}`;
+            break;
           }
         } else if (step.type === "done") {
           outcome = "completed";
@@ -289,6 +309,85 @@ export class GovernedSession {
         actionsDenied: this.#actionsDenied,
       },
     );
+  }
+
+  /**
+   * Run a proposed action through the full pipeline: (1) the DefaultGate
+   * tripwire, (2) the allowlist Authorizer — the real "may this run?" gate,
+   * (3) the executor. Each stage is recorded as evidence; the result is fed
+   * back to the driver. A denied action is NEVER executed.
+   */
+  async #handleAction(action: ActionRequest): Promise<ActionResult> {
+    const verdict = this.#gate.check(action);
+    if (!verdict.allow) {
+      this.#actionsDenied++;
+      this.#emit("action.denied", `DENIED: ${action.summary}`, {
+        actionType: action.type,
+        required: action.required === true,
+        reason: verdict.reason,
+        policy: verdict.policy,
+        stage: "tripwire",
+      });
+      return {
+        allowed: false,
+        executed: false,
+        reason: verdict.reason,
+        policy: verdict.policy,
+      };
+    }
+
+    const resourceId = String(
+      (action.payload &&
+      typeof action.payload === "object" &&
+      "command" in action.payload
+        ? action.payload.command
+        : undefined) ??
+        action.target ??
+        action.summary,
+    );
+    const authorized = await this.#authorizer.can(
+      this.#principal,
+      `reef.action.${action.type}`,
+      {
+        type: action.type,
+        id: resourceId,
+      },
+    );
+    if (!authorized) {
+      this.#actionsDenied++;
+      this.#emit("action.denied", `DENIED: ${action.summary}`, {
+        actionType: action.type,
+        required: action.required === true,
+        reason: "not permitted by the allowlist",
+        policy: "reef-allowlist",
+        stage: "authorize",
+      });
+      return {
+        allowed: false,
+        executed: false,
+        reason: "not permitted by the allowlist",
+        policy: "reef-allowlist",
+      };
+    }
+
+    const exec = await this.#executor.execute(action);
+    this.#actionsExecuted++;
+    this.#emit("action.executed", action.summary, {
+      actionType: action.type,
+      ...(action.target !== undefined ? { target: action.target } : {}),
+      executor: this.#executor.name,
+      ok: exec.ok,
+      ...(exec.error !== undefined ? { error: exec.error } : {}),
+    });
+    return {
+      allowed: true,
+      executed: true,
+      reason: "permitted",
+      policy: "reef-allowlist",
+      ...(exec.output !== undefined ? { output: exec.output } : {}),
+      ...(exec.error !== undefined ? { error: exec.error } : {}),
+      ...(exec.exitCode !== undefined ? { exitCode: exec.exitCode } : {}),
+    };
   }
 
   #advance(to: WorkState, reason: string): void {
