@@ -13,6 +13,28 @@ export {
   ProviderError,
   DEFAULT_BEDROCK_MODEL,
 } from "./provider.js";
+
+// The conductor: govern + route + prove a fleet of heterogeneous workers.
+export {
+  Orchestrator,
+  LlmPlanner,
+  LlmRouter,
+  verifyLedger,
+  ledgerHead,
+} from "./orchestrator.js";
+export type {
+  Worker,
+  WorkerResult,
+  Subtask,
+  Planner,
+  Router,
+  OrchestrationStep,
+  OrchestrationResult,
+  OrchestratorOptions,
+  WorkerLedger,
+} from "./orchestrator.js";
+export { codeWorker, toolWorker } from "./workers.js";
+export type { CodeWorkerOptions, ToolWorkerOptions } from "./workers.js";
 export type {
   ModelProvider,
   CompletionRequest,
