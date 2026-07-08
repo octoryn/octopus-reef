@@ -12,6 +12,13 @@ from its evidence log** (`reef replay <dir>`): a persisted session is
 re-verified store-untrusting, then its entire timeline is reconstructed, exactly
 as it was emitted. Replay only succeeds on a log that verifies.
 
+Reef governs a single agent's session — and, with its **conductor**
+(`@octopus-reef/agent`), a whole *fleet* of them. The conductor sits **above** the
+agent CLIs (Claude Code, Codex, Gemini, your own) instead of competing with them:
+it routes each subtask to the best worker, governs each as its own verifiable
+session, and binds the run into a **Worker Ledger** that proves what the fleet
+did. See [docs/CONDUCTOR.md](docs/CONDUCTOR.md).
+
 > **Part of [Octopus Core](https://github.com/octoryn) — the open infrastructure stack for governed AI.** Reef is the *workspace surface* that composes the stack into one product. It never reinvents hashing, chains, or the work state machine — it builds on [`octopus-evidence`](https://github.com/octoryn/octopus-evidence) and [`octopus-workstate`](https://github.com/octoryn/octopus-workstate); Replay is native, and Runtime, Blackboard, Observe, Experience, Scout, and Inspect integrate incrementally.
 
 ## Show vs prove
@@ -26,6 +33,7 @@ ships the substrate underneath:
 | Cross-repo PRs in a log | The work spine is an `octopus-workstate` provenance graph (proposed → done) |
 | "Est. credits used" | `reef verify` re-checks the whole session store-untrusting |
 | A session you trust | A session you can independently verify (and replay-ready) |
+| A fleet of agents you trust | A **Worker Ledger** proving what the fleet did (plan → route → result → acceptance) |
 
 ## Quickstart
 
@@ -79,6 +87,48 @@ A Reef **session** composes three primitives:
 `reef verify` (and `loadSession`) re-derive every hash and re-fold both chains:
 a tampered file fails to load rather than loading wrong.
 
+## Execution safety (a real gate, not a denylist)
+
+A real command runs only after (1) a tripwire, (2) the `reefAllowlist`
+(allow-known-safe; the `DefaultGate` denylist is only a backstop), and (3) a
+confined executor. The opt-in `SandboxExecutor` (`--sandbox`) runs commands
+shell-free, with the network denied, writes confined to the workspace, reads of
+the real `$HOME`'s secret *contents* denied, git's config-driven code-execution
+neutralised, a throwaway `HOME`, and a process-group timeout.
+
+**The honest limit:** the local sandbox is defense-in-depth, not a jail for a
+fully untrusted repo — for that, run Reef in the container (`docker compose up`),
+where execution is isolated by the OS. See [SECURITY.md](SECURITY.md).
+
+## The conductor — prove what the *fleet* did
+
+The engine proves one agent's session. The **conductor** (`@octopus-reef/agent`)
+proves a fleet. It translates a task into subtasks, routes each to the best
+worker, governs every worker as its own verifiable session, and binds the whole
+run into a **Worker Ledger**: an `octopus-evidence` chain of
+`plan → contract → route → result → acceptance → done` where each `result` pins
+the head of the sub-session it came from. Swap a sub-session and the pin breaks;
+change one byte and the ledger goes red.
+
+Workers are heterogeneous, all governed the same way:
+
+- **`codeWorker` / `toolWorker`** — our own agentic loop (a `Driver`); the model
+  is rented through a provider seam (**BYOK**), and every action is gated,
+  confined, and evidence-chained.
+- **`cliWorker`** — wrap an external agent CLI we didn't write (Claude Code,
+  Codex, …). It needs the network and its own auth, so we don't OS-sandbox it;
+  instead we run it confined to a workspace and capture its file **effects** (a
+  before/after content-hash diff) as evidence. Honestly scoped: we prove what it
+  changed, not its internal reasoning.
+- **`tool` workers** — MCP / HTTP / API calls, gated by an allowlist *by name*.
+
+**Acceptance is a machine-check, not a rubber stamp.** Wire
+[`octopus-intent`](https://github.com/octoryn/octopus-intent) as the judge and the
+conductor doesn't accept "all subtasks completed" — it runs `checkContract` over a
+worker's actual sub-session record and returns a per-criterion verdict against a
+contract you set. It can, and does, say *no*. Everyone else shows you what an
+agent did; Reef lets you prove what a *fleet* did.
+
 ## Surfaces
 
 Reef is driver- and surface-agnostic; the governance lives in one engine
@@ -88,6 +138,7 @@ Reef is driver- and surface-agnostic; the governance lives in one engine
 |---|---|---|
 | **Engine** (governance: evidence + workstate + gate + executor + replay) | `@octopus-reef/engine` | ✅ |
 | **CLI** (`run` · `verify` · `replay` · `serve`) | `@octopus-reef/cli` | ✅ |
+| **Conductor** (route + govern + prove a fleet of heterogeneous workers) | `@octopus-reef/agent` | ✅ |
 | **Real agent driver** (Claude) | `@octopus-reef/driver-claude` | ✅ |
 | **Server** (daemon — one backend for all surfaces) | `@octopus-reef/server` | ✅ |
 | **Web** (Vite + React) | `@octopus-reef/web` | ✅ |
@@ -95,8 +146,9 @@ Reef is driver- and surface-agnostic; the governance lives in one engine
 | **Docker** one-click | `Dockerfile` · `docker-compose.yml` | ✅ |
 | Mobile | — | on hold |
 
-See [docs/DELIVERY-PLAN.md](docs/DELIVERY-PLAN.md) for the full roadmap and
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the stack composes.
+See [docs/CONDUCTOR.md](docs/CONDUCTOR.md) for the conductor,
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the stack composes, and
+[docs/DELIVERY-PLAN.md](docs/DELIVERY-PLAN.md) for the full roadmap.
 
 ## Development
 

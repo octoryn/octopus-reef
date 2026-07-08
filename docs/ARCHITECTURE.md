@@ -1,3 +1,5 @@
+**English** | [简体中文](ARCHITECTURE.zh-CN.md)
+
 # Reef — Architecture
 
 Reef is a **surface over the Octopus stack**, not a new primitive. Its one job is
@@ -35,6 +37,7 @@ provable:
 | Package | Job (one sentence) |
 |---|---|
 | `@octopus-reef/engine` | The governed session engine — composes workstate + evidence + gate + driver into a provable session. |
+| `@octopus-reef/agent` | The conductor — plans, routes, and governs a fleet of heterogeneous workers into a verifiable Worker Ledger. |
 | `@octopus-reef/cli` | The terminal surface: run and verify governed sessions. |
 | `@octopus-reef/server` *(M2)* | Local daemon hosting the engine so all surfaces share one backend. |
 | `@octopus-reef/web` *(M3)* | Browser surface over the server. |
@@ -67,6 +70,30 @@ moved state* (workstate's domain). The **evidence log** captures *every
 fine-grained session moment* for replay. They are separate records with separate
 domains; a session is provable only when **both** verify. This keeps each
 Octopus primitive doing exactly its one job.
+
+## From one session to a fleet — the conductor
+
+The engine proves one session; `@octopus-reef/agent` composes it into a governed
+**fleet**. The conductor never re-implements governance — each worker it routes to
+is an ordinary `GovernedSession`, so every sub-session already has its own two
+verifying chains. What the conductor adds is a **third** tamper-evident record —
+the **Worker Ledger** — over the orchestration itself:
+
+```
+   task ─▶ Orchestrator
+             plan ─▶ (contract) ─▶ route ─▶ result ─▶ … ─▶ acceptance ─▶ done
+                                              │
+                                    each result PINS the sub-session's
+                                    (workHead, logHead) — swap-proof
+```
+
+Each entry is `octopus-evidence`; `verifyLedger` re-checks the chain
+store-untrusting. Because a `result` pins the heads of a real governed
+sub-session, the ledger is bound to the actual work, not just internally
+consistent. Acceptance is optional and decoupled: a judge may run
+`octopus-intent`'s `checkContract` over a worker's sub-session record, and its
+verdict is recorded as `orchestration.acceptance`. The engine never imports the
+checker. See [CONDUCTOR.md](CONDUCTOR.md).
 
 ## Design rules honored
 

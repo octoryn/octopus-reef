@@ -1,3 +1,5 @@
+**English** | [简体中文](CONTRIBUTING.zh-CN.md)
+
 # Contributing to Reef
 
 Reef is built to a house standard: **everything ships green, and every
@@ -23,6 +25,7 @@ strict):
 | --- | --- |
 | `engine` | the governed session — evidence + workstate + gate + executor + replay. Offline, dependency-light. **The governance lives here; every other package is thin.** |
 | `protocol` | the shared HTTP/SSE wire contract |
+| `agent` | the conductor — route + govern + prove a fleet of heterogeneous workers (Worker Ledger). Composes the engine; never imports the acceptance checker. |
 | `driver-claude` | the real Claude agent driver (its own package so the engine stays offline) |
 | `server` | the daemon (HTTP + SSE) every surface shares |
 | `cli` · `web` · `ide` | the surfaces (terminal · Vite/React · VS Code) |

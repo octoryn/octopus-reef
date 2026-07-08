@@ -6,6 +6,8 @@
 
 Reef 是闭源智能体 IDE 的开放、以证据为底座的替代品。它像任何智能体工作台一样在你的代码库上跑智能体 —— 然后**证明它们做过的每一个动作**。每一次状态迁移都是一条防篡改链接;每一场会话都能**独立验证、无需信任存储**,并能**从证据日志逐字节回放**(`reef replay <dir>`):一场持久化的会话先被 store-untrusting 重新验证,再把整条时间线原样重建。**只有能通过验证的日志才能被回放。**
 
+Reef 治理单个智能体的一场会话 —— 而借助它的**指挥官**(`@octopus-reef/agent`),它能治理一整支*舰队*。指挥官**站在**各智能体 CLI(Claude Code、Codex、Gemini、乃至你自己的)**之上**,而不是与它们竞争:它把每个子任务路由到最合适的 worker,把每个 worker 当作一场独立可验证的会话来治理,并把整轮运行绑成一份**Worker Ledger(工作者账本)**,用它证明这支舰队做过什么。详见 [docs/CONDUCTOR.zh-CN.md](docs/CONDUCTOR.zh-CN.md)。
+
 > **属于 [Octopus Core](https://github.com/octoryn) —— 面向可治理 AI 的开放基础设施栈。** Reef 是把整个栈组合成一个产品的*工作台形态*。它从不重新发明哈希、链或工作状态机 —— 而是构建于 [`octopus-evidence`](https://github.com/octoryn/octopus-evidence) 与 [`octopus-workstate`](https://github.com/octoryn/octopus-workstate) 之上;Replay 为原生实现,Runtime、Blackboard、Observe、Experience、Scout、Inspect 按增量方式接入。
 
 ## "展示"与"证明"
@@ -18,6 +20,7 @@ Reef 是闭源智能体 IDE 的开放、以证据为底座的替代品。它像�
 | 日志里的跨库 PR | 工作主干是 `octopus-workstate` 溯源图(proposed → done) |
 | "预估消耗额度" | `reef verify` 以 store-untrusting 方式复核整场会话 |
 | 一场你只能相信的会话 | 一场你能独立验证、并能回放的会话 |
+| 一支你只能相信的智能体舰队 | 一份**证明舰队做过什么**的 Worker Ledger(plan → route → result → acceptance) |
 
 ## 快速开始
 
@@ -72,6 +75,18 @@ proof ────────────────────────�
 
 **诚实的边界**:本地沙箱是纵深防御,不是不可信 repo 的牢笼 —— 对完全不可信的 repo,请在容器里运行 Reef(`docker compose up`),由操作系统隔离执行。详见 [SECURITY.md](SECURITY.md)。
 
+## 指挥官 —— 证明*舰队*做过什么
+
+引擎证明单个智能体的一场会话;**指挥官**(`@octopus-reef/agent`)证明一整支舰队。它把一个任务翻译成子任务,把每个子任务路由到最合适的 worker,把每个 worker 当作一场独立可验证的会话来治理,并把整轮运行绑成一份 **Worker Ledger**:一条 `octopus-evidence` 链 —— `plan → contract → route → result → acceptance → done`,其中每个 `result` 都**钉住**它所来自子会话的链头。换掉一个子会话,钉子就断;改动一个字节,账本就变红。
+
+Worker 是异构的,却都以同一种方式被治理:
+
+- **`codeWorker` / `toolWorker`** —— 我们自己的智能体主循环(一个 `Driver`);模型通过 provider 接缝**租用**(**BYOK,自带密钥**),每一个动作都被闸门裁决、受限执行、并写入证据链。
+- **`cliWorker`** —— 包裹一个我们没写的外部智能体 CLI(Claude Code、Codex……)。它需要网络和自己的鉴权,所以我们**不**用操作系统沙箱去关它;而是把它限定在一个工作区里运行,并把它的文件**效果**(运行前后的内容哈希差异)捕获为证据。诚实地界定范围:我们证明它**改了什么**,而非它内部如何推理。
+- **`tool` worker** —— MCP / HTTP / API 调用,由 allowlist **按名字**放行。
+
+**验收是一次机检,不是橡皮图章。** 把 [`octopus-intent`](https://github.com/octoryn/octopus-intent) 接成裁判,指挥官就不再满足于"所有子任务都完成了" —— 它会对一个 worker 的**真实子会话记录**跑 `checkContract`,并针对你设定的合约给出**逐条**判决。它能、也确实会说*不*。别人给你看一个智能体做了什么;Reef 让你**证明**一整支*舰队*做了什么。
+
 ## 各形态
 
 Reef 与 driver、形态无关;治理集中在一个引擎(`@octopus-reef/engine`)里,所有形态共享它。
@@ -80,6 +95,7 @@ Reef 与 driver、形态无关;治理集中在一个引擎(`@octopus-reef/engine
 |---|---|---|
 | **引擎**(治理:evidence + workstate + gate + executor + replay) | `@octopus-reef/engine` | ✅ |
 | **CLI**(`run` · `verify` · `replay` · `serve`) | `@octopus-reef/cli` | ✅ |
+| **指挥官**(路由 + 治理 + 证明一支异构 worker 舰队) | `@octopus-reef/agent` | ✅ |
 | **真实智能体 driver**(Claude) | `@octopus-reef/driver-claude` | ✅ |
 | **服务端**(守护进程 —— 所有形态的统一后端) | `@octopus-reef/server` | ✅ |
 | **Web**(Vite + React) | `@octopus-reef/web` | ✅ |
@@ -87,7 +103,7 @@ Reef 与 driver、形态无关;治理集中在一个引擎(`@octopus-reef/engine
 | **Docker** 一键 | `Dockerfile` · `docker-compose.yml` | ✅ |
 | 移动端 | — | 暂缓 |
 
-完整路线图见 [docs/DELIVERY-PLAN.md](docs/DELIVERY-PLAN.md),栈如何组合见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+指挥官见 [docs/CONDUCTOR.zh-CN.md](docs/CONDUCTOR.zh-CN.md),栈如何组合见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),完整路线图见 [docs/DELIVERY-PLAN.md](docs/DELIVERY-PLAN.md)。
 
 ## 开发
 

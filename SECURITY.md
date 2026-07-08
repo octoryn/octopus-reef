@@ -1,3 +1,5 @@
+**English** | [简体中文](SECURITY.zh-CN.md)
+
 # Security Policy
 
 Reef is a *governance* tool — its whole value is that a session can be trusted.
@@ -42,11 +44,28 @@ This boundary is enforced in code (Reef refuses to run commands when the
 workspace root is your home directory) and was hardened over ten adversarial
 review rounds; we still treat new findings as real.
 
+### The conductor's honest scope
+
+The conductor (`@octopus-reef/agent`) governs a *fleet*, and is explicit about
+what it can and cannot prove:
+
+- **Worker Ledger.** The run is a hash-chained `octopus-evidence` log; each result
+  pins its sub-session's heads, so a swapped or edited sub-session breaks
+  verification. The same keyed/unkeyed limits above apply.
+- **External CLIs are not OS-sandboxed.** A `cliWorker` wraps an agent that needs
+  the network and its own auth, so it runs confined to a workspace (not in the
+  sandbox). We capture its file **effects** (a content-hash diff) as evidence — we
+  prove *what it changed*, not its internal reasoning, and we do not claim to
+  contain a hostile external CLI. Run untrusted work in the container.
+- **BYOK.** Model keys are the operator's; Reef reads them from the environment
+  and does not persist or transmit them anywhere but the model endpoint.
+
 ## Scope
 
 In scope: evidence forgery that verifies clean (keyed mode), sandbox escapes that
 read secrets / write outside the workspace / reach the network, path-traversal in
-the server's static file serving, and auth/verification bypasses.
+the server's static file serving, Worker Ledger forgery that verifies clean, and
+auth/verification bypasses.
 
 Out of scope: attacks requiring an already-compromised host; the unkeyed-mode
 re-mint limitation (documented, by design); denial of service from a hostile
