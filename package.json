@@ -36,6 +36,7 @@
     "format:check": "prettier --check \"packages/*/src/**/*.{ts,tsx}\" \"packages/*/tests/**/*.{ts,tsx}\"",
     "lint": "eslint packages",
     "reef": "tsx packages/cli/src/cli.ts",
+    "bench": "tsx bench/run.mts",
     "verify:all": "npm run typecheck && npm run typecheck:web && npm run typecheck:ide && npm run format:check && npm run lint && npm test && npm run build && npm run build:web && npm run build:ide"
   },
   "devDependencies": {
