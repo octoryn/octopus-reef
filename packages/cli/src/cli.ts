@@ -24,6 +24,7 @@ import {
   type ReefEvent,
 } from "@octopus-reef/engine";
 import { ClaudeDriver } from "@octopus-reef/driver-claude";
+import { AgentWorker, BedrockProvider } from "@octopus-reef/agent";
 import { ReefServer } from "@octopus-reef/server";
 import { inspect, shouldFail } from "octopus-inspect";
 import {
@@ -42,9 +43,28 @@ interface Flags {
   readonly json: boolean;
   readonly demoDenial: boolean;
   readonly claude: boolean;
+  readonly agent: boolean;
   readonly workspace: string | undefined;
   readonly sandbox: boolean;
 }
+
+/**
+ * The build/test allowlist the agent worker runs under (with --workspace
+ * --sandbox): common test runners, contained by the OS sandbox (no network,
+ * writes confined, throwaway HOME). Wider than the default read-only allowlist
+ * because an agent must actually run the tests it is judged on.
+ */
+const AGENT_COMMANDS = {
+  node: "*",
+  npm: ["test", "run", "ci", "install", "exec"],
+  npx: "*",
+  pnpm: ["test", "run", "install"],
+  yarn: ["test", "run", "install"],
+  python3: "*",
+  pytest: "*",
+  go: ["test", "build", "vet"],
+  cargo: ["test", "build"],
+} as const;
 
 function parse(argv: readonly string[]): Flags {
   const positional: string[] = [];
@@ -53,6 +73,7 @@ function parse(argv: readonly string[]): Flags {
   let json = false;
   let demoDenial = false;
   let claude = false;
+  let agent = false;
   let workspace: string | undefined;
   let sandbox = false;
   for (let i = 0; i < argv.length; i++) {
@@ -62,6 +83,7 @@ function parse(argv: readonly string[]): Flags {
     else if (a === "--json") json = true;
     else if (a === "--demo-denial") demoDenial = true;
     else if (a === "--claude") claude = true;
+    else if (a === "--agent") agent = true;
     else if (a === "--workspace") workspace = argv[++i];
     else if (a === "--sandbox") sandbox = true;
     else positional.push(a);
@@ -73,6 +95,7 @@ function parse(argv: readonly string[]): Flags {
     json,
     demoDenial,
     claude,
+    agent,
     workspace,
     sandbox,
   };
@@ -104,7 +127,9 @@ function help(): void {
       `${c.bold("FLAGS")}`,
       `  --out <dir>     Persist the session (workstate.jsonl + session.log.jsonl).`,
       `  --secret <key>  Keyed mode: bind every link with an HMAC.`,
-      `  --claude        Use the real Claude agent driver (needs ANTHROPIC_API_KEY; plans under governance, does not execute yet).`,
+      `  --claude        Use the real Claude planning driver (needs ANTHROPIC_API_KEY; plans under governance, does not execute).`,
+      `  --agent         Use Reef's OWN agentic worker (reads, edits, runs tests, iterates). With --workspace --sandbox it does`,
+      `                  real, confined work; the model is rented via a provider (Bedrock: needs AWS_BEARER_TOKEN_BEDROCK).`,
       `  --workspace <dir>  Enable real execution under the allowlist: confined file read/edit in <dir>.`,
       `  --sandbox       With --workspace, also run allowlisted read-only commands in an OS sandbox`,
       `                  (macOS sandbox-exec: no network, writes confined to <dir>, timeout, scrubbed env).`,
@@ -125,11 +150,13 @@ async function runCommand(flags: Flags): Promise<number> {
     );
     return 2;
   }
-  const driver: Driver = flags.claude
-    ? new ClaudeDriver()
-    : flags.demoDenial
-      ? new UnsafeDemoDriver()
-      : new MockDriver();
+  const driver: Driver = flags.agent
+    ? new AgentWorker({ provider: new BedrockProvider() })
+    : flags.claude
+      ? new ClaudeDriver()
+      : flags.demoDenial
+        ? new UnsafeDemoDriver()
+        : new MockDriver();
   const id = sessionId();
   const events: ReefEvent[] = [];
 
@@ -146,7 +173,11 @@ async function runCommand(flags: Flags): Promise<number> {
   const workspaceWiring =
     flags.workspace !== undefined
       ? {
-          authorizer: reefAllowlist(),
+          // The agent needs to run the tests it is judged on, so it gets the
+          // wider build/test allowlist — still contained by the OS sandbox.
+          authorizer: flags.agent
+            ? reefAllowlist({ commands: AGENT_COMMANDS })
+            : reefAllowlist(),
           executor: (flags.sandbox
             ? new SandboxExecutor(flags.workspace)
             : new WorkspaceExecutor(flags.workspace)) as ActionExecutor,

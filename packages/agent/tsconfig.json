@@ -4,11 +4,6 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "references": [
-    { "path": "../engine" },
-    { "path": "../driver-claude" },
-    { "path": "../agent" },
-    { "path": "../server" }
-  ],
+  "references": [{ "path": "../engine" }],
   "include": ["src/**/*.ts"]
 }
