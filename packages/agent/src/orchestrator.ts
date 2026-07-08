@@ -82,6 +82,34 @@ export interface WorkerLedger {
   readonly chain: readonly ChainLink[];
 }
 
+/** The final acceptance ruling, when an acceptance seam is wired. */
+export interface Acceptance {
+  readonly met: boolean;
+  readonly reason: string;
+}
+
+/**
+ * The acceptance / "translator" seam — how the conductor connects to
+ * `octopus-intent` WITHOUT this package depending on it (keeping the checker a
+ * consumer of the conductor's output, not a dependency). The caller mints an
+ * Acceptance Contract from the task (octopus-intent `authorContract`) and passes
+ * its hash (and optionally the contract itself) to be pinned in the ledger, plus
+ * a `judge` that decides acceptance (e.g. running octopus-intent `checkContract`
+ * over the produced sub-sessions). What is recorded: the contract the run was
+ * held to, and the verdict against it — so the whole run is provable end to end.
+ */
+export interface AcceptanceSeam {
+  /** The machine-checkable contract's hash (pinned; drift is then detectable). */
+  readonly contractHash?: string;
+  /** Optional full contract content to record for the auditor. */
+  readonly contract?: JsonValue;
+  /** Decide whether the orchestration met the contract. */
+  readonly judge?: (
+    task: string,
+    steps: readonly OrchestrationStep[],
+  ) => Promise<Acceptance>;
+}
+
 export interface OrchestrationResult {
   readonly outcome: "completed" | "partial" | "failed";
   readonly steps: readonly OrchestrationStep[];
@@ -89,6 +117,8 @@ export interface OrchestrationResult {
   readonly ledger: WorkerLedger;
   /** Whether the ledger itself independently verifies (must be true). */
   readonly verified: boolean;
+  /** The acceptance ruling, if an acceptance seam was wired. */
+  readonly accepted?: Acceptance;
 }
 
 export interface OrchestratorOptions {
@@ -99,6 +129,8 @@ export interface OrchestratorOptions {
   readonly now?: () => string;
   /** Keyed mode: HMAC-bind the ledger so it can't be forged. */
   readonly integritySecret?: string;
+  /** Wire acceptance (the octopus-intent contract + verdict), decoupled. */
+  readonly acceptance?: AcceptanceSeam;
 }
 
 /**
@@ -123,6 +155,7 @@ export class Orchestrator {
   readonly #router: Router;
   readonly #now: () => string;
   readonly #secret: string | undefined;
+  readonly #acceptance: AcceptanceSeam | undefined;
 
   constructor(options: OrchestratorOptions) {
     this.#workers = options.workers;
@@ -130,6 +163,7 @@ export class Orchestrator {
     this.#router = options.router;
     this.#now = options.now ?? ((): string => new Date().toISOString());
     this.#secret = options.integritySecret;
+    this.#acceptance = options.acceptance;
   }
 
   async orchestrate(task: string): Promise<OrchestrationResult> {
@@ -161,6 +195,22 @@ export class Orchestrator {
       task,
       subtasks: subtasks.map((s) => ({ id: s.id, description: s.description })),
     });
+
+    // Pin the Acceptance Contract (from octopus-intent) the run is held to, so
+    // an auditor sees WHAT "done" means and can detect goalpost drift.
+    if (
+      this.#acceptance?.contractHash !== undefined ||
+      this.#acceptance?.contract !== undefined
+    ) {
+      record("orchestration.contract", {
+        ...(this.#acceptance.contractHash !== undefined
+          ? { contractHash: this.#acceptance.contractHash }
+          : {}),
+        ...(this.#acceptance.contract !== undefined
+          ? { contract: this.#acceptance.contract }
+          : {}),
+      });
+    }
 
     const steps: OrchestrationStep[] = [];
     for (const subtask of subtasks) {
@@ -199,10 +249,23 @@ export class Orchestrator {
         : completed > 0
           ? "partial"
           : "failed";
+
+    // Adjudicate against the Acceptance Contract (via the caller's octopus-intent
+    // judge) and record the verdict — the run is provable end to end.
+    let accepted: Acceptance | undefined;
+    if (this.#acceptance?.judge !== undefined) {
+      accepted = await this.#acceptance.judge(task, steps);
+      record("orchestration.acceptance", {
+        met: accepted.met,
+        reason: accepted.reason,
+      });
+    }
+
     record("orchestration.done", {
       outcome,
       subtasks: steps.length,
       completed,
+      ...(accepted !== undefined ? { met: accepted.met } : {}),
     });
 
     const ledger: WorkerLedger = { evidence, chain };
@@ -211,6 +274,7 @@ export class Orchestrator {
       steps,
       ledger,
       verified: verifyLedger(ledger, this.#secret),
+      ...(accepted !== undefined ? { accepted } : {}),
     };
   }
 

@@ -199,6 +199,43 @@ test("a real tool-worker's governed sub-session is pinned in the ledger", async 
   assert.equal(content.verified, true, "the sub-session itself verified");
 });
 
+test("acceptance seam pins the contract + records a verdict in the ledger", async () => {
+  // The caller wires octopus-intent: a contract hash + a judge (checkContract).
+  const orch = new Orchestrator({
+    workers: [fakeWorker("code")],
+    planner: fakePlanner([{ id: "st1", description: "fix the code" }]),
+    router: keywordRouter,
+    now: clock(),
+    acceptance: {
+      contractHash: "deadbeefcafe",
+      judge: (_task, steps) =>
+        Promise.resolve({
+          met: steps.every((s) => s.result.outcome === "completed"),
+          reason: "all subtasks completed",
+        }),
+    },
+  });
+  const result = await orch.orchestrate("ship it");
+  assert.equal(result.accepted?.met, true);
+  assert.equal(result.verified, true);
+  const kinds = result.ledger.evidence.map((e) => e.kind);
+  assert.deepEqual(kinds, [
+    "orchestration.plan",
+    "orchestration.contract",
+    "orchestration.route",
+    "orchestration.result",
+    "orchestration.acceptance",
+    "orchestration.done",
+  ]);
+  const contract = result.ledger.evidence.find(
+    (e) => e.kind === "orchestration.contract",
+  )!;
+  assert.equal(
+    (contract.content as { contractHash: string }).contractHash,
+    "deadbeefcafe",
+  );
+});
+
 test("LlmPlanner parses a JSON subtask list; LlmRouter parses a worker choice", async () => {
   const planner = new LlmPlanner(
     new TextProvider([
