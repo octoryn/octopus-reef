@@ -16,10 +16,12 @@ import { join } from "node:path";
 import {
   GovernedSession,
   SandboxExecutor,
+  ToolExecutor,
   reefAllowlist,
   type ActionExecutor,
   type ActionRequest,
   type ExecOutcome,
+  type Tool,
 } from "@octopus-reef/engine";
 import {
   AgentWorker,
@@ -125,6 +127,85 @@ test("worker drives read → run(fail) → fix → run(pass) → done, feeding r
     JSON.stringify(r.messages).includes("FAILED"),
   );
   assert.ok(fedBack, "the failing test result was fed back to the model");
+});
+
+const lookupTool: Tool = {
+  name: "lookup",
+  description: "look up a fact",
+  inputSchema: {
+    type: "object",
+    properties: { q: { type: "string" } },
+    required: ["q"],
+  },
+  run: (input) =>
+    Promise.resolve({
+      ok: true,
+      output: `answer for ${String((input as { q?: unknown }).q)}`,
+    }),
+};
+
+test("worker calls a governed non-code tool (MCP/API) and feeds the result back", async () => {
+  const provider = new ScriptedProvider([
+    use("1", "lookup", { q: "capital of france" }),
+    use("2", "done", { summary: "looked it up" }),
+  ]);
+  const session = new GovernedSession({
+    id: "tool1",
+    task: "look something up",
+    driver: new AgentWorker({
+      provider,
+      tools: [
+        {
+          name: "lookup",
+          description: "look up a fact",
+          inputSchema: lookupTool.inputSchema,
+        },
+      ],
+    }),
+    authorizer: reefAllowlist({ tools: ["lookup"] }),
+    executor: new ToolExecutor([lookupTool]),
+    now: clock(),
+  });
+  const { outcome } = await session.run();
+  assert.equal(outcome, "completed");
+  assert.equal(session.verify().ok, true, "the tool session is provable");
+  const fedBack = provider.requests.some((r) =>
+    JSON.stringify(r.messages).includes("answer for capital of france"),
+  );
+  assert.ok(fedBack, "the tool output was fed back to the model");
+});
+
+test("an un-allowlisted tool is denied by governance", async () => {
+  const provider = new ScriptedProvider([
+    use("1", "lookup", { q: "x" }),
+    use("2", "fail", { summary: "blocked" }),
+  ]);
+  const session = new GovernedSession({
+    id: "tool2",
+    task: "call a forbidden tool",
+    driver: new AgentWorker({
+      provider,
+      tools: [
+        {
+          name: "lookup",
+          description: "look up a fact",
+          inputSchema: { type: "object" },
+        },
+      ],
+    }),
+    authorizer: reefAllowlist({ tools: [] }), // no tools permitted
+    executor: new ToolExecutor([lookupTool]),
+    now: clock(),
+  });
+  await session.run();
+  assert.equal(session.verify().ok, true);
+  const toldDenied = provider.requests.some((r) =>
+    JSON.stringify(r.messages).includes("DENIED"),
+  );
+  assert.ok(
+    toldDenied,
+    "the allowlist blocked the tool and the agent was told",
+  );
 });
 
 test("worker fails cleanly when the model calls fail", async () => {

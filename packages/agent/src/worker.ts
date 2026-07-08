@@ -41,6 +41,13 @@ export interface AgentWorkerOptions {
   readonly system?: string;
   /** Truncate tool output fed back to the model (keeps context bounded). Default 4000. */
   readonly maxObservation?: number;
+  /**
+   * Extra, non-code tools the worker may call (an MCP tool, an HTTP API, …). They
+   * are surfaced to the model alongside the built-in code tools; a call maps to a
+   * governed `tool` action, so a `ToolExecutor` runs it and it becomes evidence.
+   * The worker only needs the SPECS here — the executor holds the implementations.
+   */
+  readonly tools?: readonly ToolSpec[];
 }
 
 const DEFAULT_SYSTEM = [
@@ -110,9 +117,13 @@ const TOOLS: readonly ToolSpec[] = [
   },
 ];
 
-/** Map a tool call to the governed {@link ActionRequest} it proposes, or null. */
-function actionFor(tool: ToolUseBlock): ActionRequest | null {
-  const input = tool.input as Record<string, unknown>;
+/** Map a tool call to the governed {@link ActionRequest} it proposes, or null.
+ * A name in `extra` (a registered non-code tool) becomes a generic `tool` action. */
+function actionFor(
+  tool: ToolUseBlock,
+  extra: ReadonlySet<string>,
+): ActionRequest | null {
+  const input = tool.input;
   const str = (v: unknown): string => (typeof v === "string" ? v : "");
   switch (tool.name) {
     case "read_file":
@@ -135,6 +146,13 @@ function actionFor(tool: ToolUseBlock): ActionRequest | null {
         payload: { command: str(input.command) },
       };
     default:
+      if (extra.has(tool.name)) {
+        return {
+          type: "tool",
+          summary: `tool: ${tool.name}`,
+          payload: { tool: tool.name, input },
+        };
+      }
       return null;
   }
 }
@@ -167,6 +185,8 @@ export class AgentWorker implements Driver {
   readonly #maxTokens: number;
   readonly #system: string;
   readonly #maxObservation: number;
+  readonly #tools: readonly ToolSpec[];
+  readonly #extraNames: ReadonlySet<string>;
 
   constructor(options: AgentWorkerOptions) {
     this.#provider = options.provider;
@@ -174,6 +194,9 @@ export class AgentWorker implements Driver {
     this.#maxTokens = options.maxTokens ?? 4096;
     this.#system = options.system ?? DEFAULT_SYSTEM;
     this.#maxObservation = options.maxObservation ?? 4000;
+    const extra = options.tools ?? [];
+    this.#tools = [...TOOLS, ...extra];
+    this.#extraNames = new Set(extra.map((t) => t.name));
   }
 
   async *run(ctx: DriverContext): AsyncIterable<DriverStep> {
@@ -191,7 +214,7 @@ export class AgentWorker implements Driver {
         response = await this.#provider.complete({
           system: this.#system,
           messages,
-          tools: TOOLS,
+          tools: this.#tools,
           maxTokens: this.#maxTokens,
         });
       } catch (err) {
@@ -237,7 +260,7 @@ export class AgentWorker implements Driver {
           };
           return;
         }
-        const action = actionFor(tool);
+        const action = actionFor(tool, this.#extraNames);
         if (action === null) {
           results.push({
             type: "tool_result",

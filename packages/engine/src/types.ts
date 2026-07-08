@@ -11,9 +11,12 @@ import type { Actor, WorkState } from "octopus-workstate";
 
 export type { Actor, WorkState };
 
-/** The kinds of action an agent driver may propose during a session. */
+/** The kinds of action an agent driver may propose during a session. `tool` is
+ * a generic governed capability (an MCP tool, an HTTP API, any registered
+ * function) so a worker can do more than edit code — every call still passes the
+ * gate + allowlist and becomes a tamper-evident evidence link. */
 export type ActionType =
-  "read" | "search" | "edit" | "command" | "pr" | "message";
+  "read" | "search" | "edit" | "command" | "pr" | "message" | "tool";
 
 /** A single action an agent wants to take. Every action is gated before it runs. */
 export interface ActionRequest {

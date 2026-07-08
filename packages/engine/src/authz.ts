@@ -128,6 +128,12 @@ export interface ReefAllowlistOptions {
   readonly allowPr?: boolean;
   /** Override the command allowlist (binary → allowed subcommands or "*"). */
   readonly commands?: Readonly<Record<string, readonly string[] | "*">>;
+  /**
+   * Which `tool` actions may run, BY NAME (an MCP tool, an HTTP API, …). `"*"` =
+   * any registered tool; a list = only those names; omitted/empty = deny all
+   * tools (a tool is a real effect, so it is allow-listed like a command).
+   */
+  readonly tools?: readonly string[] | "*";
 }
 
 /**
@@ -150,6 +156,12 @@ export function reefAllowlist(options: ReefAllowlistOptions = {}): Authorizer {
         return true;
       if (type === "edit") return options.allowEdit !== false;
       if (type === "pr") return options.allowPr === true;
+      if (type === "tool") {
+        const allowed = options.tools;
+        if (allowed === undefined) return false;
+        if (allowed === "*") return true;
+        return allowed.includes((resource?.id ?? "").trim());
+      }
       if (type !== "command") return false;
 
       const cmd = (resource?.id ?? "").trim();

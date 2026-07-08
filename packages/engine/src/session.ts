@@ -344,12 +344,17 @@ export class GovernedSession {
       };
     }
 
-    const resourceId = String(
-      (action.payload &&
+    const payloadField = (key: string): unknown =>
+      action.payload &&
       typeof action.payload === "object" &&
-      "command" in action.payload
-        ? action.payload.command
-        : undefined) ??
+      key in action.payload
+        ? (action.payload as Record<string, unknown>)[key]
+        : undefined;
+    // The authorizer gates by resource id: a command by its command string, a
+    // `tool` action by its tool NAME, else the target/summary.
+    const resourceId = String(
+      payloadField("command") ??
+        payloadField("tool") ??
         action.target ??
         action.summary,
     );
