@@ -34,6 +34,7 @@ export type {
   WorkerLedger,
   Acceptance,
   AcceptanceSeam,
+  SessionRecord,
 } from "./orchestrator.js";
 export { codeWorker, toolWorker } from "./workers.js";
 export type { CodeWorkerOptions, ToolWorkerOptions } from "./workers.js";

@@ -26,10 +26,10 @@ import {
   type Driver,
   type DriverContext,
   type DriverStep,
-  type ReefEvent,
   type Tool,
 } from "@octopus-reef/engine";
-import type { Worker, WorkerResult } from "./orchestrator.js";
+import { resultFromSession } from "./session-result.js";
+import type { Worker } from "./orchestrator.js";
 
 const SKIP = new Set([".git", "node_modules", ".DS_Store"]);
 
@@ -204,26 +204,6 @@ class CliDriver implements Driver {
   }
 }
 
-/** The worker's answer + its sub-session proof. */
-async function runToResult(session: GovernedSession): Promise<WorkerResult> {
-  const { outcome, events } = await session.run();
-  const rev = [...events].reverse();
-  const reason = rev.find((e: ReefEvent) => e.kind === "session.sealed")?.data[
-    "reason"
-  ];
-  const output =
-    typeof reason === "string" && reason.length > 0
-      ? reason
-      : (rev.find((e: ReefEvent) => e.kind === "message")?.summary ?? "");
-  return {
-    outcome,
-    output,
-    workHead: session.graph.anchor().head,
-    logHead: session.log.head,
-    verified: session.verify().ok,
-  };
-}
-
 export interface CliWorkerOptions {
   readonly name: string;
   readonly description: string;
@@ -245,7 +225,7 @@ export function cliWorker(options: CliWorkerOptions): Worker {
   return {
     name: options.name,
     description: options.description,
-    run(subtask): Promise<WorkerResult> {
+    run(subtask) {
       const argv = options.buildArgv(subtask);
       const session = new GovernedSession({
         id: `${options.name}-${canonicalHash(subtask).slice(0, 10)}`,
@@ -260,7 +240,7 @@ export function cliWorker(options: CliWorkerOptions): Worker {
           ? { integritySecret: options.integritySecret }
           : {}),
       });
-      return runToResult(session);
+      return resultFromSession(session);
     },
   };
 }

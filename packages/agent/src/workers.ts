@@ -12,33 +12,12 @@ import {
   SandboxExecutor,
   ToolExecutor,
   reefAllowlist,
-  type ReefEvent,
   type Tool,
 } from "@octopus-reef/engine";
 import { AgentWorker } from "./worker.js";
+import { resultFromSession } from "./session-result.js";
 import type { ModelProvider, ToolSpec } from "./provider.js";
 import type { Worker, WorkerResult } from "./orchestrator.js";
-
-/** The worker's answer = its `done` summary, else its last message. */
-function outputOf(events: readonly ReefEvent[]): string {
-  const rev = [...events].reverse();
-  const sealed = rev.find((e) => e.kind === "session.sealed");
-  const reason = sealed?.data["reason"];
-  if (typeof reason === "string" && reason.length > 0) return reason;
-  const msg = rev.find((e) => e.kind === "message");
-  return msg ? msg.summary : "";
-}
-
-async function runToResult(session: GovernedSession): Promise<WorkerResult> {
-  const { outcome, events } = await session.run();
-  return {
-    outcome,
-    output: outputOf(events),
-    workHead: session.graph.anchor().head,
-    logHead: session.log.head,
-    verified: session.verify().ok,
-  };
-}
 
 interface CommonOptions {
   readonly provider: ModelProvider;
@@ -82,7 +61,7 @@ export function codeWorker(options: CodeWorkerOptions): Worker {
           ? { integritySecret: options.integritySecret }
           : {}),
       });
-      return runToResult(session);
+      return resultFromSession(session);
     },
   };
 }
@@ -125,7 +104,7 @@ export function toolWorker(options: ToolWorkerOptions): Worker {
           ? { integritySecret: options.integritySecret }
           : {}),
       });
-      return runToResult(session);
+      return resultFromSession(session);
     },
   };
 }

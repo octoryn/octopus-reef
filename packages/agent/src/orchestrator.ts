@@ -36,6 +36,23 @@ export interface Subtask {
   readonly description: string;
 }
 
+/**
+ * A governed sub-session's full record — the two tamper-evident chains. This is
+ * the reef-native shape, structurally identical to octopus-intent's
+ * `SessionRecord`, so a judge can hand it to `checkContract` WITHOUT this package
+ * depending on octopus-intent.
+ */
+export interface SessionRecord {
+  readonly work: {
+    readonly evidence: readonly Evidence[];
+    readonly chain: readonly ChainLink[];
+  };
+  readonly log: {
+    readonly evidence: readonly Evidence[];
+    readonly chain: readonly ChainLink[];
+  };
+}
+
 /** The proof-bearing result of running a worker on a subtask. */
 export interface WorkerResult {
   readonly outcome: SessionOutcome;
@@ -45,6 +62,8 @@ export interface WorkerResult {
   readonly workHead: string;
   readonly logHead: string;
   readonly verified: boolean;
+  /** The full sub-session record — so a judge can `checkContract` over it. */
+  readonly record: SessionRecord;
 }
 
 /** A specialist worker: does a subtask under governance, returns result + proof. */

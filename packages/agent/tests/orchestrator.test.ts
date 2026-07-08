@@ -91,6 +91,10 @@ const fakeWorker = (name: string): Worker => ({
       workHead: `wh-${name}`,
       logHead: `lh-${name}`,
       verified: true,
+      record: {
+        work: { evidence: [], chain: [] },
+        log: { evidence: [], chain: [] },
+      },
     }),
 });
 
