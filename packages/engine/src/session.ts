@@ -380,11 +380,26 @@ export class GovernedSession {
 
     const exec = await this.#executor.execute(action);
     this.#actionsExecuted++;
+    // reef-v1 (additive): for a command action, record the command itself so an
+    // acceptance criterion can isolate a *test* run from other commands (e.g. an
+    // install that also succeeds), and a semantically-named `result.passed`
+    // alongside the generic `ok`. Only `payload.command` is recorded — never an
+    // edit's full payload (which would leak file content into the evidence log).
+    const command =
+      action.type === "command" &&
+      action.payload !== null &&
+      typeof action.payload === "object" &&
+      !Array.isArray(action.payload) &&
+      "command" in action.payload
+        ? String((action.payload as { command: unknown }).command)
+        : undefined;
     this.#emit("action.executed", action.summary, {
       actionType: action.type,
       ...(action.target !== undefined ? { target: action.target } : {}),
+      ...(command !== undefined ? { payload: { command } } : {}),
       executor: this.#executor.name,
       ok: exec.ok,
+      result: { passed: exec.ok },
       ...(exec.error !== undefined ? { error: exec.error } : {}),
     });
     return {
