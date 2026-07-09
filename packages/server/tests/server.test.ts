@@ -1178,6 +1178,244 @@ test("N6: usage endpoint aggregates persisted provider usage and labelled cost",
   }
 });
 
+test("C3: Account panel state distinguishes community BYOK and commercial stub account evidence", async () => {
+  const community = new ReefServer({ edition: "community" });
+  const communityPort = await community.listen(0);
+  try {
+    const state = await request(
+      communityPort,
+      "GET",
+      "/account?provider=bedrock&model=Claude%20Sonnet%204.5&source=BYOK",
+    );
+    assert.equal(state.status, 200);
+    assert.equal(state.json.edition, "community");
+    assert.equal(state.json.identity.kind, "local-byok");
+    assert.equal(state.json.account.signedIn, false);
+    assert.equal(state.json.plan.upgradeAvailable, false);
+    assert.equal(state.json.plan.quota.status, "not-available");
+  } finally {
+    await community.close();
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), "reef-c3-account-"));
+  const gateway = await startStubGateway();
+  const commercial = new ReefServer({ persistDir: dir, edition: "commercial" });
+  const port = await commercial.listen(0);
+  const query = `/account?provider=gateway&model=reef-gateway-stub&gatewayUrl=${encodeURIComponent(gateway.url)}`;
+  try {
+    const beforeLogin = await request(port, "GET", query);
+    assert.equal(beforeLogin.status, 200);
+    assert.equal(beforeLogin.json.edition, "commercial");
+    assert.equal(beforeLogin.json.account.signedIn, false);
+    assert.equal(beforeLogin.json.entitlement.allowed, false);
+    assert.equal(beforeLogin.json.plan.quota.status, "missing-account");
+
+    const login = await request(port, "POST", `${query.replace("/account", "/account/login")}`, {
+      userId: "octopus-c3-user",
+      displayName: "Octopus C3 User",
+    });
+    assert.equal(login.status, 200);
+    assert.equal(login.json.account.signedIn, true);
+    assert.equal(login.json.account.userId, "octopus-c3-user");
+    assert.equal(login.json.entitlement.allowed, true);
+    assert.match(login.json.account.licenseSha256, /^[a-f0-9]{64}$/);
+
+    const created = await request(port, "POST", "/sessions", {
+      task: "C3 account evidence snapshot",
+      persist: true,
+      account: {
+        provider: "gateway",
+        model: "reef-gateway-stub",
+        gatewayUrl: gateway.url,
+      },
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.id as string;
+    const frames = await collectSSE(port, `/sessions/${id}/events`);
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (frame.event.data.accountIdentity as { provider?: string } | undefined)
+            ?.provider === "gateway",
+      ),
+      "account identity should be an evidence link",
+    );
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (
+            frame.event.data.accountEntitlement as
+              { allowed?: boolean } | undefined
+          )?.allowed === true,
+      ),
+      "account entitlement should be an evidence link",
+    );
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (frame.event.data.accountUsage as { totals?: unknown } | undefined)
+            ?.totals !== undefined,
+      ),
+      "account usage should be an evidence link",
+    );
+
+    const before = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(before.status, 200);
+    assert.equal(before.json.ok, true);
+
+    const logPath = join(dir, id, "session.log.jsonl");
+    const raw = readFileSync(logPath);
+    const offset = raw.indexOf(Buffer.from("account entitlement"));
+    assert.ok(offset >= 0, "account evidence should contain flippable text");
+    raw[offset] = raw[offset] === 0x61 ? 0x62 : 0x61;
+    writeFileSync(logPath, raw);
+
+    const after = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(after.status, 200);
+    assert.equal(after.json.ok, false);
+    assert.match(after.json.log, /broken/i);
+
+    const logout = await request(port, "POST", query.replace("/account", "/account/logout"));
+    assert.equal(logout.status, 200);
+    assert.equal(logout.json.account.signedIn, false);
+    assert.equal(logout.json.entitlement.allowed, false);
+  } finally {
+    await commercial.close();
+    await gateway.close();
+  }
+});
+
+test("C2: Account plan quota and usage come from aggregation and stub gateway ledger", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-c2-plan-"));
+  const gateway = await startStubGateway({
+    quotaLimitTokens: 1000,
+    initialUsedTokens: 41,
+  });
+  const provider: ModelProvider = {
+    name: "scripted-c2-usage",
+    complete: () =>
+      Promise.resolve({
+        content: [
+          {
+            type: "tool_use",
+            id: "c2",
+            name: "done",
+            input: { summary: "C2 usage recorded" },
+          },
+        ],
+        stopReason: "tool_use",
+        usage: {
+          provider: "anthropic",
+          model: "claude-test",
+          inputTokens: 123,
+          outputTokens: 456,
+          totalTokens: 579,
+        },
+      }),
+  };
+  const server = new ReefServer({
+    persistDir: dir,
+    edition: "commercial",
+    driverFactory: () => ({
+      driver: new AgentWorker({ provider, maxTurns: 2 }),
+      authorizer: reefAllowlist(),
+      executor: new WorkspaceExecutor(dir),
+    }),
+  });
+  const port = await server.listen(0);
+  const accountPath = `/account?provider=gateway&model=reef-gateway-stub&gatewayUrl=${encodeURIComponent(gateway.url)}`;
+  try {
+    const usageRun = await request(port, "POST", "/sessions", {
+      task: "C2 injected usage",
+      persist: true,
+    });
+    assert.equal(usageRun.status, 201);
+    await collectSSE(port, `/sessions/${usageRun.json.id}/events`);
+
+    const login = await request(port, "POST", accountPath.replace("/account", "/account/login"));
+    assert.equal(login.status, 200);
+
+    const panel = await request(port, "GET", accountPath);
+    assert.equal(panel.status, 200);
+    assert.equal(panel.json.usage.totals.calls, 1);
+    assert.equal(panel.json.usage.totals.inputTokens, 123);
+    assert.equal(panel.json.usage.totals.outputTokens, 456);
+    assert.equal(panel.json.usage.totals.totalTokens, 579);
+    assert.equal(panel.json.usage.totals.costUsd, 0.001491);
+    assert.equal(panel.json.plan.quota.status, "available");
+    assert.equal(panel.json.plan.quota.usedTokens, 41);
+    assert.equal(panel.json.plan.quota.remainingTokens, 959);
+    assert.equal(panel.json.plan.quota.limitTokens, 1000);
+    assert.match(panel.json.plan.quota.source, /stub-gateway/);
+
+    const created = await request(port, "POST", "/sessions", {
+      task: "C2 account quota evidence snapshot",
+      persist: true,
+      account: {
+        provider: "gateway",
+        model: "reef-gateway-stub",
+        gatewayUrl: gateway.url,
+      },
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.id as string;
+    const frames = await collectSSE(port, `/sessions/${id}/events`);
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (
+            frame.event.data.accountUsage as
+              { totals?: { totalTokens?: number; costUsd?: number } } | undefined
+          )?.totals?.totalTokens === 579,
+      ),
+      "usage totals should be sourced from N6 aggregation",
+    );
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (
+            frame.event.data.planQuota as
+              { usedTokens?: number; remainingTokens?: number } | undefined
+          )?.usedTokens === 41 &&
+          (
+            frame.event.data.planQuota as
+              { usedTokens?: number; remainingTokens?: number } | undefined
+          )?.remainingTokens === 959,
+      ),
+      "plan quota should be sourced from the stub gateway ledger",
+    );
+
+    const before = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(before.status, 200);
+    assert.equal(before.json.ok, true);
+
+    const logPath = join(dir, id, "session.log.jsonl");
+    const raw = readFileSync(logPath);
+    const offset = raw.indexOf(Buffer.from("plan quota"));
+    assert.ok(offset >= 0, "quota evidence should contain flippable text");
+    raw[offset] = raw[offset] === 0x70 ? 0x71 : 0x70;
+    writeFileSync(logPath, raw);
+
+    const after = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(after.status, 200);
+    assert.equal(after.json.ok, false);
+    assert.match(after.json.log, /broken/i);
+  } finally {
+    await server.close();
+    await gateway.close();
+  }
+});
+
 test("N3: active steering is evidence-pinned, changes mock behavior, and detects tamper", async () => {
   const dir = mkdtempSync(join(tmpdir(), "reef-n3-steering-"));
   const server = new ReefServer({ persistDir: dir });

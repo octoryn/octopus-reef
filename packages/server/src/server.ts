@@ -61,6 +61,8 @@ import {
 } from "@octopus-reef/commercial";
 import type { JsonValue } from "octopus-evidence";
 import type {
+  AccountLoginRequest,
+  AccountPlanResponse,
   AddCustomSteeringRequest,
   CreateHookRequest,
   CreateSessionRequest,
@@ -73,6 +75,12 @@ import type {
   SteeringItemView,
   VerifyResult,
 } from "@octopus-reef/protocol";
+import {
+  AccountPlanDriver,
+  AccountStore,
+  accountPlan,
+  type AccountSnapshotRequest,
+} from "./account.js";
 import {
   McpPowerRegistry,
   type AddCustomPowerRequest,
@@ -151,6 +159,13 @@ interface ConversationSessionRequest {
   readonly parentSessionId?: string;
   readonly autopilot?: boolean;
   readonly approvalMode?: "auto" | "ask";
+}
+
+interface AccountSessionRequest {
+  readonly provider?: string;
+  readonly model?: string;
+  readonly source?: string;
+  readonly gatewayUrl?: string;
 }
 
 class McpDemoDriver implements Driver {
@@ -608,6 +623,15 @@ function sessionContext(
   };
 }
 
+function accountQuery(url: URL): AccountSnapshotRequest {
+  return {
+    ...maybe("provider", optionalString(url.searchParams.get("provider"))),
+    ...maybe("model", optionalString(url.searchParams.get("model"))),
+    ...maybe("source", optionalString(url.searchParams.get("source"))),
+    ...maybe("gatewayUrl", optionalString(url.searchParams.get("gatewayUrl"))),
+  };
+}
+
 function maybe<T>(
   key: string,
   value: T | undefined,
@@ -793,6 +817,7 @@ export class ReefServer {
   readonly #hooks: HookRegistry;
   readonly #specs: SpecRegistry;
   readonly #steering: SteeringRegistry;
+  readonly #account: AccountStore;
   #counter = 0;
 
   constructor(options: ReefServerOptions = {}) {
@@ -801,6 +826,7 @@ export class ReefServer {
     this.#hooks = new HookRegistry(options.persistDir);
     this.#specs = new SpecRegistry(options.persistDir);
     this.#steering = new SteeringRegistry(options.persistDir);
+    this.#account = new AccountStore(options.persistDir);
     this.#http = createServer((req, res) => {
       this.#handle(req, res).catch((err: unknown) => {
         this.#fail(res, 500, err instanceof Error ? err.message : String(err));
@@ -850,6 +876,31 @@ export class ReefServer {
     };
   }
 
+  #usageSummary() {
+    return usageSummary({
+      ...(this.#options.persistDir !== undefined
+        ? { persistDir: this.#options.persistDir }
+        : {}),
+      sessions: [...this.#sessions.values()].map((rec) => ({
+        id: rec.id,
+        task: rec.task,
+        events: rec.events,
+      })),
+    });
+  }
+
+  async #accountPlan(
+    request: AccountSnapshotRequest = {},
+  ): Promise<AccountPlanResponse> {
+    const account = this.#account.current();
+    return await accountPlan({
+      edition: this.#edition(),
+      usage: this.#usageSummary(),
+      ...(account !== undefined ? { account } : {}),
+      request,
+    });
+  }
+
   /** Start listening. Pass 0 for an ephemeral port; resolves with the bound port. */
   listen(port = 0, host = "127.0.0.1"): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -882,20 +933,33 @@ export class ReefServer {
       return this.#json(res, 200, this.#editionResponse());
     }
     if (method === "GET" && parts.length === 1 && parts[0] === "usage") {
-      return this.#json(
-        res,
-        200,
-        usageSummary({
-          ...(this.#options.persistDir !== undefined
-            ? { persistDir: this.#options.persistDir }
-            : {}),
-          sessions: [...this.#sessions.values()].map((rec) => ({
-            id: rec.id,
-            task: rec.task,
-            events: rec.events,
-          })),
-        }),
-      );
+      return this.#json(res, 200, this.#usageSummary());
+    }
+    if (parts[0] === "account") {
+      if (method === "GET" && parts.length === 1) {
+        return this.#json(res, 200, await this.#accountPlan(accountQuery(url)));
+      }
+      if (method === "POST" && parts.length === 2 && parts[1] === "login") {
+        try {
+          const body = (await this.#readJson(req)) as AccountLoginRequest;
+          this.#account.login(body);
+          return this.#json(
+            res,
+            200,
+            await this.#accountPlan(accountQuery(url)),
+          );
+        } catch (err) {
+          return this.#fail(
+            res,
+            400,
+            err instanceof Error ? err.message : "bad body",
+          );
+        }
+      }
+      if (method === "POST" && parts.length === 2 && parts[1] === "logout") {
+        this.#account.logout();
+        return this.#json(res, 200, await this.#accountPlan(accountQuery(url)));
+      }
     }
     if (parts[0] === "powers") {
       if (method === "GET" && parts.length === 1) {
@@ -1162,7 +1226,9 @@ export class ReefServer {
     const id = `sess-${(this.#counter++).toString(36)}-${Date.now().toString(36)}`;
     const context = sessionContext(task, body, this.#edition());
     const runtimeBase =
-      body.spec !== undefined
+      body.account !== undefined
+        ? this.#accountRuntime(body.account)
+        : body.spec !== undefined
         ? this.#specRuntime(body.spec)
         : body.browser !== undefined
           ? this.#browserRuntime(body.browser)
@@ -1206,6 +1272,12 @@ export class ReefServer {
     this.#sessions.set(id, rec);
     void this.#run(rec, body.persist === true);
     return id;
+  }
+
+  #accountRuntime(request: AccountSessionRequest): SessionRuntime {
+    return {
+      driver: new AccountPlanDriver(() => this.#accountPlan(request)),
+    };
   }
 
   #mcpRuntime(request: McpSessionRequest): SessionRuntime {

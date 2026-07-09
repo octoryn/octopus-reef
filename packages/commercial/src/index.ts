@@ -161,8 +161,8 @@ export function gatewayQuotaDecision(options: {
   return {
     allowed: true,
     source: "local-stub",
-    remainingRequests: 999,
-    reason: "Offline stub quota permits this request.",
+    reason:
+      "Offline stub entitlement permits this request; plan token quota is read from the gateway quota ledger.",
   };
 }
 

@@ -7,6 +7,8 @@ export interface StubGatewayOptions {
   readonly bedrockToken?: string;
   readonly model?: string;
   readonly region?: string;
+  readonly quotaLimitTokens?: number;
+  readonly initialUsedTokens?: number;
 }
 
 export interface StubGateway {
@@ -18,10 +20,18 @@ export async function startStubGateway(
   options: StubGatewayOptions = {},
 ): Promise<StubGateway> {
   const licenseToken = options.licenseToken ?? TEST_GATEWAY_LICENSE_TOKEN;
+  const quota = {
+    usedTokens: Math.max(0, Math.trunc(options.initialUsedTokens ?? 0)),
+    limitTokens: Math.max(1, Math.trunc(options.quotaLimitTokens ?? 10_000)),
+  };
   const server = createServer((req, res) => {
-    void handle(req, res, { ...options, licenseToken }).catch((err: unknown) => {
-      json(res, 500, { error: err instanceof Error ? err.message : String(err) });
-    });
+    void handle(req, res, { ...options, licenseToken }, quota).catch(
+      (err: unknown) => {
+        json(res, 500, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      },
+    );
   });
   const port = await new Promise<number>((resolve, reject) => {
     server.once("error", reject);
@@ -41,16 +51,38 @@ async function handle(
   res: ServerResponse,
   options: Required<Pick<StubGatewayOptions, "licenseToken">> &
     StubGatewayOptions,
+  quota: { usedTokens: number; limitTokens: number },
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
   if (req.method === "GET" && url.pathname === "/health") {
     return json(res, 200, { ok: true, mode: "reef-gateway-stub" });
   }
+  if (req.method === "GET" && url.pathname === "/v1/account") {
+    if (!authorized(req, options.licenseToken)) {
+      return json(res, 403, { error: "invalid Reef test license" });
+    }
+    return json(res, 200, {
+      userId: "octopus-stub-user",
+      displayName: "Octopus Stub User",
+      entitlement: { allowed: true, source: "local-stub-gateway" },
+    });
+  }
+  if (req.method === "GET" && url.pathname === "/v1/quota") {
+    if (!authorized(req, options.licenseToken)) {
+      return json(res, 403, { error: "invalid Reef test license" });
+    }
+    return json(res, 200, {
+      planId: "reef-commercial-stub",
+      usedTokens: quota.usedTokens,
+      remainingTokens: Math.max(0, quota.limitTokens - quota.usedTokens),
+      limitTokens: quota.limitTokens,
+      source: "local-stub-gateway /v1/quota token ledger",
+    });
+  }
   if (req.method !== "POST" || url.pathname !== "/v1/completions") {
     return json(res, 404, { error: "not found" });
   }
-  const auth = req.headers.authorization ?? "";
-  if (auth !== `Bearer ${options.licenseToken}`) {
+  if (!authorized(req, options.licenseToken)) {
     return json(res, 403, { error: "invalid Reef test license" });
   }
   const body = (await readJson(req)) as {
@@ -69,10 +101,12 @@ async function handle(
       ...(typeof body.model === "string" ? { model: body.model } : {}),
       ...(options.region !== undefined ? { region: options.region } : {}),
     });
-    return json(res, 200, await provider.complete(request));
+    const completion = await provider.complete(request);
+    quota.usedTokens += completion.usage?.totalTokens ?? 0;
+    return json(res, 200, completion);
   }
 
-  return json(res, 200, {
+  const completion = {
     content: [
       {
         type: "tool_use",
@@ -89,7 +123,13 @@ async function handle(
       outputTokens: 19,
       totalTokens: 36,
     },
-  });
+  };
+  quota.usedTokens += completion.usage.totalTokens;
+  return json(res, 200, completion);
+}
+
+function authorized(req: IncomingMessage, licenseToken: string): boolean {
+  return req.headers.authorization === `Bearer ${licenseToken}`;
 }
 
 function readJson(req: IncomingMessage): Promise<unknown> {

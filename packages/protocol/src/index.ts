@@ -142,6 +142,17 @@ export interface CreateSessionRequest {
     readonly autopilot?: boolean;
     readonly approvalMode?: "auto" | "ask";
   };
+  /**
+   * C2/C3 account-and-plan proof path. When present, the daemon records the
+   * current Reef identity, entitlement, usage, and quota snapshot as governed
+   * evidence links without calling a model.
+   */
+  readonly account?: {
+    readonly provider?: string;
+    readonly model?: string;
+    readonly source?: string;
+    readonly gatewayUrl?: string;
+  };
 }
 
 /** `POST /sessions` response. */
@@ -347,6 +358,66 @@ export interface UsageSummaryResponse {
   readonly byProvider: readonly UsageProviderTotalsView[];
   readonly byModel: readonly UsageModelTotalsView[];
   readonly remaining: readonly UsageRemainingView[];
+}
+
+export interface AccountIdentityView {
+  readonly kind: "local-byok" | "octopus-account";
+  readonly label: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly source: string;
+}
+
+export interface AccountUserView {
+  readonly signedIn: boolean;
+  readonly source: "local-byok" | "local-stub-account";
+  readonly userId?: string;
+  readonly displayName?: string;
+  readonly licenseSha256?: string;
+}
+
+export interface AccountEntitlementView {
+  readonly allowed: boolean;
+  readonly state: "community-byok" | "licensed" | "missing";
+  readonly source: string;
+  readonly reason: string;
+  readonly licenseSha256?: string;
+}
+
+export interface AccountQuotaView {
+  readonly status:
+    | "available"
+    | "missing-account"
+    | "not-available"
+    | "pending-key"
+    | "error";
+  readonly source: string;
+  readonly message: string;
+  readonly planId?: string;
+  readonly usedTokens?: number;
+  readonly remainingTokens?: number;
+  readonly limitTokens?: number;
+  readonly resetAt?: string;
+}
+
+export interface AccountPlanResponse {
+  readonly generatedAt: string;
+  readonly edition: ReefEdition;
+  readonly identity: AccountIdentityView;
+  readonly account: AccountUserView;
+  readonly entitlement: AccountEntitlementView;
+  readonly usage: UsageSummaryResponse;
+  readonly plan: {
+    readonly name: string;
+    readonly upgradeAvailable: boolean;
+    readonly quota: AccountQuotaView;
+  };
+}
+
+export interface AccountLoginRequest {
+  readonly userId?: string;
+  readonly displayName?: string;
+  readonly licenseToken?: string;
 }
 
 export type SteeringItemKind = "doc" | "skill";

@@ -52,6 +52,7 @@ test("layout: Reef tools are contributed as left activity-bar webview views", ()
       ["reef.powers", "webview"],
       ["reef.browser", "webview"],
       ["reef.specs", "webview"],
+      ["reef.account", "webview"],
       ["reef.steering", "webview"],
       ["reef.hooks", "webview"],
       ["reef.usage", "webview"],
@@ -71,6 +72,21 @@ test("layout: Reef Browser has command and local URL configuration", () => {
   assert.equal(
     pkg.contributes?.configuration?.properties?.["reef.browser.url"]?.default,
     "http://127.0.0.1:5173/",
+  );
+});
+
+test("layout: Reef Account & Plan is opened through a docked view command", () => {
+  const pkg = readJson("package.json");
+  const commands = new Set(
+    (pkg.contributes?.commands ?? []).map((entry: any) => entry.command),
+  );
+  assert.equal(commands.has("reef.openAccount"), true);
+  const reefViews = pkg.contributes?.views?.reef ?? [];
+  assert.equal(
+    reefViews.some(
+      (view: any) => view.id === "reef.account" && view.type === "webview",
+    ),
+    true,
   );
 });
 

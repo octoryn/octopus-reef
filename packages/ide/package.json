@@ -67,6 +67,11 @@
         "category": "Reef"
       },
       {
+        "command": "reef.openAccount",
+        "title": "Reef: Account & Plan",
+        "category": "Reef"
+      },
+      {
         "command": "reef.openSteering",
         "title": "Reef: Steering",
         "category": "Reef"
@@ -175,6 +180,13 @@
           "id": "reef.specs",
           "name": "Specs",
           "icon": "$(list-tree)",
+          "visibility": "collapsed"
+        },
+        {
+          "type": "webview",
+          "id": "reef.account",
+          "name": "Account",
+          "icon": "$(account)",
           "visibility": "collapsed"
         },
         {

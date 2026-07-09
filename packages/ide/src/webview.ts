@@ -607,6 +607,91 @@ export function usageWebviewHtml(cspSource: string, scriptUri: string): string {
 </html>`;
 }
 
+export function accountWebviewHtml(
+  cspSource: string,
+  scriptUri: string,
+): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource};" />
+<style>
+  :root{--deep:#091315;--panel:#0f1d20;--panel2:#132529;--line:#214044;--ink:#edf6f4;--muted:#86a5a5;--signal:#3de0be;--warn:#ffd166;--danger:#ff6b6b;--blue:#8bb8ff;--mono:ui-monospace,Menlo,monospace}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--deep);color:var(--ink);font-family:var(--mono);font-size:13px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header b{color:var(--signal)}
+  main{padding:16px;display:grid;gap:14px}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  h2{font-size:12px;letter-spacing:0;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+  .grid{display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:12px}
+  .card{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;display:grid;gap:9px;min-width:0}
+  .kv{display:grid;grid-template-columns:112px 1fr;gap:8px;align-items:start}
+  .key{color:var(--muted)}.value{color:var(--ink);overflow-wrap:anywhere}
+  .totals{display:grid;grid-template-columns:repeat(4,minmax(90px,1fr));gap:8px}
+  .tile{border:1px solid var(--line);border-radius:8px;background:#0b1719;padding:10px;min-height:58px}
+  .tile .key{font-size:11px}.tile .value{font-size:16px;margin-top:4px;color:var(--signal)}
+  .pill{border:1px solid var(--line);border-radius:999px;padding:3px 8px;color:var(--muted);white-space:nowrap;width:max-content}
+  .pill.ok{color:var(--signal);border-color:rgba(61,224,190,.55)}.pill.warn{color:var(--warn);border-color:rgba(255,209,102,.55)}.pill.bad{color:var(--danger);border-color:rgba(255,107,107,.55)}
+  button{background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;font-weight:700;padding:7px 10px}
+  button.primary{background:var(--signal);border-color:var(--signal);color:#001714}
+  button:disabled{opacity:.55}
+  .status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
+  .status.ok{border-color:var(--signal);color:var(--signal)}.status.bad{border-color:var(--danger);color:var(--danger)}.status.warn{border-color:var(--warn);color:var(--warn)}
+  @media (max-width:760px){.grid,.totals{grid-template-columns:1fr}.kv{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div><b>&#x259A; reef</b> account &amp; plan</div>
+  <div class="toolbar">
+    <button id="refresh" type="button">Refresh</button>
+    <button id="evidence" type="button">Record Evidence</button>
+  </div>
+</header>
+<main>
+  <section class="grid">
+    <article class="card">
+      <h2>Identity</h2>
+      <div id="edition" class="pill">loading</div>
+      <div class="kv"><div class="key">Provider</div><div id="identity" class="value">loading</div></div>
+      <div class="kv"><div class="key">Source</div><div id="identity-source" class="value">loading</div></div>
+    </article>
+    <article class="card">
+      <h2>Account</h2>
+      <div id="entitlement" class="pill">loading</div>
+      <div class="kv"><div class="key">User</div><div id="user" class="value">loading</div></div>
+      <div class="kv"><div class="key">License Hash</div><div id="license" class="value">not available</div></div>
+      <div class="toolbar">
+        <button id="signin" class="primary" type="button">Sign In Stub</button>
+        <button id="signout" type="button">Sign Out</button>
+        <button id="copy" type="button">Copy User ID</button>
+      </div>
+    </article>
+  </section>
+  <section class="card">
+    <h2>Usage</h2>
+    <div id="usage" class="totals"></div>
+    <div id="usage-source" class="value">N6 session evidence aggregation</div>
+  </section>
+  <section class="card">
+    <h2>Plan Quota</h2>
+    <div id="quota-pill" class="pill">loading</div>
+    <div class="kv"><div class="key">Plan</div><div id="plan" class="value">loading</div></div>
+    <div class="kv"><div class="key">Used</div><div id="quota-used" class="value">not available</div></div>
+    <div class="kv"><div class="key">Remaining</div><div id="quota-remaining" class="value">not available</div></div>
+    <div class="kv"><div class="key">Source</div><div id="quota-source" class="value">loading</div></div>
+    <div class="toolbar"><button id="upgrade" type="button">Upgrade Plan</button></div>
+  </section>
+  <div id="status" class="status">Waiting for account state.</div>
+</main>
+<script src="${scriptUri}"></script>
+</body>
+</html>`;
+}
+
 export function steeringWebviewHtml(
   cspSource: string,
   scriptUri: string,

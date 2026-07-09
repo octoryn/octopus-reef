@@ -18,20 +18,25 @@ import {
   createSpec,
   createHook,
   fireHook,
+  getAccount,
   getUsage,
   getSpec,
   installPower,
+  loginAccount,
   listHooks,
   listPowers,
   listSpecs,
   listSteering,
+  logoutAccount,
   setActiveSteering,
   streamEvents,
   verifySpec,
   verifySession,
+  type AccountQuery,
   type ServerEvent,
 } from "./client.js";
 import {
+  accountWebviewHtml,
   agentFocusWebviewHtml,
   browserWebviewHtml,
   hooksWebviewHtml,
@@ -89,6 +94,7 @@ interface ReefSurface {
 const REEF_SESSION_VIEW_ID = "reef.session";
 const REEF_POWERS_VIEW_ID = "reef.powers";
 const REEF_SPECS_VIEW_ID = "reef.specs";
+const REEF_ACCOUNT_VIEW_ID = "reef.account";
 const REEF_USAGE_VIEW_ID = "reef.usage";
 const REEF_STEERING_VIEW_ID = "reef.steering";
 const REEF_HOOKS_VIEW_ID = "reef.hooks";
@@ -333,6 +339,49 @@ function modelSettings():
   return Object.keys(model).length > 0 ? model : undefined;
 }
 
+function configuredAccountQuery(): AccountQuery {
+  const config = vscode.workspace.getConfiguration("reef");
+  const provider = config.get<string>("model.provider", "auto").trim();
+  const apiKey = config.get<string>("model.apiKey", "").trim();
+  const name = config.get<string>("model.name", "").trim();
+  const gatewayUrl = config.get<string>("gateway.url", "").trim();
+  const hasAnthropic =
+    apiKey !== "" ||
+    (process.env.ANTHROPIC_API_KEY ?? "").trim() !== "";
+  const hasBedrock =
+    apiKey !== "" ||
+    (process.env.AWS_BEARER_TOKEN_BEDROCK ?? "").trim() !== "" ||
+    (process.env.BEDROCK_API_KEY ?? "").trim() !== "";
+
+  if (provider === "gateway") {
+    return {
+      provider: "gateway",
+      model: name !== "" ? name : "reef-gateway-stub",
+      source: "Reef settings: hosted gateway",
+      ...(gatewayUrl !== "" ? { gatewayUrl } : {}),
+    };
+  }
+  if (provider === "anthropic" || (provider === "auto" && hasAnthropic)) {
+    return {
+      provider: "anthropic",
+      model: name !== "" ? name : "Claude Sonnet 4.5",
+      source: "Reef settings: BYOK Anthropic",
+    };
+  }
+  if (provider === "bedrock" || (provider === "auto" && hasBedrock)) {
+    return {
+      provider: "bedrock",
+      model: name !== "" ? name : "Claude Sonnet 4.5",
+      source: "Reef settings: BYOK Bedrock",
+    };
+  }
+  return {
+    provider: "mock",
+    model: "offline-mock",
+    source: "Reef offline MockDriver",
+  };
+}
+
 async function currentProductVersion(
   context: vscode.ExtensionContext,
 ): Promise<string> {
@@ -533,6 +582,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let hooksView: vscode.WebviewView | undefined;
   let browserView: vscode.WebviewView | undefined;
   let specsView: vscode.WebviewView | undefined;
+  let accountView: vscode.WebviewView | undefined;
   let steeringView: vscode.WebviewView | undefined;
   let usageView: vscode.WebviewView | undefined;
   let textSurface: ReefTextSurface | undefined;
@@ -560,7 +610,15 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.StatusBarAlignment.Left,
     100,
   );
+  const accountStatus = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    99,
+  );
   setStatus(status, undefined, "Reef idle");
+  accountStatus.text = "Reef Account";
+  accountStatus.tooltip = "Open Reef Account & Plan";
+  accountStatus.command = "reef.openAccount";
+  accountStatus.show();
 
   const revealView = async (
     viewId: string,
@@ -774,6 +832,8 @@ export function activate(context: vscode.ExtensionContext): void {
         readonly to?: WorkState;
         readonly reason?: string;
       };
+      readonly account?: AccountQuery;
+      readonly persist?: boolean;
     } = {},
   ): Promise<RunTaskResult> => {
     const base = activeServerUrl;
@@ -792,12 +852,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
     try {
       const id = await createSession(base, task.trim(), {
-        persist: true,
+        persist: extra.persist !== false,
         ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(extra.mcp !== undefined ? { mcp: extra.mcp } : {}),
         ...(extra.browser !== undefined ? { browser: extra.browser } : {}),
         ...(extra.spec !== undefined ? { spec: extra.spec } : {}),
+        ...(extra.account !== undefined ? { account: extra.account } : {}),
       });
       lastSessionId = id;
       lastSessionDir = join(persistDir, id);
@@ -1325,6 +1386,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const refreshAccount = async (): Promise<void> => {
+    const account = await getAccount(activeServerUrl, configuredAccountQuery());
+    void accountView?.webview.postMessage({ kind: "account", account });
+  };
+
   const refreshUsage = async (): Promise<void> => {
     const usage = await getUsage(activeServerUrl);
     void usageView?.webview.postMessage({ kind: "usage", usage });
@@ -1693,6 +1759,63 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const handleAccountMessage = async (
+    message: WebviewMessage,
+  ): Promise<void> => {
+    try {
+      if (message.kind === "getAccount") {
+        await refreshAccount();
+      } else if (message.kind === "signInAccount") {
+        await loginAccount(activeServerUrl, configuredAccountQuery());
+        await refreshAccount();
+        void accountView?.webview.postMessage({
+          kind: "status",
+          tone: "ok",
+          message: "Signed in to the local Octopus stub account.",
+        });
+      } else if (message.kind === "signOutAccount") {
+        await logoutAccount(activeServerUrl, configuredAccountQuery());
+        await refreshAccount();
+        void accountView?.webview.postMessage({
+          kind: "status",
+          tone: "ok",
+          message: "Signed out of the local Octopus stub account.",
+        });
+      } else if (
+        message.kind === "copyAccountId" &&
+        typeof message.id === "string" &&
+        message.id.trim() !== ""
+      ) {
+        await vscode.env.clipboard.writeText(message.id.trim());
+        void accountView?.webview.postMessage({
+          kind: "status",
+          tone: "ok",
+          message: "Copied Reef account user id.",
+        });
+      } else if (message.kind === "recordAccountEvidence") {
+        const result = await runTask("C2/C3 account and plan snapshot", {
+          account: configuredAccountQuery(),
+          persist: true,
+        });
+        await refreshAccount();
+        void accountView?.webview.postMessage({
+          kind: "status",
+          tone: result.error === undefined ? "ok" : "bad",
+          message:
+            result.error === undefined
+              ? `Account evidence sealed: ${result.sessionId ?? "unknown"}`
+              : result.error,
+        });
+      }
+    } catch (err) {
+      void accountView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
   const handleSteeringMessage = async (
     message: WebviewMessage,
   ): Promise<void> => {
@@ -1915,6 +2038,22 @@ export function activate(context: vscode.ExtensionContext): void {
       }),
   );
 
+  const accountViewProvider = registerReefView(
+    REEF_ACCOUNT_VIEW_ID,
+    "media/account.js",
+    accountWebviewHtml,
+    (view) => {
+      accountView = view;
+    },
+    handleAccountMessage,
+    (message) =>
+      void accountView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message,
+      }),
+  );
+
   const usageViewProvider = registerReefView(
     REEF_USAGE_VIEW_ID,
     "media/usage.js",
@@ -2057,6 +2196,22 @@ export function activate(context: vscode.ExtensionContext): void {
       });
     }
   });
+
+  const account = vscode.commands.registerCommand(
+    "reef.openAccount",
+    async () => {
+      await revealView(REEF_ACCOUNT_VIEW_ID, accountView);
+      try {
+        await refreshAccount();
+      } catch (err) {
+        void accountView?.webview.postMessage({
+          kind: "status",
+          tone: "bad",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
 
   const steering = vscode.commands.registerCommand(
     "reef.openSteering",
@@ -2274,6 +2429,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     status,
+    accountStatus,
     run,
     openChat,
     welcome,
@@ -2281,6 +2437,7 @@ export function activate(context: vscode.ExtensionContext): void {
     verifyAgentFocus,
     powers,
     specs,
+    account,
     usage,
     steering,
     hooks,
@@ -2294,6 +2451,7 @@ export function activate(context: vscode.ExtensionContext): void {
     sessionViewProvider,
     powersViewProvider,
     specsViewProvider,
+    accountViewProvider,
     usageViewProvider,
     steeringViewProvider,
     hooksViewProvider,

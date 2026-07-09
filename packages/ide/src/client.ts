@@ -7,6 +7,8 @@
 import type {
   AdvanceSpecRequest,
   AdvanceSpecResponse,
+  AccountLoginRequest,
+  AccountPlanResponse,
   CreateSpecRequest,
   CreateSpecResponse,
   CreateSessionResponse,
@@ -113,6 +115,12 @@ export interface CreateSessionOptions {
     readonly autopilot?: boolean;
     readonly approvalMode?: "auto" | "ask";
   };
+  readonly account?: {
+    readonly provider?: string;
+    readonly model?: string;
+    readonly source?: string;
+    readonly gatewayUrl?: string;
+  };
 }
 
 /** Start a governed session on the daemon; resolves with its id. */
@@ -139,6 +147,7 @@ export async function createSession(
       ...(options.conversation !== undefined
         ? { conversation: options.conversation }
         : {}),
+      ...(options.account !== undefined ? { account: options.account } : {}),
     }),
   });
   if (!res.ok) {
@@ -297,6 +306,63 @@ export async function verifySpec(
 
 export async function getUsage(baseUrl: string): Promise<UsageSummaryResponse> {
   return await jsonRequest<UsageSummaryResponse>(`${baseUrl}/usage`);
+}
+
+export interface AccountQuery {
+  readonly provider?: string;
+  readonly model?: string;
+  readonly source?: string;
+  readonly gatewayUrl?: string;
+}
+
+function accountUrl(
+  baseUrl: string,
+  path = "/account",
+  query: AccountQuery = {},
+): string {
+  const url = new URL(path, baseUrl);
+  for (const [key, value] of Object.entries(query)) {
+    if (typeof value === "string" && value.trim() !== "") {
+      url.searchParams.set(key, value.trim());
+    }
+  }
+  return url.toString();
+}
+
+export async function getAccount(
+  baseUrl: string,
+  query: AccountQuery = {},
+): Promise<AccountPlanResponse> {
+  return await jsonRequest<AccountPlanResponse>(
+    accountUrl(baseUrl, "/account", query),
+  );
+}
+
+export async function loginAccount(
+  baseUrl: string,
+  query: AccountQuery = {},
+  input: AccountLoginRequest = {},
+): Promise<AccountPlanResponse> {
+  return await jsonRequest<AccountPlanResponse>(
+    accountUrl(baseUrl, "/account/login", query),
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function logoutAccount(
+  baseUrl: string,
+  query: AccountQuery = {},
+): Promise<AccountPlanResponse> {
+  return await jsonRequest<AccountPlanResponse>(
+    accountUrl(baseUrl, "/account/logout", query),
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
 }
 
 export async function listSteering(
