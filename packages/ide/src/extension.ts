@@ -542,7 +542,7 @@ export function activate(context: vscode.ExtensionContext): void {
   setStatus(status, undefined, "Reef idle");
 
   const webviewSurface = (): ReefSurface => ({
-    reveal: () => panel?.reveal(vscode.ViewColumn.Beside),
+    reveal: () => panel?.reveal(vscode.ViewColumn.Active),
     reset: (task) => void panel?.webview.postMessage({ kind: "reset", task }),
     event: (event) => void panel?.webview.postMessage({ kind: "event", event }),
     sealed: (event) =>
@@ -566,7 +566,7 @@ export function activate(context: vscode.ExtensionContext): void {
       panel = vscode.window.createWebviewPanel(
         "reef.session",
         "Reef Session",
-        vscode.ViewColumn.Beside,
+        vscode.ViewColumn.Active,
         { enableScripts: true, retainContextWhenHidden: true },
       );
       panel.webview.html = webviewHtml(

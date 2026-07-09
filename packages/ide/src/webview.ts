@@ -89,6 +89,7 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
   .usage b{display:block;color:var(--signal);font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis}
   .usage span{display:block;margin-top:2px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   @media (max-width:760px){h1{font-size:34px}.turn-body{grid-template-columns:1fr}.composer form{grid-template-columns:auto auto 1fr auto}.model,.toggle{grid-column:1 / -1;width:max-content}.usage{grid-template-columns:1fr 1fr}.evidence{grid-template-columns:28px 56px 1fr}.evidence span:last-child{display:none}}
+  @media (max-height:820px){.empty{place-items:start center}.logo{width:94px;height:94px;margin-bottom:14px}.subtitle{margin-bottom:18px}.shortcuts{gap:8px}.shortcut{padding:10px 12px}.diffline{margin-top:15px}}
 </style>
 </head>
 <body>
