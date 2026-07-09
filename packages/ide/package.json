@@ -31,6 +31,16 @@
         "category": "Reef"
       },
       {
+        "command": "reef.openAgentFocus",
+        "title": "Reef: Agent Focus",
+        "category": "Reef"
+      },
+      {
+        "command": "reef.verifyAgentFocus",
+        "title": "Reef: Verify Agent Focus",
+        "category": "Reef"
+      },
+      {
         "command": "reef.verifySession",
         "title": "Reef: Verify",
         "category": "Reef"

@@ -132,6 +132,119 @@ export function welcomeWebviewHtml(
 </html>`;
 }
 
+export function agentFocusWebviewHtml(
+  cspSource: string,
+  scriptUri: string,
+): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource};" />
+<style>
+  :root{--deep:#071113;--panel:#0e1c1f;--panel2:#13262a;--line:#244348;--ink:#eff8f6;--muted:#88a7a7;--signal:#3de0be;--blue:#8bb8ff;--warn:#ffd166;--danger:#ff6b6b;--mono:ui-monospace,Menlo,monospace;--sans:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:var(--deep);color:var(--ink);font-family:var(--sans);font-size:13px}
+  button,input,textarea{font:inherit}
+  button{border:0;border-radius:6px;cursor:pointer}
+  button:disabled,textarea:disabled{opacity:.58;cursor:default}
+  .shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr auto}
+  header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 16px;border-bottom:1px solid var(--line);background:#091719}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:760}
+  .mark{width:28px;height:28px;display:grid;place-items:center;border:1px solid rgba(61,224,190,.55);border-radius:8px;color:var(--signal);font-family:var(--mono);background:#102326}
+  .mode{color:var(--muted);font-family:var(--mono);font-size:12px}
+  .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .tool{background:var(--panel2);border:1px solid var(--line);color:var(--ink);padding:7px 10px;font-weight:700}
+  .tool.primary{background:var(--signal);border-color:var(--signal);color:#001714}
+  main{display:grid;grid-template-columns:280px minmax(390px,1fr) 330px;min-height:0}
+  aside{border-right:1px solid var(--line);background:#0a1719;padding:14px;display:grid;align-content:start;gap:12px;min-width:0}
+  .center{padding:14px;display:grid;grid-template-rows:auto auto 1fr;gap:12px;min-width:0;min-height:0}
+  .right{border-left:1px solid var(--line);padding:14px;display:grid;grid-template-rows:auto 1fr;gap:12px;min-width:0;min-height:0;background:#0a1719}
+  h2{font-size:12px;letter-spacing:0;text-transform:uppercase;color:var(--muted);margin:0}
+  .new{display:flex;justify-content:space-between;gap:8px;align-items:center}
+  .task-list{display:grid;gap:8px}
+  .task{width:100%;text-align:left;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);padding:10px;display:grid;gap:5px}
+  .task.active{border-color:var(--signal);background:#102326}
+  .task-title{font-weight:720;line-height:1.3}
+  .task-meta{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .task-pill{width:max-content;border:1px solid var(--line);border-radius:999px;padding:2px 7px;color:var(--muted);font-family:var(--mono);font-size:11px}
+  .task-pill.ok{color:var(--signal);border-color:rgba(61,224,190,.55)}.task-pill.bad{color:var(--danger);border-color:rgba(255,107,107,.55)}
+  .empty{color:var(--muted);border:1px dashed var(--line);border-radius:8px;padding:12px}
+  .prompt{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;display:grid;gap:10px}
+  textarea{width:100%;min-height:96px;resize:vertical;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--ink);padding:10px;outline:none}
+  textarea:focus{border-color:var(--signal)}
+  .prompt-actions{display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .hint{color:var(--muted);font-family:var(--mono);font-size:12px}
+  .run{background:var(--signal);color:#001714;font-weight:760;padding:8px 12px}
+  .stage-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;min-height:0}
+  .stage{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;display:grid;align-content:start;gap:10px;min-width:0}
+  .stage.wide{grid-column:1 / -1;min-height:180px;overflow:auto}
+  ul{margin:0;padding-left:18px;display:grid;gap:6px}
+  li{line-height:1.4}li.ok b{color:var(--signal)}li.bad b{color:var(--danger)}li span{color:var(--muted);font-family:var(--mono);font-size:12px}
+  pre{margin:0;white-space:pre-wrap;overflow:auto;color:#dbe8e5;font-family:var(--mono);font-size:12px;line-height:1.45}
+  .badge{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;font-family:var(--mono);font-weight:760;line-height:1.45}
+  .badge.ok{color:var(--signal);border-color:rgba(61,224,190,.65)}.badge.bad{color:var(--danger);border-color:rgba(255,107,107,.65)}.badge.pending{color:var(--warn);border-color:rgba(255,209,102,.55)}
+  .timeline{display:grid;gap:6px;align-content:start;overflow:auto;min-height:0}
+  .evidence{display:grid;grid-template-columns:34px 62px 1fr 78px;gap:8px;align-items:start;border-bottom:1px solid rgba(36,67,72,.55);padding:6px 0;color:var(--muted);font-family:var(--mono);font-size:11px}
+  .evidence span:nth-child(3){color:var(--ink);font-family:var(--sans);font-size:12px;overflow:hidden;text-overflow:ellipsis}
+  .evidence.ok span:nth-child(2){color:var(--signal)}.evidence.bad span:nth-child(2),.evidence.bad span:nth-child(3){color:var(--danger)}
+  footer{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;border-top:1px solid var(--line);background:#091719;padding:10px 16px}
+  .usage{display:grid;grid-template-columns:110px 120px minmax(220px,1fr) minmax(260px,1fr);gap:10px;align-items:stretch}
+  .usage div{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:8px;display:grid;gap:2px;min-width:0}
+  .usage b{color:var(--signal)}.usage span{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis}
+  .status{font-family:var(--mono);color:var(--muted);font-size:12px}.status.ok{color:var(--signal)}.status.bad{color:var(--danger)}.status.warn{color:var(--warn)}
+  @media (max-width:1050px){main{grid-template-columns:240px 1fr}.right{grid-column:1 / -1;border-left:0;border-top:1px solid var(--line);min-height:280px}.usage{grid-template-columns:1fr 1fr}.usage .wide{grid-column:auto}}
+  @media (max-width:760px){main{grid-template-columns:1fr}aside,.right{border:0;border-bottom:1px solid var(--line)}.stage-grid{grid-template-columns:1fr}footer{grid-template-columns:1fr}.usage{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="brand"><div class="mark">&#x259A;</div><div>Reef Agent Focus</div><div id="window-mode" class="mode">IDE window</div></div>
+    <div class="toolbar">
+      <button id="focus-window" class="tool primary" type="button">Focus</button>
+      <button id="ide-window" class="tool" type="button">IDE</button>
+      <button id="verify-run" class="tool" type="button">Verify</button>
+    </div>
+  </header>
+  <main>
+    <aside>
+      <div class="new"><h2>Tasks</h2><button id="new-task" class="tool" type="button">New Task</button></div>
+      <div id="task-list" class="task-list"></div>
+    </aside>
+    <section class="center">
+      <div class="prompt">
+        <textarea id="task-prompt" spellcheck="false" placeholder="Ask Reef to make a governed change...">N7b offline mock: open Agent Focus and prove the run</textarea>
+        <div class="prompt-actions"><span class="hint">Cmd/Ctrl+Enter runs with MockDriver when no key is configured.</span><button id="run-task" class="run" type="button">Run Governed Task</button></div>
+      </div>
+      <div id="verify-badge" class="badge pending">PENDING</div>
+      <div class="stage-grid">
+        <div class="stage"><h2>Plan</h2><ul id="plan"><li>Waiting for governed plan.</li></ul></div>
+        <div class="stage"><h2>Actions</h2><ul id="actions"><li>Waiting for actions.</li></ul></div>
+        <div class="stage wide"><h2>Diff</h2><pre id="diff"></pre></div>
+      </div>
+    </section>
+    <section class="right">
+      <h2>Evidence Timeline</h2>
+      <div id="timeline" class="timeline"></div>
+    </section>
+  </main>
+  <footer>
+    <div id="usage" class="usage">
+      <div><b>0</b><span>tokens</span></div>
+      <div><b>$0.000000</b><span>cost</span></div>
+      <div class="wide"><b>0</b><span>0 provider calls recorded for this governed session.</span></div>
+      <div class="wide"><b>remaining</b><span>not available from the offline mock provider</span></div>
+    </div>
+    <div id="status" class="status">Ready.</div>
+  </footer>
+</div>
+<script src="${scriptUri}"></script>
+</body>
+</html>`;
+}
+
 export function powersWebviewHtml(
   cspSource: string,
   scriptUri: string,

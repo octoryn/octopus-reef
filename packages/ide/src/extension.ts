@@ -32,6 +32,7 @@ import {
   type ServerEvent,
 } from "./client.js";
 import {
+  agentFocusWebviewHtml,
   hooksWebviewHtml,
   powersWebviewHtml,
   specsWebviewHtml,
@@ -40,6 +41,11 @@ import {
   welcomeWebviewHtml,
   webviewHtml,
 } from "./webview.js";
+import {
+  buildFocusRunView,
+  focusUsageSnapshot,
+  type FocusRunView,
+} from "./agentFocus.js";
 import {
   isWelcomeAction,
   shouldOpenReefWelcome,
@@ -102,6 +108,14 @@ interface RunTaskResult {
   readonly sessionId?: string;
   readonly verify?: VerifyResult;
   readonly error?: string;
+}
+
+interface FocusRunRecord {
+  readonly id: string;
+  readonly task: string;
+  readonly status: "running" | "sealed";
+  readonly verifyOk?: boolean;
+  readonly at: string;
 }
 
 interface WebviewMessage {
@@ -471,6 +485,7 @@ async function waitForBundledServer(
 export function activate(context: vscode.ExtensionContext): void {
   let panel: vscode.WebviewPanel | undefined;
   let welcomePanel: vscode.WebviewPanel | undefined;
+  let agentFocusPanel: vscode.WebviewPanel | undefined;
   let powersPanel: vscode.WebviewPanel | undefined;
   let hooksPanel: vscode.WebviewPanel | undefined;
   let specsPanel: vscode.WebviewPanel | undefined;
@@ -478,9 +493,17 @@ export function activate(context: vscode.ExtensionContext): void {
   let usagePanel: vscode.WebviewPanel | undefined;
   let textSurface: ReefTextSurface | undefined;
   let abort: AbortController | undefined;
+  let focusAbort: AbortController | undefined;
   let lastVerify: ServerEvent | undefined;
   let lastSessionId: string | undefined;
   let lastSessionDir: string | undefined;
+  let focusSessionId: string | undefined;
+  let focusSessionTask = "";
+  let focusEvents: SessionEvent[] = [];
+  let focusVerify: VerifyResult | undefined;
+  let focusRuns: FocusRunRecord[] = [];
+  let focusWindowMode: "ide" | "focus" = "ide";
+  let focusRun: Promise<RunTaskResult> | undefined;
   let activeSpecId: string | undefined;
   let activeServerUrl = serverUrl();
   let daemon: ChildProcess | undefined;
@@ -647,6 +670,247 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const rememberFocusRun = (
+    id: string,
+    task: string,
+    update: Partial<Omit<FocusRunRecord, "id" | "task" | "at">> = {},
+  ): void => {
+    const existing = focusRuns.find((run) => run.id === id);
+    const record: FocusRunRecord = {
+      id,
+      task,
+      at: existing?.at ?? new Date().toISOString(),
+      status: update.status ?? existing?.status ?? "running",
+      ...(update.verifyOk !== undefined
+        ? { verifyOk: update.verifyOk }
+        : existing?.verifyOk !== undefined
+          ? { verifyOk: existing.verifyOk }
+          : {}),
+    };
+    focusRuns = [
+      record,
+      ...focusRuns.filter((candidate) => candidate.id !== id),
+    ].slice(0, 12);
+  };
+
+  const currentFocusView = (
+    usage?: Awaited<ReturnType<typeof getUsage>>,
+  ): FocusRunView =>
+    buildFocusRunView({
+      task: focusSessionTask || "No focus task yet.",
+      events: focusEvents,
+      ...(focusVerify !== undefined ? { verify: focusVerify } : {}),
+      ...(usage !== undefined ? { usage } : {}),
+      ...(focusSessionId !== undefined ? { sessionId: focusSessionId } : {}),
+    });
+
+  const postFocusState = (view?: FocusRunView): void => {
+    void agentFocusPanel?.webview.postMessage({
+      kind: "focusState",
+      sessions: focusRuns,
+      currentSessionId: focusSessionId ?? "",
+      windowMode: focusWindowMode,
+      ...(view !== undefined ? { view } : {}),
+    });
+  };
+
+  const postFocusUsage = async (): Promise<void> => {
+    const usage = await getUsage(activeServerUrl);
+    void agentFocusPanel?.webview.postMessage({
+      kind: "focusUsage",
+      usage: focusUsageSnapshot(usage, focusSessionId),
+    });
+    postFocusState(currentFocusView(usage));
+  };
+
+  const postFocusError = (message: string): void => {
+    void agentFocusPanel?.webview.postMessage({
+      kind: "focusError",
+      message,
+    });
+  };
+
+  const moveAgentFocus = async (mode: "focus" | "ide"): Promise<void> => {
+    if (agentFocusPanel === undefined) return;
+    agentFocusPanel.reveal(vscode.ViewColumn.Active);
+    const command =
+      mode === "focus"
+        ? "workbench.action.moveEditorToNewWindow"
+        : "workbench.action.restoreEditorsToMainWindow";
+    try {
+      await vscode.commands.executeCommand(command);
+      focusWindowMode = mode;
+      void agentFocusPanel.webview.postMessage({
+        kind: "focusWindow",
+        mode,
+        tone: "ok",
+        message:
+          mode === "focus"
+            ? "Agent Focus moved to a separate window."
+            : "Agent Focus restored to the IDE window.",
+      });
+    } catch (err) {
+      if (mode === "ide") {
+        try {
+          await vscode.commands.executeCommand(
+            "workbench.action.switchToMainWindow",
+          );
+        } catch {
+          /* keep the original restore failure below */
+        }
+      }
+      focusWindowMode = mode === "focus" ? "ide" : "ide";
+      void agentFocusPanel.webview.postMessage({
+        kind: "focusWindow",
+        mode: focusWindowMode,
+        tone: "bad",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const verifyFocusSession = async (
+    showMessage = false,
+  ): Promise<VerifyResult | undefined> => {
+    if (focusSessionId === undefined) {
+      const message = "Reef: run an Agent Focus task first, then verify it.";
+      postFocusError(message);
+      if (showMessage) void vscode.window.showInformationMessage(message);
+      return undefined;
+    }
+    const v = await verifySession(activeServerUrl, focusSessionId);
+    focusVerify = v;
+    rememberFocusRun(focusSessionId, focusSessionTask, {
+      status: "sealed",
+      verifyOk: v.ok,
+    });
+    if (
+      lastSessionId === focusSessionId &&
+      lastVerify !== undefined &&
+      lastVerify.type === "sealed"
+    ) {
+      lastVerify = {
+        type: "sealed",
+        snapshot: lastVerify.snapshot,
+        verify: v,
+      };
+      await writeState();
+    }
+    const usage = await getUsage(activeServerUrl).catch(() => undefined);
+    void agentFocusPanel?.webview.postMessage({
+      kind: "focusVerified",
+      sessions: focusRuns,
+      view: currentFocusView(usage),
+    });
+    setStatus(status, v);
+    if (showMessage) {
+      void vscode.window.showInformationMessage(
+        v.ok
+          ? `Reef Agent Focus ✓ VERIFIED — work ${v.work}, log ${v.log}, binding ${v.binding}`
+          : `Reef Agent Focus ✗ UNVERIFIED — work ${v.work}, log ${v.log}, binding ${v.binding}`,
+      );
+    }
+    return v;
+  };
+
+  const runFocusTask = async (task: string): Promise<RunTaskResult> => {
+    const base = activeServerUrl;
+    const trimmed = task.trim();
+    if (trimmed === "") return { error: "task is required" };
+    const workspaceRoot = firstWorkspaceRoot();
+    const model = modelSettings();
+    agentFocusPanel?.reveal(vscode.ViewColumn.Active);
+    focusAbort?.abort();
+    focusAbort = new AbortController();
+    focusSessionId = undefined;
+    focusSessionTask = trimmed;
+    focusEvents = [];
+    focusVerify = undefined;
+    lastVerify = undefined;
+    lastSessionId = undefined;
+    lastSessionDir = undefined;
+    setStatus(status, undefined, "Reef Agent Focus running");
+    void agentFocusPanel?.webview.postMessage({
+      kind: "focusReset",
+      task: trimmed,
+    });
+
+    try {
+      const id = await createSession(base, trimmed, {
+        persist: true,
+        ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+        ...(model !== undefined ? { model } : {}),
+      });
+      focusSessionId = id;
+      lastSessionId = id;
+      lastSessionDir = join(persistDir, id);
+      rememberFocusRun(id, trimmed);
+      await writeState();
+      void agentFocusPanel?.webview.postMessage({
+        kind: "focusStarted",
+        sessionId: id,
+        sessions: focusRuns,
+      });
+
+      await streamEvents(
+        base,
+        id,
+        (event) => {
+          if (event.type === "event") {
+            focusEvents.push(event.event);
+            void agentFocusPanel?.webview.postMessage({
+              kind: "focusEvent",
+              event: buildFocusRunView({
+                task: trimmed,
+                events: [event.event],
+              }).evidence[0],
+              view: currentFocusView(),
+            });
+          } else if (event.type === "sealed") {
+            lastVerify = event;
+            focusVerify = event.verify;
+            rememberFocusRun(id, trimmed, {
+              status: "sealed",
+              verifyOk: event.verify.ok,
+            });
+            setStatus(status, event.verify);
+            void writeState();
+            void agentFocusPanel?.webview.postMessage({
+              kind: "focusSealed",
+              sessions: focusRuns,
+              view: currentFocusView(),
+            });
+            void postFocusUsage().catch((err) => {
+              void agentFocusPanel?.webview.postMessage({
+                kind: "focusUsage",
+                usage: focusUsageSnapshot(undefined, undefined),
+              });
+              postFocusError(err instanceof Error ? err.message : String(err));
+            });
+          }
+        },
+        focusAbort.signal,
+      );
+      return {
+        sessionId: id,
+        ...(focusVerify !== undefined ? { verify: focusVerify } : {}),
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      postFocusError(message);
+      status.text = "Reef ✗ Agent Focus failed";
+      status.tooltip = message;
+      status.backgroundColor = new vscode.ThemeColor(
+        "statusBarItem.errorBackground",
+      );
+      status.show();
+      void vscode.window.showErrorMessage(
+        `Reef Agent Focus: could not run the governed session at ${base} (${message})`,
+      );
+      return { error: message };
+    }
+  };
+
   const runMcpDemo = async (mode: "allowed" | "denied"): Promise<void> => {
     const denied = mode === "denied";
     const task = denied
@@ -765,6 +1029,65 @@ export function activate(context: vscode.ExtensionContext): void {
       tone: "ok",
       message: `Governed spec transition sealed: ${result.sessionId ?? "unknown"}`,
     });
+  };
+
+  const openAgentFocusPanel = (): void => {
+    if (agentFocusPanel === undefined) {
+      agentFocusPanel = vscode.window.createWebviewPanel(
+        "reef.agentFocus",
+        "Reef Agent Focus",
+        vscode.ViewColumn.Active,
+        { enableScripts: true, retainContextWhenHidden: true },
+      );
+      agentFocusPanel.webview.html = agentFocusWebviewHtml(
+        agentFocusPanel.webview.cspSource,
+        agentFocusPanel.webview
+          .asWebviewUri(
+            vscode.Uri.joinPath(
+              context.extensionUri,
+              "media",
+              "agent-focus.js",
+            ),
+          )
+          .toString(),
+      );
+      agentFocusPanel.onDidDispose(() => {
+        agentFocusPanel = undefined;
+        focusAbort?.abort();
+      });
+      agentFocusPanel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+        void (async () => {
+          try {
+            if (message.kind === "agentFocusReady") {
+              postFocusState(currentFocusView());
+              await postFocusUsage().catch(() => undefined);
+            } else if (
+              message.kind === "runFocusTask" &&
+              typeof message.task === "string" &&
+              message.task.trim() !== ""
+            ) {
+              if (focusRun !== undefined) return;
+              focusRun = runFocusTask(message.task).finally(() => {
+                focusRun = undefined;
+              });
+              await focusRun;
+            } else if (message.kind === "focusToWindow") {
+              await moveAgentFocus("focus");
+            } else if (message.kind === "focusToIde") {
+              await moveAgentFocus("ide");
+            } else if (message.kind === "verifyFocus") {
+              await verifyFocusSession();
+            } else if (message.kind === "refreshFocusUsage") {
+              await postFocusUsage();
+            }
+          } catch (err) {
+            postFocusError(err instanceof Error ? err.message : String(err));
+          }
+        })();
+      });
+    }
+    agentFocusPanel.reveal(vscode.ViewColumn.Active);
+    postFocusState(currentFocusView());
   };
 
   const openWelcomePanel = (): void => {
@@ -1158,6 +1481,21 @@ export function activate(context: vscode.ExtensionContext): void {
     openWelcomePanel();
   });
 
+  const agentFocus = vscode.commands.registerCommand(
+    "reef.openAgentFocus",
+    async () => {
+      openAgentFocusPanel();
+      await moveAgentFocus("focus");
+    },
+  );
+
+  const verifyAgentFocus = vscode.commands.registerCommand(
+    "reef.verifyAgentFocus",
+    async () => {
+      await verifyFocusSession(true);
+    },
+  );
+
   const powers = vscode.commands.registerCommand(
     "reef.openPowers",
     async () => {
@@ -1287,6 +1625,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const verify = vscode.commands.registerCommand(
     "reef.verifySession",
     async () => {
+      if (agentFocusPanel?.visible === true && focusSessionId !== undefined) {
+        await verifyFocusSession(true);
+        return;
+      }
       if (specsPanel?.visible === true && activeSpecId !== undefined) {
         const v = await verifySpec(activeServerUrl, activeSpecId);
         setSpecStatus(status, v);
@@ -1368,6 +1710,8 @@ export function activate(context: vscode.ExtensionContext): void {
     status,
     run,
     welcome,
+    agentFocus,
+    verifyAgentFocus,
     powers,
     specs,
     usage,
@@ -1382,6 +1726,7 @@ export function activate(context: vscode.ExtensionContext): void {
     {
       dispose: () => {
         abort?.abort();
+        focusAbort?.abort();
         daemon?.kill();
       },
     },
