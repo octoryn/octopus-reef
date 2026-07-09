@@ -27,7 +27,7 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
   .icon-btn:hover{border-color:var(--line2);color:var(--ink)}
   .tab-actions{display:flex;align-items:center;gap:8px}
   main{min-height:0;overflow:auto;padding:22px 20px 18px}
-  .empty{min-height:100%;display:grid;place-items:center;padding:16px 0 28px}
+  .empty{min-height:100%;display:grid;place-items:start center;padding:30px 0 28px}
   .empty-inner{width:min(720px,100%);display:grid;justify-items:center;text-align:center}
   .logo{width:132px;height:132px;margin-bottom:27px}
   .logo svg{width:100%;height:100%;display:block}
@@ -89,7 +89,7 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
   .usage b{display:block;color:var(--signal);font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis}
   .usage span{display:block;margin-top:2px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   @media (max-width:760px){h1{font-size:34px}.turn-body{grid-template-columns:1fr}.composer form{grid-template-columns:auto auto 1fr auto}.model,.toggle{grid-column:1 / -1;width:max-content}.usage{grid-template-columns:1fr 1fr}.evidence{grid-template-columns:28px 56px 1fr}.evidence span:last-child{display:none}}
-  @media (max-height:820px){.empty{place-items:start center}.logo{width:94px;height:94px;margin-bottom:14px}.subtitle{margin-bottom:18px}.shortcuts{gap:8px}.shortcut{padding:10px 12px}.diffline{margin-top:15px}}
+  @media (max-height:820px){.empty{padding-top:24px}.logo{width:94px;height:94px;margin-bottom:14px}.subtitle{margin-bottom:18px}.shortcuts{gap:8px}.shortcut{padding:10px 12px}.diffline{margin-top:15px}}
 </style>
 </head>
 <body>
