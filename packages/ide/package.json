@@ -94,14 +94,14 @@
     ],
     "themes": [
       {
-        "id": "Reef Dark",
+        "id": "octopus-reef.dark",
         "label": "Reef Dark",
         "uiTheme": "vs-dark",
         "path": "./themes/reef-dark-color-theme.json"
       }
     ],
     "configurationDefaults": {
-      "workbench.colorTheme": "Reef Dark"
+      "workbench.colorTheme": "octopus-reef.dark"
     },
     "chatParticipants": [
       {

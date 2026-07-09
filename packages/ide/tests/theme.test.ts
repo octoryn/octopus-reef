@@ -14,17 +14,19 @@ function readJson(relativePath: string): any {
 test("theme: Reef Dark is shipped and contributed as the default", () => {
   const pkg = readJson("package.json");
   const themes = pkg.contributes?.themes ?? [];
-  const reefTheme = themes.find((theme: any) => theme.id === "Reef Dark");
+  const reefTheme = themes.find(
+    (theme: any) => theme.id === "octopus-reef.dark",
+  );
 
   assert.deepEqual(reefTheme, {
-    id: "Reef Dark",
+    id: "octopus-reef.dark",
     label: "Reef Dark",
     uiTheme: "vs-dark",
     path: "./themes/reef-dark-color-theme.json",
   });
   assert.equal(
     pkg.contributes?.configurationDefaults?.["workbench.colorTheme"],
-    "Reef Dark",
+    "octopus-reef.dark",
   );
 });
 
