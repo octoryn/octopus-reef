@@ -8,10 +8,17 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "reef-gateway-stub": "dist/stub-bin.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./stub": {
+      "types": "./dist/stub-gateway.d.ts",
+      "default": "./dist/stub-gateway.js"
     }
   },
   "scripts": {

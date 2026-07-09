@@ -251,11 +251,13 @@ function modelSettings():
   const apiKey = config.get<string>("model.apiKey", "").trim();
   const name = config.get<string>("model.name", "").trim();
   const licenseToken = config.get<string>("gateway.licenseToken", "").trim();
+  const gatewayUrl = config.get<string>("gateway.url", "").trim();
   const model = {
     ...(provider !== "" ? { provider } : {}),
     ...(apiKey !== "" ? { apiKey } : {}),
     ...(name !== "" ? { name } : {}),
     ...(licenseToken !== "" ? { licenseToken } : {}),
+    ...(gatewayUrl !== "" ? { gatewayUrl } : {}),
   };
   return Object.keys(model).length > 0 ? model : undefined;
 }

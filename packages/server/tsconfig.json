@@ -7,7 +7,8 @@
   "references": [
     { "path": "../engine" },
     { "path": "../protocol" },
-    { "path": "../agent" }
+    { "path": "../agent" },
+    { "path": "../commercial" }
   ],
   "include": ["src/**/*.ts"]
 }

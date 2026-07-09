@@ -50,6 +50,15 @@ import {
   BedrockProvider,
   type ModelProvider,
 } from "@octopus-reef/agent";
+import {
+  GatewayProvider,
+  gatewayEntitlementDecision,
+  gatewayQuotaDecision,
+  gatewayRouteDecision,
+  type GatewayEntitlementDecision,
+  type GatewayQuotaDecision,
+  type GatewayRouteDecision,
+} from "@octopus-reef/commercial";
 import type { JsonValue } from "octopus-evidence";
 import type {
   AddCustomSteeringRequest,
@@ -319,6 +328,62 @@ class HookDriver implements Driver {
   }
 }
 
+class GatewayGovernanceDriver implements Driver {
+  readonly name: string;
+  readonly #inner: Driver | undefined;
+  readonly #entitlement: GatewayEntitlementDecision;
+  readonly #quota: GatewayQuotaDecision;
+  readonly #route: GatewayRouteDecision | undefined;
+  readonly #failure: string | undefined;
+
+  constructor(options: {
+    readonly inner?: Driver;
+    readonly entitlement: GatewayEntitlementDecision;
+    readonly quota: GatewayQuotaDecision;
+    readonly route?: GatewayRouteDecision;
+    readonly failure?: string;
+  }) {
+    this.#inner = options.inner;
+    this.#entitlement = options.entitlement;
+    this.#quota = options.quota;
+    this.#route = options.route;
+    this.#failure = options.failure;
+    this.name =
+      options.inner === undefined
+        ? "gateway-governance"
+        : `${options.inner.name}+gateway`;
+  }
+
+  async *run(ctx: DriverContext): AsyncIterable<DriverStep> {
+    yield {
+      type: "observe",
+      summary: `gateway entitlement decision: ${this.#entitlement.allowed ? "allowed" : "denied"}`,
+      data: { entitlementDecision: this.#entitlement },
+    };
+    yield {
+      type: "observe",
+      summary: `gateway quota decision: ${this.#quota.allowed ? "allowed" : "denied"}`,
+      data: { quotaDecision: this.#quota },
+    };
+    if (this.#failure !== undefined) {
+      yield { type: "fail", summary: this.#failure };
+      return;
+    }
+    if (this.#route !== undefined) {
+      yield {
+        type: "observe",
+        summary: `gateway route selected: ${this.#route.route}`,
+        data: { gatewayRoute: this.#route, task: ctx.task },
+      };
+    }
+    if (this.#inner === undefined) {
+      yield { type: "fail", summary: "gateway provider was not configured" };
+      return;
+    }
+    yield* this.#inner.run(ctx);
+  }
+}
+
 export interface DriverFactoryContext {
   readonly task: string;
   readonly workspaceRoot?: string;
@@ -327,6 +392,7 @@ export interface DriverFactoryContext {
     readonly apiKey?: string;
     readonly name?: string;
     readonly licenseToken?: string;
+    readonly gatewayUrl?: string;
   };
   readonly edition: ReefEdition;
 }
@@ -439,6 +505,7 @@ function sessionContext(
     ...maybe("apiKey", optionalString(modelBody?.apiKey)),
     ...maybe("name", optionalString(modelBody?.name)),
     ...maybe("licenseToken", optionalString(modelBody?.licenseToken)),
+    ...maybe("gatewayUrl", optionalString(modelBody?.gatewayUrl)),
   };
   return {
     task,
@@ -466,13 +533,7 @@ function defaultRuntime(context: DriverFactoryContext): SessionRuntime {
     "auto"
   ).toLowerCase();
   if (requested === "gateway") {
-    return {
-      driver: new ConfigurationFailureDriver(
-        context.edition === "commercial"
-          ? "gateway provider requires a licensed C1 entitlement path"
-          : "gateway provider is not available in the community edition",
-      ),
-    };
+    return gatewayRuntime(context);
   }
   const providerName = selectProvider(requested, context.model?.apiKey);
   if (providerName === "mock") return { driver: new MockDriver() };
@@ -496,6 +557,76 @@ function defaultRuntime(context: DriverFactoryContext): SessionRuntime {
     authorizer: reefAllowlist({ commands: DEFAULT_REAL_COMMANDS }),
     executor,
     cleanup: () => executor.dispose(),
+  };
+}
+
+function gatewayRuntime(context: DriverFactoryContext): SessionRuntime {
+  if (context.edition !== "commercial") {
+    return {
+      driver: new ConfigurationFailureDriver(
+        "gateway provider is not available in the community edition",
+      ),
+    };
+  }
+
+  const licenseToken =
+    context.model?.licenseToken ??
+    optionalString(process.env.REEF_LICENSE_TOKEN) ??
+    optionalString(process.env.REEF_ENTITLEMENT_TOKEN);
+  const entitlement = gatewayEntitlementDecision(
+    licenseToken === undefined ? {} : { licenseToken },
+  );
+  const quota = gatewayQuotaDecision({
+    entitlementAllowed: entitlement.allowed,
+  });
+  if (!entitlement.allowed || licenseToken === undefined) {
+    return {
+      driver: new GatewayGovernanceDriver({
+        entitlement,
+        quota,
+        failure: "gateway provider denied: entitlement missing",
+      }),
+    };
+  }
+  if (!quota.allowed) {
+    return {
+      driver: new GatewayGovernanceDriver({
+        entitlement,
+        quota,
+        failure: `gateway provider denied: ${quota.reason}`,
+      }),
+    };
+  }
+
+  const gatewayUrl =
+    context.model?.gatewayUrl ?? optionalString(process.env.REEF_GATEWAY_URL);
+  if (gatewayUrl === undefined) {
+    return {
+      driver: new GatewayGovernanceDriver({
+        entitlement,
+        quota,
+        failure: "gateway provider denied: REEF_GATEWAY_URL is not configured",
+      }),
+    };
+  }
+
+  const route = gatewayRouteDecision({
+    gatewayUrl,
+    licenseToken,
+    ...(context.model?.name !== undefined ? { model: context.model.name } : {}),
+  });
+  const provider = new GatewayProvider({
+    gatewayUrl,
+    licenseToken,
+    ...(context.model?.name !== undefined ? { model: context.model.name } : {}),
+  });
+  return {
+    driver: new GatewayGovernanceDriver({
+      inner: new AgentWorker({ provider, maxTurns: 2 }),
+      entitlement,
+      quota,
+      route,
+    }),
   };
 }
 

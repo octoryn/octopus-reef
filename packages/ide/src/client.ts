@@ -71,6 +71,7 @@ export interface CreateSessionOptions {
     readonly apiKey?: string;
     readonly name?: string;
     readonly licenseToken?: string;
+    readonly gatewayUrl?: string;
   };
   readonly mcp?: {
     readonly serverId?: string;

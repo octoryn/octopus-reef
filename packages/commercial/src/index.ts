@@ -1,13 +1,100 @@
+import { createHash } from "node:crypto";
+import type { CompletionRequest, ModelUsage } from "@octopus-reef/agent";
+import { ProviderError, type CompletionResponse } from "@octopus-reef/agent";
+
 export type ReefEdition = "community" | "commercial";
 
 export const COMMERCIAL_COMMAND = "reef.openCommercial";
 export const COMMERCIAL_COMMAND_TITLE = "Reef: Commercial";
 export const GATEWAY_PROVIDER_NAME = "gateway";
+export const TEST_GATEWAY_LICENSE_TOKEN = "reef-test-license";
 
 export interface EntitlementStatus {
   readonly state: "licensed" | "missing";
   readonly source: "local-env" | "not-configured";
   readonly summary: string;
+}
+
+export interface GatewayEntitlementDecision {
+  readonly allowed: boolean;
+  readonly source: "local-license" | "not-configured";
+  readonly licenseSha256?: string;
+  readonly reason: string;
+}
+
+export interface GatewayQuotaDecision {
+  readonly allowed: boolean;
+  readonly source: "local-stub" | "gateway-policy";
+  readonly remainingRequests?: number;
+  readonly reason: string;
+}
+
+export interface GatewayRouteDecision {
+  readonly provider: "gateway";
+  readonly gatewayUrl: string;
+  readonly route: string;
+  readonly model: string;
+  readonly licenseSha256: string;
+}
+
+export interface GatewayProviderOptions {
+  readonly gatewayUrl: string;
+  readonly licenseToken: string;
+  readonly model?: string;
+  readonly fetchImpl?: typeof fetch;
+}
+
+export class GatewayProvider {
+  readonly name = GATEWAY_PROVIDER_NAME;
+  readonly #gatewayUrl: string;
+  readonly #licenseToken: string;
+  readonly #model: string;
+  readonly #fetch: typeof fetch;
+
+  constructor(options: GatewayProviderOptions) {
+    this.#gatewayUrl = trimTrailingSlash(options.gatewayUrl);
+    this.#licenseToken = options.licenseToken;
+    this.#model = options.model ?? "reef-gateway-stub";
+    this.#fetch = options.fetchImpl ?? fetch;
+  }
+
+  async complete(request: CompletionRequest): Promise<CompletionResponse> {
+    if (this.#licenseToken.trim() === "") {
+      throw new ProviderError("gateway license token is required");
+    }
+    const res = await this.#fetch(`${this.#gatewayUrl}/v1/completions`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.#licenseToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: this.#model,
+        request,
+      }),
+    });
+    if (!res.ok) {
+      let detail = `${res.status} ${res.statusText}`;
+      try {
+        const body = (await res.json()) as { error?: unknown };
+        if (typeof body.error === "string") detail = body.error;
+      } catch {
+        /* keep HTTP status */
+      }
+      throw new ProviderError(`gateway request failed: ${detail}`);
+    }
+    const body = (await res.json()) as CompletionResponse & {
+      readonly usage?: ModelUsage;
+    };
+    if (!Array.isArray(body.content) || typeof body.stopReason !== "string") {
+      throw new ProviderError("gateway returned an invalid completion");
+    }
+    return {
+      content: body.content,
+      stopReason: body.stopReason,
+      ...(body.usage !== undefined ? { usage: body.usage } : {}),
+    };
+  }
 }
 
 export interface CommercialSurfaceStatus {
@@ -39,6 +126,57 @@ export function resolveEntitlementStatus(options: {
     state: "licensed",
     source: "local-env",
     summary: "Local license token is configured.",
+  };
+}
+
+export function gatewayEntitlementDecision(options: {
+  readonly licenseToken?: string;
+}): GatewayEntitlementDecision {
+  const token = clean(options.licenseToken);
+  if (token === undefined) {
+    return {
+      allowed: false,
+      source: "not-configured",
+      reason: "No Reef commercial license token was provided.",
+    };
+  }
+  return {
+    allowed: true,
+    source: "local-license",
+    licenseSha256: sha256(token),
+    reason: "A local Reef commercial license token was provided.",
+  };
+}
+
+export function gatewayQuotaDecision(options: {
+  readonly entitlementAllowed: boolean;
+}): GatewayQuotaDecision {
+  if (!options.entitlementAllowed) {
+    return {
+      allowed: false,
+      source: "local-stub",
+      reason: "Quota denied because entitlement was denied.",
+    };
+  }
+  return {
+    allowed: true,
+    source: "local-stub",
+    remainingRequests: 999,
+    reason: "Offline stub quota permits this request.",
+  };
+}
+
+export function gatewayRouteDecision(options: {
+  readonly gatewayUrl: string;
+  readonly model?: string;
+  readonly licenseToken: string;
+}): GatewayRouteDecision {
+  return {
+    provider: "gateway",
+    gatewayUrl: trimTrailingSlash(options.gatewayUrl),
+    route: "/v1/completions",
+    model: options.model ?? "reef-gateway-stub",
+    licenseSha256: sha256(options.licenseToken),
   };
 }
 
@@ -126,6 +264,14 @@ export function commercialWebviewHtml(
 function clean(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
 }
 
 function escapeHtml(value: string): string {

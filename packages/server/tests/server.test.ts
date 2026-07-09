@@ -10,6 +10,8 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentWorker, type ModelProvider } from "@octopus-reef/agent";
+import { TEST_GATEWAY_LICENSE_TOKEN } from "@octopus-reef/commercial";
+import { startStubGateway } from "@octopus-reef/commercial/stub";
 import { WorkspaceExecutor, reefAllowlist } from "@octopus-reef/engine";
 import { ReefServer } from "../src/index.js";
 import type { ServerEvent } from "@octopus-reef/protocol";
@@ -469,6 +471,189 @@ test("C0: edition split reports flavor and community rejects gateway provider", 
     assert.equal(edition.json.commercialSurfaces.gated, true);
   } finally {
     await commercial.close();
+  }
+});
+
+test("C1: commercial gateway records entitlement, quota, route evidence and denies no-license", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-c1-gateway-"));
+  const gateway = await startStubGateway();
+  const server = new ReefServer({ persistDir: dir, edition: "commercial" });
+  const port = await server.listen(0);
+  try {
+    const created = await request(port, "POST", "/sessions", {
+      task: "C1 commercial session routes through gateway stub",
+      persist: true,
+      model: {
+        provider: "gateway",
+        gatewayUrl: gateway.url,
+        licenseToken: TEST_GATEWAY_LICENSE_TOKEN,
+        name: "reef-gateway-stub",
+      },
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.id as string;
+    const frames = await collectSSE(port, `/sessions/${id}/events`);
+    const sealed = frames.at(-1);
+    assert.equal(sealed?.type, "sealed");
+    if (sealed?.type === "sealed") {
+      assert.equal(sealed.snapshot.outcome, "completed");
+      assert.equal(sealed.verify.ok, true);
+    }
+
+    const entitlement = frames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "observation" &&
+        (frame.event.data.entitlementDecision as { allowed?: boolean } | undefined)
+          ?.allowed === true,
+    );
+    assert.ok(entitlement, "entitlement decision should be evidence");
+    if (entitlement?.type === "event") {
+      assert.match(entitlement.event.evidenceId, /^ev_[a-f0-9]{64}$/);
+      assert.match(
+        (
+          entitlement.event.data.entitlementDecision as {
+            licenseSha256?: string;
+          }
+        ).licenseSha256 ?? "",
+        /^[a-f0-9]{64}$/,
+      );
+    }
+
+    const quota = frames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "observation" &&
+        (frame.event.data.quotaDecision as { allowed?: boolean } | undefined)
+          ?.allowed === true,
+    );
+    assert.ok(quota, "quota decision should be evidence");
+
+    const route = frames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "observation" &&
+        (frame.event.data.gatewayRoute as { route?: string } | undefined)
+          ?.route === "/v1/completions",
+    );
+    assert.ok(route, "gateway route should be evidence");
+    if (route?.type === "event") {
+      assert.match(route.event.evidenceId, /^ev_[a-f0-9]{64}$/);
+      assert.equal(
+        (route.event.data.gatewayRoute as { gatewayUrl?: string }).gatewayUrl,
+        gateway.url,
+      );
+    }
+
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (frame.event.data.modelUsage as { totalTokens?: number } | undefined)
+            ?.totalTokens === 36,
+      ),
+      "gateway provider usage should be normalized into evidence",
+    );
+
+    const before = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(before.status, 200);
+    assert.equal(before.json.ok, true);
+
+    const logPath = join(dir, id, "session.log.jsonl");
+    const raw = readFileSync(logPath);
+    const offset = raw.indexOf(Buffer.from("gateway route selected"));
+    assert.ok(offset >= 0, "gateway route evidence should contain flippable text");
+    raw[offset] = raw[offset] === 0x67 ? 0x68 : 0x67;
+    writeFileSync(logPath, raw);
+
+    const after = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(after.status, 200);
+    assert.equal(after.json.ok, false);
+    assert.match(after.json.log, /broken/i);
+
+    const noLicense = await request(port, "POST", "/sessions", {
+      task: "C1 commercial gateway denied without license",
+      persist: true,
+      model: {
+        provider: "gateway",
+        gatewayUrl: gateway.url,
+      },
+    });
+    assert.equal(noLicense.status, 201);
+    const deniedFrames = await collectSSE(
+      port,
+      `/sessions/${noLicense.json.id}/events`,
+    );
+    assert.ok(
+      deniedFrames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (frame.event.data.entitlementDecision as
+            | { allowed?: boolean }
+            | undefined)?.allowed === false,
+      ),
+      "no-license denial should record entitlement evidence",
+    );
+    assert.ok(
+      deniedFrames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (frame.event.data.quotaDecision as { allowed?: boolean } | undefined)
+            ?.allowed === false,
+      ),
+      "no-license denial should record quota evidence",
+    );
+    assert.equal(
+      deniedFrames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          frame.event.data.gatewayRoute !== undefined,
+      ),
+      false,
+      "denied no-license session must not record a gateway route",
+    );
+  } finally {
+    await server.close();
+    await gateway.close();
+  }
+
+  const community = new ReefServer({ edition: "community" });
+  const communityPort = await community.listen(0);
+  try {
+    const created = await request(communityPort, "POST", "/sessions", {
+      task: "C1 community cannot reach gateway path",
+      model: {
+        provider: "gateway",
+        gatewayUrl: "http://127.0.0.1:1",
+        licenseToken: TEST_GATEWAY_LICENSE_TOKEN,
+      },
+    });
+    assert.equal(created.status, 201);
+    const frames = await collectSSE(
+      communityPort,
+      `/sessions/${created.json.id}/events`,
+    );
+    const sealed = frames.at(-1);
+    assert.equal(sealed?.type, "sealed");
+    if (sealed?.type === "sealed") {
+      assert.equal(sealed.snapshot.outcome, "failed");
+    }
+    assert.equal(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          frame.event.data.gatewayRoute !== undefined,
+      ),
+      false,
+      "community build cannot record or reach a gateway route",
+    );
+  } finally {
+    await community.close();
   }
 });
 
