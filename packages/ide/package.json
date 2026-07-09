@@ -13,7 +13,8 @@
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Themes"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -91,6 +92,17 @@
         "category": "Reef"
       }
     ],
+    "themes": [
+      {
+        "id": "Reef Dark",
+        "label": "Reef Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/reef-dark-color-theme.json"
+      }
+    ],
+    "configurationDefaults": {
+      "workbench.colorTheme": "Reef Dark"
+    },
     "chatParticipants": [
       {
         "id": "octopus-reef.ide.reef",
