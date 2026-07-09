@@ -30,7 +30,7 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
   .empty{min-height:100%;display:grid;place-items:start center;padding:30px 0 28px}
   .empty-inner{width:min(720px,100%);display:grid;justify-items:center;text-align:center;padding-top:64px}
   .logo{width:88px;height:88px;margin-bottom:27px}
-  .logo svg{width:100%;height:100%;display:block}
+  .logo svg{width:100%;height:100%;display:block;overflow:visible;transform:translateY(42px) scale(.72);transform-origin:top center}
   h1{margin:0;font-size:44px;line-height:1.04;font-weight:780;letter-spacing:0}
   h1 span{color:var(--signal)}
   .subtitle{margin:15px 0 31px;color:#c8d2dc;font-size:16px;line-height:1.5}
