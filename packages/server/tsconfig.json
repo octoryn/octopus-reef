@@ -4,6 +4,10 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "references": [{ "path": "../engine" }, { "path": "../protocol" }],
+  "references": [
+    { "path": "../engine" },
+    { "path": "../protocol" },
+    { "path": "../agent" }
+  ],
   "include": ["src/**/*.ts"]
 }
