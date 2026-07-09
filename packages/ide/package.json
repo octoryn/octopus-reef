@@ -41,6 +41,11 @@
         "category": "Reef"
       },
       {
+        "command": "reef.openUsage",
+        "title": "Reef: Usage",
+        "category": "Reef"
+      },
+      {
         "command": "reef.runMcpDemo",
         "title": "Reef: Run MCP Demo",
         "category": "Reef"

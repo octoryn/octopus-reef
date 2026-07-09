@@ -407,6 +407,95 @@ test("N5: installs an MCP power, records a governed tool call, and denies an una
   }
 });
 
+test("N6: usage endpoint aggregates persisted provider usage and labelled cost", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-n6-usage-"));
+  const provider: ModelProvider = {
+    name: "scripted-usage",
+    complete: () =>
+      Promise.resolve({
+        content: [
+          {
+            type: "tool_use",
+            id: "d1",
+            name: "done",
+            input: { summary: "usage recorded" },
+          },
+        ],
+        stopReason: "tool_use",
+        usage: {
+          provider: "anthropic",
+          model: "claude-test",
+          inputTokens: 1000,
+          outputTokens: 2000,
+          totalTokens: 3000,
+        },
+      }),
+  };
+  const writingServer = new ReefServer({
+    persistDir: dir,
+    driverFactory: () => ({
+      driver: new AgentWorker({ provider, maxTurns: 2 }),
+      authorizer: reefAllowlist(),
+      executor: new WorkspaceExecutor(dir),
+    }),
+  });
+  const writingPort = await writingServer.listen(0);
+  try {
+    const created = await request(writingPort, "POST", "/sessions", {
+      task: "N6 provider usage aggregation",
+      persist: true,
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.id as string;
+    const frames = await collectSSE(writingPort, `/sessions/${id}/events`);
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (frame.event.data.modelUsage as { totalTokens?: number } | undefined)
+            ?.totalTokens === 3000,
+      ),
+      "provider usage should be persisted as evidence",
+    );
+  } finally {
+    await writingServer.close();
+  }
+
+  const readingServer = new ReefServer({ persistDir: dir });
+  const readingPort = await readingServer.listen(0);
+  try {
+    const usage = await request(readingPort, "GET", "/usage");
+    assert.equal(usage.status, 200);
+    assert.equal(usage.json.totals.calls, 1);
+    assert.equal(usage.json.totals.inputTokens, 1000);
+    assert.equal(usage.json.totals.outputTokens, 2000);
+    assert.equal(usage.json.totals.totalTokens, 3000);
+    assert.equal(usage.json.totals.costUsd, 0.007);
+    assert.equal(usage.json.sessions.length, 1);
+    assert.equal(usage.json.sessions[0].totals.costUsd, 0.007);
+    assert.equal(usage.json.byModel[0].provider, "anthropic");
+    assert.equal(usage.json.byModel[0].model, "claude-test");
+    assert.equal(usage.json.byModel[0].priceStatus, "priced");
+    assert.match(
+      usage.json.byModel[0].costSource,
+      /injected-provider test price table/,
+    );
+    assert.deepEqual(
+      usage.json.remaining.map((entry: { provider: string; status: string }) => [
+        entry.provider,
+        entry.status,
+      ]),
+      [
+        ["anthropic", "pending-key"],
+        ["bedrock", "not-available"],
+      ],
+    );
+  } finally {
+    await readingServer.close();
+  }
+});
+
 test("N2: creates a spec, advances workstate through governance, rejects illegal moves, and detects tamper", async () => {
   const dir = mkdtempSync(join(tmpdir(), "reef-n2-specs-"));
   const server = new ReefServer({ persistDir: dir });

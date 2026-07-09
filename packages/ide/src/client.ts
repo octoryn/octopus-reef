@@ -14,6 +14,7 @@ import type {
   SpecListResponse,
   SpecView,
   SpecVerifyResult,
+  UsageSummaryResponse,
 } from "@octopus-reef/protocol";
 
 export type { ServerEvent };
@@ -246,6 +247,10 @@ export async function verifySpec(
   return await jsonRequest<SpecVerifyResult>(
     `${baseUrl}/specs/${encodeURIComponent(id)}/verify`,
   );
+}
+
+export async function getUsage(baseUrl: string): Promise<UsageSummaryResponse> {
+  return await jsonRequest<UsageSummaryResponse>(`${baseUrl}/usage`);
 }
 
 /** Re-verify a sealed session through the daemon. */

@@ -184,3 +184,57 @@ Implement and verify</textarea></label>
 </body>
 </html>`;
 }
+
+export function usageWebviewHtml(
+  cspSource: string,
+  scriptUri: string,
+): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource};" />
+<style>
+  :root{--deep:#091315;--panel:#0f1d20;--panel2:#132529;--line:#214044;--ink:#edf6f4;--muted:#86a5a5;--signal:#3de0be;--warn:#ffd166;--danger:#ff6b6b;--blue:#8bb8ff;--mono:ui-monospace,Menlo,monospace}
+  body{margin:0;background:var(--deep);color:var(--ink);font-family:var(--mono);font-size:13px}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header b{color:var(--signal)}
+  main{padding:16px;display:grid;gap:16px}
+  h2{font-size:12px;letter-spacing:0;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+  .totals{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px}
+  .tile{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;min-height:66px}
+  .label{color:var(--muted);font-size:12px}.value{font-size:19px;color:var(--ink);margin-top:6px}
+  .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:14px}
+  .list{display:grid;gap:8px}.row{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:10px;display:grid;gap:6px}
+  .top{display:flex;justify-content:space-between;gap:10px}.name{font-weight:700}.meta{color:var(--muted);font-size:12px}
+  .pill{border:1px solid var(--line);border-radius:999px;padding:2px 8px;color:var(--muted);white-space:nowrap}
+  .pill.ok{color:var(--signal);border-color:rgba(61,224,190,.5)}.pill.warn{color:var(--warn);border-color:rgba(255,209,102,.55)}
+  .pill.bad{color:var(--danger);border-color:rgba(255,107,107,.55)}
+  button{background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;font-weight:700;padding:7px 10px}
+  .status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
+  .status.ok{border-color:var(--signal);color:var(--signal)}.status.bad{border-color:var(--danger);color:var(--danger)}.status.warn{border-color:var(--warn);color:var(--warn)}
+  @media (max-width:880px){.grid,.totals{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><div><b>&#x259A; reef</b> usage</div><button id="refresh" type="button">Refresh</button></header>
+<main>
+  <section>
+    <h2>Used</h2>
+    <div id="totals" class="totals"></div>
+  </section>
+  <section class="grid">
+    <div><h2>Sessions</h2><div id="sessions" class="list"></div></div>
+    <div><h2>Providers</h2><div id="providers" class="list"></div></div>
+  </section>
+  <section>
+    <h2>Remaining</h2>
+    <div id="remaining" class="list"></div>
+  </section>
+  <div id="status" class="status">Waiting for usage.</div>
+</main>
+<script src="${scriptUri}"></script>
+</body>
+</html>`;
+}

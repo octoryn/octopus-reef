@@ -209,3 +209,72 @@ export interface AdvanceSpecResponse {
   readonly transition: SpecTransitionView;
   readonly spec: SpecView;
 }
+
+export interface ModelUsageView {
+  readonly provider: string;
+  readonly model: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheCreationInputTokens: number;
+  readonly cacheReadInputTokens: number;
+  readonly totalTokens: number;
+}
+
+export interface UsageCallView extends ModelUsageView {
+  readonly sessionId: string;
+  readonly task: string;
+  readonly evidenceId: string;
+  readonly seq: number;
+  readonly at: string;
+  readonly costUsd?: number;
+  readonly costSource?: string;
+  readonly priceStatus: "priced" | "unpriced";
+}
+
+export interface UsageTotalsView {
+  readonly calls: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheCreationInputTokens: number;
+  readonly cacheReadInputTokens: number;
+  readonly totalTokens: number;
+  readonly costUsd?: number;
+}
+
+export interface UsageProviderTotalsView extends UsageTotalsView {
+  readonly provider: string;
+}
+
+export interface UsageModelTotalsView extends UsageTotalsView {
+  readonly provider: string;
+  readonly model: string;
+  readonly costSource?: string;
+  readonly priceStatus: "priced" | "partial" | "unpriced";
+}
+
+export interface UsageSessionView {
+  readonly id: string;
+  readonly task: string;
+  readonly totals: UsageTotalsView;
+  readonly calls: readonly UsageCallView[];
+}
+
+export interface UsageRemainingView {
+  readonly provider: string;
+  readonly status: "available" | "pending-key" | "not-available" | "error";
+  readonly source: string;
+  readonly message: string;
+  readonly amountUsd?: number;
+  readonly limitUsd?: number;
+  readonly resetAt?: string;
+}
+
+/** `GET /usage` — honest BYOK usage from persisted session evidence. */
+export interface UsageSummaryResponse {
+  readonly generatedAt: string;
+  readonly sessions: readonly UsageSessionView[];
+  readonly totals: UsageTotalsView;
+  readonly byProvider: readonly UsageProviderTotalsView[];
+  readonly byModel: readonly UsageModelTotalsView[];
+  readonly remaining: readonly UsageRemainingView[];
+}

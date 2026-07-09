@@ -15,6 +15,7 @@ import {
   advanceSpec,
   createSession,
   createSpec,
+  getUsage,
   getSpec,
   installPower,
   listPowers,
@@ -24,7 +25,12 @@ import {
   verifySession,
   type ServerEvent,
 } from "./client.js";
-import { powersWebviewHtml, specsWebviewHtml, webviewHtml } from "./webview.js";
+import {
+  powersWebviewHtml,
+  specsWebviewHtml,
+  usageWebviewHtml,
+  webviewHtml,
+} from "./webview.js";
 import type { WorkState } from "@octopus-reef/protocol";
 
 type SessionEvent = Extract<ServerEvent, { type: "event" }>["event"];
@@ -434,6 +440,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let panel: vscode.WebviewPanel | undefined;
   let powersPanel: vscode.WebviewPanel | undefined;
   let specsPanel: vscode.WebviewPanel | undefined;
+  let usagePanel: vscode.WebviewPanel | undefined;
   let textSurface: ReefTextSurface | undefined;
   let abort: AbortController | undefined;
   let lastVerify: ServerEvent | undefined;
@@ -649,6 +656,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const refreshUsage = async (): Promise<void> => {
+    const usage = await getUsage(activeServerUrl);
+    void usagePanel?.webview.postMessage({ kind: "usage", usage });
+  };
+
   const runSpecAdvance = async (
     specId: string,
     itemId: string,
@@ -847,6 +859,42 @@ export function activate(context: vscode.ExtensionContext): void {
     specsPanel.reveal(vscode.ViewColumn.Beside);
   };
 
+  const openUsagePanel = (): void => {
+    if (usagePanel === undefined) {
+      usagePanel = vscode.window.createWebviewPanel(
+        "reef.usage",
+        "Reef Usage",
+        vscode.ViewColumn.Beside,
+        { enableScripts: true, retainContextWhenHidden: true },
+      );
+      usagePanel.webview.html = usageWebviewHtml(
+        usagePanel.webview.cspSource,
+        usagePanel.webview
+          .asWebviewUri(
+            vscode.Uri.joinPath(context.extensionUri, "media", "usage.js"),
+          )
+          .toString(),
+      );
+      usagePanel.onDidDispose(() => {
+        usagePanel = undefined;
+      });
+      usagePanel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+        void (async () => {
+          try {
+            if (message.kind === "getUsage") await refreshUsage();
+          } catch (err) {
+            void usagePanel?.webview.postMessage({
+              kind: "status",
+              tone: "bad",
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+        })();
+      });
+    }
+    usagePanel.reveal(vscode.ViewColumn.Beside);
+  };
+
   const run = vscode.commands.registerCommand("reef.runSession", async () => {
     const task = await vscode.window.showInputBox({
       prompt: "Describe the task for the governed session",
@@ -878,6 +926,19 @@ export function activate(context: vscode.ExtensionContext): void {
       await refreshSpecs();
     } catch (err) {
       void specsPanel?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  const usage = vscode.commands.registerCommand("reef.openUsage", async () => {
+    openUsagePanel();
+    try {
+      await refreshUsage();
+    } catch (err) {
+      void usagePanel?.webview.postMessage({
         kind: "status",
         tone: "bad",
         message: err instanceof Error ? err.message : String(err),
@@ -1024,6 +1085,7 @@ export function activate(context: vscode.ExtensionContext): void {
     run,
     powers,
     specs,
+    usage,
     mcpDemo,
     mcpDenyDemo,
     verify,

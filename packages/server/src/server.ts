@@ -67,6 +67,7 @@ import {
   type AdvanceSpecRequest,
   type CreateSpecRequest,
 } from "./specs.js";
+import { usageSummary } from "./usage.js";
 
 interface SessionRecord {
   readonly id: string;
@@ -503,6 +504,22 @@ export class ReefServer {
 
     if (method === "GET" && parts.length === 1 && parts[0] === "health") {
       return this.#json(res, 200, { ok: true });
+    }
+    if (method === "GET" && parts.length === 1 && parts[0] === "usage") {
+      return this.#json(
+        res,
+        200,
+        usageSummary({
+          ...(this.#options.persistDir !== undefined
+            ? { persistDir: this.#options.persistDir }
+            : {}),
+          sessions: [...this.#sessions.values()].map((rec) => ({
+            id: rec.id,
+            task: rec.task,
+            events: rec.events,
+          })),
+        }),
+      );
     }
     if (parts[0] === "powers") {
       if (method === "GET" && parts.length === 1) {
