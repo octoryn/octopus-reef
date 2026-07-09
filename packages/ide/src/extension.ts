@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import {
   addCustomPower,
+  addCustomSteering,
   advanceSpec,
   createSession,
   createSpec,
@@ -20,6 +21,8 @@ import {
   installPower,
   listPowers,
   listSpecs,
+  listSteering,
+  setActiveSteering,
   streamEvents,
   verifySpec,
   verifySession,
@@ -28,6 +31,7 @@ import {
 import {
   powersWebviewHtml,
   specsWebviewHtml,
+  steeringWebviewHtml,
   usageWebviewHtml,
   webviewHtml,
 } from "./webview.js";
@@ -97,6 +101,7 @@ interface WebviewMessage {
   readonly itemId?: string;
   readonly to?: string;
   readonly reason?: string;
+  readonly activeIds?: readonly string[];
 }
 
 class ReefTextSurface
@@ -440,6 +445,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let panel: vscode.WebviewPanel | undefined;
   let powersPanel: vscode.WebviewPanel | undefined;
   let specsPanel: vscode.WebviewPanel | undefined;
+  let steeringPanel: vscode.WebviewPanel | undefined;
   let usagePanel: vscode.WebviewPanel | undefined;
   let textSurface: ReefTextSurface | undefined;
   let abort: AbortController | undefined;
@@ -659,6 +665,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const refreshUsage = async (): Promise<void> => {
     const usage = await getUsage(activeServerUrl);
     void usagePanel?.webview.postMessage({ kind: "usage", usage });
+  };
+
+  const refreshSteering = async (): Promise<void> => {
+    const steering = await listSteering(activeServerUrl);
+    void steeringPanel?.webview.postMessage({ kind: "steering", steering });
   };
 
   const runSpecAdvance = async (
@@ -895,6 +906,71 @@ export function activate(context: vscode.ExtensionContext): void {
     usagePanel.reveal(vscode.ViewColumn.Beside);
   };
 
+  const openSteeringPanel = (): void => {
+    if (steeringPanel === undefined) {
+      steeringPanel = vscode.window.createWebviewPanel(
+        "reef.steering",
+        "Reef Steering",
+        vscode.ViewColumn.Beside,
+        { enableScripts: true, retainContextWhenHidden: true },
+      );
+      steeringPanel.webview.html = steeringWebviewHtml(
+        steeringPanel.webview.cspSource,
+        steeringPanel.webview
+          .asWebviewUri(
+            vscode.Uri.joinPath(context.extensionUri, "media", "steering.js"),
+          )
+          .toString(),
+      );
+      steeringPanel.onDidDispose(() => {
+        steeringPanel = undefined;
+      });
+      steeringPanel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+        void (async () => {
+          try {
+            if (message.kind === "listSteering") {
+              await refreshSteering();
+            } else if (
+              message.kind === "setActiveSteering" &&
+              Array.isArray(message.activeIds)
+            ) {
+              const steering = await setActiveSteering(activeServerUrl, {
+                activeIds: message.activeIds,
+              });
+              void steeringPanel?.webview.postMessage({
+                kind: "steering",
+                steering,
+              });
+            } else if (
+              message.kind === "addCustomSteering" &&
+              message.input !== undefined
+            ) {
+              await addCustomSteering(activeServerUrl, message.input);
+              await refreshSteering();
+            } else if (message.kind === "runSteeringDemo") {
+              const result = await runTask("N3 steered mock session");
+              void steeringPanel?.webview.postMessage({
+                kind: "status",
+                tone: result.error === undefined ? "ok" : "bad",
+                message:
+                  result.error === undefined
+                    ? `Steered session sealed: ${result.sessionId ?? "unknown"}`
+                    : result.error,
+              });
+            }
+          } catch (err) {
+            void steeringPanel?.webview.postMessage({
+              kind: "status",
+              tone: "bad",
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+        })();
+      });
+    }
+    steeringPanel.reveal(vscode.ViewColumn.Beside);
+  };
+
   const run = vscode.commands.registerCommand("reef.runSession", async () => {
     const task = await vscode.window.showInputBox({
       prompt: "Describe the task for the governed session",
@@ -945,6 +1021,22 @@ export function activate(context: vscode.ExtensionContext): void {
       });
     }
   });
+
+  const steering = vscode.commands.registerCommand(
+    "reef.openSteering",
+    async () => {
+      openSteeringPanel();
+      try {
+        await refreshSteering();
+      } catch (err) {
+        void steeringPanel?.webview.postMessage({
+          kind: "status",
+          tone: "bad",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
 
   const mcpDemo = vscode.commands.registerCommand(
     "reef.runMcpDemo",
@@ -1086,6 +1178,7 @@ export function activate(context: vscode.ExtensionContext): void {
     powers,
     specs,
     usage,
+    steering,
     mcpDemo,
     mcpDenyDemo,
     verify,

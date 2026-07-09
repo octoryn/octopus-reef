@@ -496,6 +496,98 @@ test("N6: usage endpoint aggregates persisted provider usage and labelled cost",
   }
 });
 
+test("N3: active steering is evidence-pinned, changes mock behavior, and detects tamper", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-n3-steering-"));
+  const server = new ReefServer({ persistDir: dir });
+  const port = await server.listen(0);
+  try {
+    const initial = await request(port, "GET", "/steering");
+    assert.equal(initial.status, 200);
+    assert.ok(
+      initial.json.available.some(
+        (item: { id: string; kind: string }) =>
+          item.id === "bug-fix" && item.kind === "skill",
+      ),
+      "built-in steering skills should be selectable",
+    );
+
+    const custom = await request(port, "POST", "/steering/custom", {
+      title: "N3 custom quick spec",
+      kind: "doc",
+      content: "Use the N3 custom steering doc to shape the mock run.",
+      mockEffect: "N3 custom steering changed the mock session.",
+    });
+    assert.equal(custom.status, 201);
+    const customId = custom.json.steering.id as string;
+    assert.equal(custom.json.steering.kind, "doc");
+    assert.match(custom.json.steering.contentSha256, /^[a-f0-9]{64}$/);
+
+    const active = await request(port, "POST", "/steering/active", {
+      activeIds: [customId],
+    });
+    assert.equal(active.status, 200);
+    assert.deepEqual(active.json.activeIds, [customId]);
+
+    const created = await request(port, "POST", "/sessions", {
+      task: "N3 steered mock session",
+      persist: true,
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.id as string;
+    const frames = await collectSSE(port, `/sessions/${id}/events`);
+    const applied = frames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "observation" &&
+        Array.isArray(
+          (
+            frame.event.data.steeringSet as
+              | { active?: unknown }
+              | undefined
+          )?.active,
+        ),
+    );
+    assert.ok(applied, "active steering set should be pinned into evidence");
+    if (applied?.type === "event") {
+      assert.match(applied.event.evidenceId, /^ev_[a-f0-9]{64}$/);
+      const pinned = (
+        applied.event.data.steeringSet as {
+          active: Array<{ id: string; contentSha256: string }>;
+        }
+      ).active[0];
+      assert.equal(pinned?.id, customId);
+      assert.match(pinned?.contentSha256 ?? "", /^[a-f0-9]{64}$/);
+    }
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "message" &&
+          frame.event.summary === "N3 custom steering changed the mock session.",
+      ),
+      "steering doc should change the mock session behavior",
+    );
+
+    const before = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(before.status, 200);
+    assert.equal(before.json.ok, true);
+
+    const logPath = join(dir, id, "session.log.jsonl");
+    const raw = readFileSync(logPath);
+    const offset = raw.indexOf(Buffer.from("N3 custom steering"));
+    assert.ok(offset >= 0, "steering evidence should contain a flippable byte");
+    raw[offset] = raw[offset] === 0x4e ? 0x4f : 0x4e;
+    writeFileSync(logPath, raw);
+
+    const after = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(after.status, 200);
+    assert.equal(after.json.ok, false);
+    assert.match(after.json.log, /broken/i);
+  } finally {
+    await server.close();
+  }
+});
+
 test("N2: creates a spec, advances workstate through governance, rejects illegal moves, and detects tamper", async () => {
   const dir = mkdtempSync(join(tmpdir(), "reef-n2-specs-"));
   const server = new ReefServer({ persistDir: dir });

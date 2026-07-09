@@ -72,6 +72,13 @@ export interface CreateSessionRequest {
     readonly to?: WorkState;
     readonly reason?: string;
   };
+  /**
+   * N3 steering override. If omitted, the daemon applies the globally active
+   * steering set selected through `/steering`.
+   */
+  readonly steering?: {
+    readonly ids?: readonly string[];
+  };
 }
 
 /** `POST /sessions` response. */
@@ -277,4 +284,34 @@ export interface UsageSummaryResponse {
   readonly byProvider: readonly UsageProviderTotalsView[];
   readonly byModel: readonly UsageModelTotalsView[];
   readonly remaining: readonly UsageRemainingView[];
+}
+
+export type SteeringItemKind = "doc" | "skill";
+
+export interface SteeringItemView {
+  readonly id: string;
+  readonly title: string;
+  readonly kind: SteeringItemKind;
+  readonly content: string;
+  readonly contentSha256: string;
+  readonly source: "built-in" | "custom";
+  readonly mockEffect?: string;
+  readonly updatedAt: string;
+}
+
+export interface SteeringListResponse {
+  readonly available: readonly SteeringItemView[];
+  readonly activeIds: readonly string[];
+  readonly active: readonly SteeringItemView[];
+}
+
+export interface SetSteeringActiveRequest {
+  readonly activeIds?: readonly string[];
+}
+
+export interface AddCustomSteeringRequest {
+  readonly title?: string;
+  readonly kind?: SteeringItemKind;
+  readonly content?: string;
+  readonly mockEffect?: string;
 }

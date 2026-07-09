@@ -46,6 +46,11 @@
         "category": "Reef"
       },
       {
+        "command": "reef.openSteering",
+        "title": "Reef: Steering",
+        "category": "Reef"
+      },
+      {
         "command": "reef.runMcpDemo",
         "title": "Reef: Run MCP Demo",
         "category": "Reef"

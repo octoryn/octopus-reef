@@ -238,3 +238,65 @@ export function usageWebviewHtml(
 </body>
 </html>`;
 }
+
+export function steeringWebviewHtml(
+  cspSource: string,
+  scriptUri: string,
+): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource};" />
+<style>
+  :root{--deep:#091315;--panel:#0f1d20;--panel2:#132529;--line:#214044;--ink:#edf6f4;--muted:#86a5a5;--signal:#3de0be;--warn:#ffd166;--danger:#ff6b6b;--blue:#8bb8ff;--mono:ui-monospace,Menlo,monospace}
+  body{margin:0;background:var(--deep);color:var(--ink);font-family:var(--mono);font-size:13px}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header b{color:var(--signal)}
+  main{display:grid;grid-template-columns:minmax(300px,.95fr) 1fr;min-height:calc(100vh - 50px)}
+  aside{border-right:1px solid var(--line);padding:14px;display:grid;align-content:start;gap:12px;background:#0b1719}
+  section{padding:16px;display:grid;align-content:start;gap:14px}
+  h2{font-size:12px;letter-spacing:0;text-transform:uppercase;color:var(--muted);margin:0}
+  .list{display:grid;gap:8px}.item{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:10px;display:grid;gap:7px}
+  .top{display:flex;justify-content:space-between;gap:10px;align-items:start}.name{font-weight:700}.meta{color:var(--muted);font-size:12px}
+  .hash{color:var(--signal)}.pill{border:1px solid var(--line);border-radius:999px;padding:2px 8px;color:var(--muted);white-space:nowrap}
+  .pill.ok{color:var(--signal);border-color:rgba(61,224,190,.5)}
+  label.check{display:flex;gap:8px;align-items:flex-start;color:var(--ink)}input[type="checkbox"]{margin-top:2px}
+  form{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;display:grid;gap:8px}
+  label.field{display:grid;gap:4px;color:var(--muted)}
+  input,textarea,select{min-width:0;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;padding:8px;outline:none}
+  textarea{min-height:86px;resize:vertical}input:focus,textarea:focus,select:focus{border-color:var(--signal)}
+  button{background:var(--signal);border:0;border-radius:6px;color:#001714;font:inherit;font-weight:700;padding:7px 10px}
+  button.secondary{background:var(--panel2);border:1px solid var(--line);color:var(--ink)}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}.status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
+  .status.ok{border-color:var(--signal);color:var(--signal)}.status.bad{border-color:var(--danger);color:var(--danger)}.status.warn{border-color:var(--warn);color:var(--warn)}
+  @media (max-width:880px){main{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<header><div><b>&#x259A; reef</b> steering</div><div class="actions"><button id="refresh" class="secondary" type="button">Refresh</button><button id="run" type="button">Run Mock Session</button></div></header>
+<main>
+  <aside>
+    <h2>Available</h2>
+    <div id="available" class="list"></div>
+    <div class="actions"><button id="apply" type="button">Apply Active Set</button></div>
+  </aside>
+  <section>
+    <h2>Active Set</h2>
+    <div id="active" class="list"></div>
+    <form id="custom">
+      <h2>Add Custom Steering</h2>
+      <label class="field">Title<input id="custom-title" placeholder="Review discipline" /></label>
+      <label class="field">Kind<select id="custom-kind"><option value="doc">doc</option><option value="skill">skill</option></select></label>
+      <label class="field">Content<textarea id="custom-content" spellcheck="false"></textarea></label>
+      <label class="field">Mock Effect<input id="custom-effect" placeholder="N3 steering applied: ..." /></label>
+      <button type="submit">Add Custom Steering</button>
+    </form>
+    <div id="status" class="status">Waiting for steering.</div>
+  </section>
+</main>
+<script src="${scriptUri}"></script>
+</body>
+</html>`;
+}

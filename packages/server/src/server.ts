@@ -52,9 +52,12 @@ import {
 } from "@octopus-reef/agent";
 import type { JsonValue } from "octopus-evidence";
 import type {
+  AddCustomSteeringRequest,
   CreateSessionRequest,
+  SetSteeringActiveRequest,
   ServerEvent,
   SessionView,
+  SteeringItemView,
   VerifyResult,
 } from "@octopus-reef/protocol";
 import {
@@ -67,6 +70,7 @@ import {
   type AdvanceSpecRequest,
   type CreateSpecRequest,
 } from "./specs.js";
+import { SteeringRegistry } from "./steering.js";
 import { usageSummary } from "./usage.js";
 
 interface SessionRecord {
@@ -94,6 +98,10 @@ interface SpecSessionRequest {
   readonly itemId?: string;
   readonly to?: string;
   readonly reason?: string;
+}
+
+interface SteeringSessionRequest {
+  readonly ids?: readonly string[];
 }
 
 class McpDemoDriver implements Driver {
@@ -228,6 +236,39 @@ class SpecAdvanceDriver implements Driver {
       type: "fail",
       summary: `spec transition failed: ${result?.error ?? result?.reason ?? "no result"}`,
     };
+  }
+}
+
+class SteeringDriver implements Driver {
+  readonly name: string;
+  readonly #inner: Driver;
+  readonly #items: readonly SteeringItemView[];
+
+  constructor(inner: Driver, items: readonly SteeringItemView[]) {
+    this.#inner = inner;
+    this.#items = items;
+    this.name = `${inner.name}+steering`;
+  }
+
+  async *run(ctx: DriverContext): AsyncIterable<DriverStep> {
+    const active = this.#items.map((item) => ({
+      id: item.id,
+      title: item.title,
+      kind: item.kind,
+      source: item.source,
+      contentSha256: item.contentSha256,
+    }));
+    yield {
+      type: "observe",
+      summary: `applied steering set: ${active.map((item) => item.id).join(", ")}`,
+      data: { steeringSet: { active } },
+    };
+    for (const item of this.#items) {
+      if (item.mockEffect !== undefined) {
+        yield { type: "message", text: item.mockEffect };
+      }
+    }
+    yield* this.#inner.run(ctx);
   }
 }
 
@@ -454,12 +495,14 @@ export class ReefServer {
   readonly #http: Server;
   readonly #powers: McpPowerRegistry;
   readonly #specs: SpecRegistry;
+  readonly #steering: SteeringRegistry;
   #counter = 0;
 
   constructor(options: ReefServerOptions = {}) {
     this.#options = options;
     this.#powers = new McpPowerRegistry(options.persistDir);
     this.#specs = new SpecRegistry(options.persistDir);
+    this.#steering = new SteeringRegistry(options.persistDir);
     this.#http = createServer((req, res) => {
       this.#handle(req, res).catch((err: unknown) => {
         this.#fail(res, 500, err instanceof Error ? err.message : String(err));
@@ -627,6 +670,37 @@ export class ReefServer {
         }
       }
     }
+    if (parts[0] === "steering") {
+      if (method === "GET" && parts.length === 1) {
+        return this.#json(res, 200, this.#steering.list());
+      }
+      if (method === "POST" && parts.length === 2 && parts[1] === "active") {
+        try {
+          const body = (await this.#readJson(req)) as SetSteeringActiveRequest;
+          return this.#json(res, 200, this.#steering.setActive(body));
+        } catch (err) {
+          return this.#fail(
+            res,
+            400,
+            err instanceof Error ? err.message : "bad body",
+          );
+        }
+      }
+      if (method === "POST" && parts.length === 2 && parts[1] === "custom") {
+        try {
+          const body = (await this.#readJson(req)) as AddCustomSteeringRequest;
+          return this.#json(res, 201, {
+            steering: this.#steering.addCustom(body),
+          });
+        } catch (err) {
+          return this.#fail(
+            res,
+            400,
+            err instanceof Error ? err.message : "bad body",
+          );
+        }
+      }
+    }
     if (method === "POST" && parts.length === 1 && parts[0] === "sessions") {
       return this.#createSession(req, res);
     }
@@ -705,7 +779,7 @@ export class ReefServer {
 
     const id = `sess-${(this.#counter++).toString(36)}-${Date.now().toString(36)}`;
     const context = sessionContext(task, body);
-    const runtime =
+    const runtimeBase =
       body.spec !== undefined
         ? this.#specRuntime(body.spec)
         : body.mcp !== undefined
@@ -713,6 +787,7 @@ export class ReefServer {
           : normalizeRuntime(
               this.#options.driverFactory?.(context) ?? defaultRuntime(context),
             );
+    const runtime = this.#steeredRuntime(runtimeBase, body.steering);
     const rec: SessionRecord = {
       id,
       task,
@@ -850,6 +925,18 @@ export class ReefServer {
       driver: new SpecAdvanceDriver({ specId, itemId, to, input }),
       authorizer: reefAllowlist({ tools: [tool.name] }),
       executor: new ToolExecutor([tool]),
+    };
+  }
+
+  #steeredRuntime(
+    runtime: SessionRuntime,
+    request: SteeringSessionRequest | undefined,
+  ): SessionRuntime {
+    const items = this.#steering.activeItems(request?.ids);
+    if (items.length === 0) return runtime;
+    return {
+      ...runtime,
+      driver: new SteeringDriver(runtime.driver, items),
     };
   }
 

@@ -14,6 +14,10 @@ import type {
   SpecListResponse,
   SpecView,
   SpecVerifyResult,
+  AddCustomSteeringRequest,
+  SetSteeringActiveRequest,
+  SteeringItemView,
+  SteeringListResponse,
   UsageSummaryResponse,
 } from "@octopus-reef/protocol";
 
@@ -73,6 +77,9 @@ export interface CreateSessionOptions {
     readonly to?: import("@octopus-reef/protocol").WorkState;
     readonly reason?: string;
   };
+  readonly steering?: {
+    readonly ids?: readonly string[];
+  };
 }
 
 /** Start a governed session on the daemon; resolves with its id. */
@@ -94,6 +101,7 @@ export async function createSession(
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
       ...(options.spec !== undefined ? { spec: options.spec } : {}),
+      ...(options.steering !== undefined ? { steering: options.steering } : {}),
     }),
   });
   if (!res.ok) {
@@ -251,6 +259,36 @@ export async function verifySpec(
 
 export async function getUsage(baseUrl: string): Promise<UsageSummaryResponse> {
   return await jsonRequest<UsageSummaryResponse>(`${baseUrl}/usage`);
+}
+
+export async function listSteering(
+  baseUrl: string,
+): Promise<SteeringListResponse> {
+  return await jsonRequest<SteeringListResponse>(`${baseUrl}/steering`);
+}
+
+export async function setActiveSteering(
+  baseUrl: string,
+  input: SetSteeringActiveRequest,
+): Promise<SteeringListResponse> {
+  return await jsonRequest<SteeringListResponse>(`${baseUrl}/steering/active`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function addCustomSteering(
+  baseUrl: string,
+  input: AddCustomSteeringRequest,
+): Promise<SteeringItemView> {
+  const body = await jsonRequest<{ steering: SteeringItemView }>(
+    `${baseUrl}/steering/custom`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+  return body.steering;
 }
 
 /** Re-verify a sealed session through the daemon. */
