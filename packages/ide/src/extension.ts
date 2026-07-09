@@ -40,6 +40,10 @@ import {
   webviewHtml,
 } from "./webview.js";
 import type { WorkState } from "@octopus-reef/protocol";
+import {
+  reefEdition,
+  registerCommercialSurface,
+} from "./commercial/edition.js";
 
 type SessionEvent = Extract<ServerEvent, { type: "event" }>["event"];
 type SealedEvent = Extract<ServerEvent, { type: "sealed" }>;
@@ -246,10 +250,12 @@ function modelSettings():
   const provider = config.get<string>("model.provider", "auto").trim();
   const apiKey = config.get<string>("model.apiKey", "").trim();
   const name = config.get<string>("model.name", "").trim();
+  const licenseToken = config.get<string>("gateway.licenseToken", "").trim();
   const model = {
     ...(provider !== "" ? { provider } : {}),
     ...(apiKey !== "" ? { apiKey } : {}),
     ...(name !== "" ? { name } : {}),
+    ...(licenseToken !== "" ? { licenseToken } : {}),
   };
   return Object.keys(model).length > 0 ? model : undefined;
 }
@@ -391,6 +397,7 @@ async function waitForBundledServer(
         ...process.env,
         ELECTRON_RUN_AS_NODE: "1",
         REEF_BUNDLED_DAEMON: "1",
+        REEF_EDITION: reefEdition,
         ...(workspaceRoot !== undefined
           ? { REEF_WORKSPACE_ROOT: workspaceRoot }
           : {}),
@@ -1253,6 +1260,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     },
   );
+  const commercialDisposables = registerCommercialSurface(context);
 
   context.subscriptions.push(
     status,
@@ -1266,6 +1274,7 @@ export function activate(context: vscode.ExtensionContext): void {
     mcpDenyDemo,
     verify,
     checkForUpdates,
+    ...commercialDisposables,
     ...(chatParticipant !== undefined ? [chatParticipant] : []),
     {
       dispose: () => {

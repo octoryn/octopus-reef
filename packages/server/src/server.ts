@@ -55,7 +55,9 @@ import type {
   AddCustomSteeringRequest,
   CreateHookRequest,
   CreateSessionRequest,
+  EditionResponse,
   FireHookRequest,
+  ReefEdition,
   SetSteeringActiveRequest,
   ServerEvent,
   SessionView,
@@ -324,7 +326,9 @@ export interface DriverFactoryContext {
     readonly provider?: string;
     readonly apiKey?: string;
     readonly name?: string;
+    readonly licenseToken?: string;
   };
+  readonly edition: ReefEdition;
 }
 
 export interface SessionRuntime {
@@ -355,6 +359,8 @@ export interface ReefServerOptions {
   readonly maxSessions?: number;
   /** Max concurrent SSE subscribers per session. Default 64. */
   readonly maxSubscribers?: number;
+  /** Build flavor served by this daemon. Default follows REEF_EDITION, then community. */
+  readonly edition?: ReefEdition;
 }
 
 const MAX_BODY = 64 * 1024;
@@ -422,6 +428,7 @@ function parseSpecAdvanceOutput(output: string | undefined): {
 function sessionContext(
   task: string,
   body: CreateSessionRequest,
+  edition: ReefEdition,
 ): DriverFactoryContext {
   const modelBody =
     body.model !== null && typeof body.model === "object"
@@ -431,9 +438,11 @@ function sessionContext(
     ...maybe("provider", optionalString(modelBody?.provider)),
     ...maybe("apiKey", optionalString(modelBody?.apiKey)),
     ...maybe("name", optionalString(modelBody?.name)),
+    ...maybe("licenseToken", optionalString(modelBody?.licenseToken)),
   };
   return {
     task,
+    edition,
     ...maybe("workspaceRoot", optionalString(body.workspaceRoot)),
     ...(Object.keys(model).length > 0 ? { model } : {}),
   };
@@ -456,6 +465,15 @@ function defaultRuntime(context: DriverFactoryContext): SessionRuntime {
     process.env.REEF_MODEL_PROVIDER ??
     "auto"
   ).toLowerCase();
+  if (requested === "gateway") {
+    return {
+      driver: new ConfigurationFailureDriver(
+        context.edition === "commercial"
+          ? "gateway provider requires a licensed C1 entitlement path"
+          : "gateway provider is not available in the community edition",
+      ),
+    };
+  }
   const providerName = selectProvider(requested, context.model?.apiKey);
   if (providerName === "mock") return { driver: new MockDriver() };
 
@@ -576,6 +594,38 @@ export class ReefServer {
     return this.#options.maxSessions ?? DEFAULT_MAX_SESSIONS;
   }
 
+  #edition(): ReefEdition {
+    const configured =
+      this.#options.edition ??
+      (process.env.REEF_EDITION === "commercial" ? "commercial" : undefined);
+    return configured === "commercial" ? "commercial" : "community";
+  }
+
+  #editionResponse(): EditionResponse {
+    const edition = this.#edition();
+    const commercial = edition === "commercial";
+    return {
+      edition,
+      providers: {
+        byok: ["anthropic", "bedrock"],
+        gateway: {
+          available: commercial,
+          gated: true,
+          reason: commercial
+            ? "Gateway provider is commercial-only and gated until entitlement verifies."
+            : "Gateway provider is not compiled into the community surface.",
+        },
+      },
+      commercialSurfaces: {
+        available: commercial,
+        gated: true,
+        reason: commercial
+          ? "Commercial surfaces are visible but gated without a local license."
+          : "Commercial surfaces are omitted from the community edition.",
+      },
+    };
+  }
+
   /** Start listening. Pass 0 for an ephemeral port; resolves with the bound port. */
   listen(port = 0, host = "127.0.0.1"): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -603,6 +653,9 @@ export class ReefServer {
 
     if (method === "GET" && parts.length === 1 && parts[0] === "health") {
       return this.#json(res, 200, { ok: true });
+    }
+    if (method === "GET" && parts.length === 1 && parts[0] === "edition") {
+      return this.#json(res, 200, this.#editionResponse());
     }
     if (method === "GET" && parts.length === 1 && parts[0] === "usage") {
       return this.#json(
@@ -883,7 +936,7 @@ export class ReefServer {
     }
 
     const id = `sess-${(this.#counter++).toString(36)}-${Date.now().toString(36)}`;
-    const context = sessionContext(task, body);
+    const context = sessionContext(task, body, this.#edition());
     const runtimeBase =
       body.spec !== undefined
         ? this.#specRuntime(body.spec)

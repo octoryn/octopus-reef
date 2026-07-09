@@ -23,6 +23,25 @@ export type { ReefEvent, SessionOutcome, SessionSnapshot, WorkState };
 /** Bumped when the wire shapes below change incompatibly. */
 export const REEF_PROTOCOL_VERSION = "0.1.0";
 
+export type ReefEdition = "community" | "commercial";
+
+export interface EditionResponse {
+  readonly edition: ReefEdition;
+  readonly providers: {
+    readonly byok: readonly string[];
+    readonly gateway: {
+      readonly available: boolean;
+      readonly gated: boolean;
+      readonly reason: string;
+    };
+  };
+  readonly commercialSurfaces: {
+    readonly available: boolean;
+    readonly gated: boolean;
+    readonly reason: string;
+  };
+}
+
 /** The result of a store-untrusting verification, carried over the wire. */
 export interface VerifyResult {
   /** Every check passed: the session is provable. */
@@ -49,6 +68,7 @@ export interface CreateSessionRequest {
     readonly provider?: string;
     readonly apiKey?: string;
     readonly name?: string;
+    readonly licenseToken?: string;
   };
   /**
    * N5 offline MCP proof path. When present, the daemon uses an explicit

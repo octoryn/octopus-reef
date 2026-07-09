@@ -20,6 +20,6 @@
   ],
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
-    "@octopus-reef/engine": "^0.1.0"
+    "@octopus-reef/engine": "^0.2.0"
   }
 }

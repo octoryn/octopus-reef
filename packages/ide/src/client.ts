@@ -10,6 +10,7 @@ import type {
   CreateSpecRequest,
   CreateSpecResponse,
   CreateSessionResponse,
+  EditionResponse,
   ServerEvent,
   SpecListResponse,
   SpecView,
@@ -69,6 +70,7 @@ export interface CreateSessionOptions {
     readonly provider?: string;
     readonly apiKey?: string;
     readonly name?: string;
+    readonly licenseToken?: string;
   };
   readonly mcp?: {
     readonly serverId?: string;
@@ -185,6 +187,10 @@ async function jsonRequest<T>(
 
 export async function listPowers(baseUrl: string): Promise<PowersList> {
   return await jsonRequest<PowersList>(`${baseUrl}/powers`);
+}
+
+export async function getEdition(baseUrl: string): Promise<EditionResponse> {
+  return await jsonRequest<EditionResponse>(`${baseUrl}/edition`);
 }
 
 export async function installPower(

@@ -407,6 +407,71 @@ test("N5: installs an MCP power, records a governed tool call, and denies an una
   }
 });
 
+test("C0: edition split reports flavor and community rejects gateway provider", async () => {
+  const community = new ReefServer({ edition: "community" });
+  const communityPort = await community.listen(0);
+  try {
+    const edition = await request(communityPort, "GET", "/edition");
+    assert.equal(edition.status, 200);
+    assert.equal(edition.json.edition, "community");
+    assert.equal(edition.json.providers.gateway.available, false);
+    assert.equal(edition.json.commercialSurfaces.available, false);
+
+    const created = await request(communityPort, "POST", "/sessions", {
+      task: "C0 community gateway must not route",
+      model: { provider: "gateway" },
+    });
+    assert.equal(created.status, 201);
+    const frames = await collectSSE(
+      communityPort,
+      `/sessions/${created.json.id}/events`,
+    );
+    const sealed = frames.at(-1);
+    assert.equal(sealed?.type, "sealed");
+    if (sealed?.type === "sealed") {
+      assert.equal(sealed.snapshot.outcome, "failed");
+      assert.equal(sealed.verify.ok, true);
+    }
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "session.sealed" &&
+          String(frame.event.data.reason).includes(
+            "gateway provider is not available",
+          ),
+      ),
+      "community gateway request should be denied as session evidence",
+    );
+    assert.equal(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "action.executed" &&
+          frame.event.summary.includes("gateway"),
+      ),
+      false,
+      "community must not execute any gateway route",
+    );
+  } finally {
+    await community.close();
+  }
+
+  const commercial = new ReefServer({ edition: "commercial" });
+  const commercialPort = await commercial.listen(0);
+  try {
+    const edition = await request(commercialPort, "GET", "/edition");
+    assert.equal(edition.status, 200);
+    assert.equal(edition.json.edition, "commercial");
+    assert.equal(edition.json.providers.gateway.available, true);
+    assert.equal(edition.json.providers.gateway.gated, true);
+    assert.equal(edition.json.commercialSurfaces.available, true);
+    assert.equal(edition.json.commercialSurfaces.gated, true);
+  } finally {
+    await commercial.close();
+  }
+});
+
 test("N6: usage endpoint aggregates persisted provider usage and labelled cost", async () => {
   const dir = mkdtempSync(join(tmpdir(), "reef-n6-usage-"));
   const provider: ModelProvider = {
