@@ -71,6 +71,11 @@ interface RunTaskResult {
   readonly error?: string;
 }
 
+interface WebviewMessage {
+  readonly kind?: string;
+  readonly task?: string;
+}
+
 class ReefTextSurface implements ReefSurface, vscode.TextDocumentContentProvider {
   private readonly uri = vscode.Uri.from({
     scheme: "reef-session",
@@ -386,6 +391,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let activeServerUrl = serverUrl();
   let daemon: ChildProcess | undefined;
   let demoStarted = false;
+  let webviewRun: Promise<RunTaskResult> | undefined;
   const status = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
     100,
@@ -424,6 +430,19 @@ export function activate(context: vscode.ExtensionContext): void {
       panel.onDidDispose(() => {
         panel = undefined;
         abort?.abort();
+      });
+      panel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+        if (
+          message.kind !== "runTask" ||
+          typeof message.task !== "string" ||
+          message.task.trim() === ""
+        ) {
+          return;
+        }
+        if (webviewRun !== undefined) return;
+        webviewRun = runTask(message.task).finally(() => {
+          webviewRun = undefined;
+        });
       });
     }
     return webviewSurface();
