@@ -12,14 +12,20 @@ import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import {
   addCustomPower,
+  advanceSpec,
   createSession,
+  createSpec,
+  getSpec,
   installPower,
   listPowers,
+  listSpecs,
   streamEvents,
+  verifySpec,
   verifySession,
   type ServerEvent,
 } from "./client.js";
-import { powersWebviewHtml, webviewHtml } from "./webview.js";
+import { powersWebviewHtml, specsWebviewHtml, webviewHtml } from "./webview.js";
+import type { WorkState } from "@octopus-reef/protocol";
 
 type SessionEvent = Extract<ServerEvent, { type: "event" }>["event"];
 type SealedEvent = Extract<ServerEvent, { type: "sealed" }>;
@@ -79,6 +85,12 @@ interface WebviewMessage {
   readonly id?: string;
   readonly input?: Record<string, unknown>;
   readonly mode?: string;
+  readonly title?: string;
+  readonly tasks?: readonly string[];
+  readonly specId?: string;
+  readonly itemId?: string;
+  readonly to?: string;
+  readonly reason?: string;
 }
 
 class ReefTextSurface
@@ -322,6 +334,32 @@ function setStatus(
   item.show();
 }
 
+function setSpecStatus(
+  item: vscode.StatusBarItem,
+  verify: { readonly ok: boolean; readonly work: string } | undefined,
+): void {
+  item.command = "reef.verifySession";
+  if (verify === undefined) {
+    item.text = "Reef spec pending";
+    item.tooltip = "Reef governed spec";
+    item.backgroundColor = undefined;
+    item.show();
+    return;
+  }
+  if (verify.ok) {
+    item.text = "Reef ✓ spec verified";
+    item.tooltip = `workstate ${verify.work}`;
+    item.backgroundColor = undefined;
+  } else {
+    item.text = "Reef ✗ SPEC UNVERIFIED";
+    item.tooltip = `workstate ${verify.work}`;
+    item.backgroundColor = new vscode.ThemeColor(
+      "statusBarItem.errorBackground",
+    );
+  }
+  item.show();
+}
+
 async function waitForBundledServer(
   context: vscode.ExtensionContext,
   persistDir: string,
@@ -395,11 +433,13 @@ async function waitForBundledServer(
 export function activate(context: vscode.ExtensionContext): void {
   let panel: vscode.WebviewPanel | undefined;
   let powersPanel: vscode.WebviewPanel | undefined;
+  let specsPanel: vscode.WebviewPanel | undefined;
   let textSurface: ReefTextSurface | undefined;
   let abort: AbortController | undefined;
   let lastVerify: ServerEvent | undefined;
   let lastSessionId: string | undefined;
   let lastSessionDir: string | undefined;
+  let activeSpecId: string | undefined;
   let activeServerUrl = serverUrl();
   let daemon: ChildProcess | undefined;
   let demoStarted = false;
@@ -496,6 +536,12 @@ export function activate(context: vscode.ExtensionContext): void {
         readonly input?: unknown;
         readonly expectDenied?: boolean;
       };
+      readonly spec?: {
+        readonly specId?: string;
+        readonly itemId?: string;
+        readonly to?: WorkState;
+        readonly reason?: string;
+      };
     } = {},
   ): Promise<RunTaskResult> => {
     const base = activeServerUrl;
@@ -518,6 +564,7 @@ export function activate(context: vscode.ExtensionContext): void {
         ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(extra.mcp !== undefined ? { mcp: extra.mcp } : {}),
+        ...(extra.spec !== undefined ? { spec: extra.spec } : {}),
       });
       lastSessionId = id;
       lastSessionDir = join(persistDir, id);
@@ -586,6 +633,53 @@ export function activate(context: vscode.ExtensionContext): void {
     void powersPanel?.webview.postMessage({ kind: "powers", powers });
   };
 
+  const refreshSpecs = async (): Promise<void> => {
+    const specs = await listSpecs(activeServerUrl);
+    if (
+      activeSpecId === undefined &&
+      specs.specs.length > 0 &&
+      specs.specs[0] !== undefined
+    ) {
+      activeSpecId = specs.specs[0].id;
+    }
+    void specsPanel?.webview.postMessage({ kind: "specs", specs });
+    if (activeSpecId !== undefined) {
+      const spec = await getSpec(activeServerUrl, activeSpecId);
+      void specsPanel?.webview.postMessage({ kind: "spec", spec });
+    }
+  };
+
+  const runSpecAdvance = async (
+    specId: string,
+    itemId: string,
+    to: WorkState,
+    reason?: string,
+  ): Promise<void> => {
+    activeSpecId = specId;
+    const result = await runTask(`N2 spec transition: ${itemId} -> ${to}`, {
+      spec: {
+        specId,
+        itemId,
+        to,
+        ...(reason !== undefined ? { reason } : {}),
+      },
+    });
+    if (result.error !== undefined) {
+      void specsPanel?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: result.error,
+      });
+      return;
+    }
+    await refreshSpecs();
+    void specsPanel?.webview.postMessage({
+      kind: "status",
+      tone: "ok",
+      message: `Governed spec transition sealed: ${result.sessionId ?? "unknown"}`,
+    });
+  };
+
   const openPowersPanel = (): void => {
     if (powersPanel === undefined) {
       powersPanel = vscode.window.createWebviewPanel(
@@ -640,6 +734,119 @@ export function activate(context: vscode.ExtensionContext): void {
     powersPanel.reveal(vscode.ViewColumn.Beside);
   };
 
+  const openSpecsPanel = (): void => {
+    if (specsPanel === undefined) {
+      specsPanel = vscode.window.createWebviewPanel(
+        "reef.specs",
+        "Reef Specs",
+        vscode.ViewColumn.Beside,
+        { enableScripts: true, retainContextWhenHidden: true },
+      );
+      specsPanel.webview.html = specsWebviewHtml(
+        specsPanel.webview.cspSource,
+        specsPanel.webview
+          .asWebviewUri(
+            vscode.Uri.joinPath(context.extensionUri, "media", "specs.js"),
+          )
+          .toString(),
+      );
+      specsPanel.onDidDispose(() => {
+        specsPanel = undefined;
+      });
+      specsPanel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+        void (async () => {
+          try {
+            if (message.kind === "listSpecs") {
+              await refreshSpecs();
+            } else if (message.kind === "createSpec") {
+              const spec = await createSpec(activeServerUrl, {
+                ...(typeof message.title === "string" &&
+                message.title.trim() !== ""
+                  ? { title: message.title.trim() }
+                  : {}),
+                ...(Array.isArray(message.tasks) ? { tasks: message.tasks } : {}),
+              });
+              activeSpecId = spec.id;
+              await refreshSpecs();
+              void specsPanel?.webview.postMessage({
+                kind: "status",
+                tone: "ok",
+                message: `Created spec ${spec.id}`,
+              });
+            } else if (
+              message.kind === "selectSpec" &&
+              typeof message.id === "string"
+            ) {
+              activeSpecId = message.id;
+              const spec = await getSpec(activeServerUrl, activeSpecId);
+              void specsPanel?.webview.postMessage({ kind: "spec", spec });
+              await refreshSpecs();
+            } else if (
+              message.kind === "advanceSpec" &&
+              typeof message.specId === "string" &&
+              typeof message.itemId === "string" &&
+              typeof message.to === "string"
+            ) {
+              await runSpecAdvance(
+                message.specId,
+                message.itemId,
+                message.to as WorkState,
+                message.reason,
+              );
+            } else if (
+              message.kind === "illegalSpecTransition" &&
+              typeof message.specId === "string" &&
+              typeof message.itemId === "string" &&
+              typeof message.to === "string"
+            ) {
+              try {
+                await advanceSpec(activeServerUrl, message.specId, {
+                  itemId: message.itemId,
+                  to: message.to as WorkState,
+                  ...(message.reason !== undefined
+                    ? { reason: message.reason }
+                    : {}),
+                });
+                void specsPanel?.webview.postMessage({
+                  kind: "status",
+                  tone: "bad",
+                  message: "Illegal transition unexpectedly succeeded.",
+                });
+              } catch (err) {
+                void specsPanel?.webview.postMessage({
+                  kind: "status",
+                  tone: "bad",
+                  message: err instanceof Error ? err.message : String(err),
+                });
+              } finally {
+                activeSpecId = message.specId;
+                await refreshSpecs();
+              }
+            } else if (
+              message.kind === "verifySpec" &&
+              typeof message.specId === "string"
+            ) {
+              activeSpecId = message.specId;
+              const verify = await verifySpec(activeServerUrl, message.specId);
+              setSpecStatus(status, verify);
+              void specsPanel?.webview.postMessage({
+                kind: "verified",
+                verify,
+              });
+            }
+          } catch (err) {
+            void specsPanel?.webview.postMessage({
+              kind: "status",
+              tone: "bad",
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+        })();
+      });
+    }
+    specsPanel.reveal(vscode.ViewColumn.Beside);
+  };
+
   const run = vscode.commands.registerCommand("reef.runSession", async () => {
     const task = await vscode.window.showInputBox({
       prompt: "Describe the task for the governed session",
@@ -664,6 +871,19 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     },
   );
+
+  const specs = vscode.commands.registerCommand("reef.openSpecs", async () => {
+    openSpecsPanel();
+    try {
+      await refreshSpecs();
+    } catch (err) {
+      void specsPanel?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
 
   const mcpDemo = vscode.commands.registerCommand(
     "reef.runMcpDemo",
@@ -723,6 +943,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const verify = vscode.commands.registerCommand(
     "reef.verifySession",
     async () => {
+      if (specsPanel?.visible === true && activeSpecId !== undefined) {
+        const v = await verifySpec(activeServerUrl, activeSpecId);
+        setSpecStatus(status, v);
+        void specsPanel.webview.postMessage({ kind: "verified", verify: v });
+        void vscode.window.showInformationMessage(
+          v.ok
+            ? `Reef ✓ SPEC VERIFIED — workstate ${v.work}`
+            : `Reef ✗ SPEC UNVERIFIED — workstate ${v.work}`,
+        );
+        return;
+      }
       if (
         lastSessionId === undefined ||
         lastVerify === undefined ||
@@ -792,6 +1023,7 @@ export function activate(context: vscode.ExtensionContext): void {
     status,
     run,
     powers,
+    specs,
     mcpDemo,
     mcpDenyDemo,
     verify,

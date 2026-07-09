@@ -118,3 +118,69 @@ export function powersWebviewHtml(
 </body>
 </html>`;
 }
+
+export function specsWebviewHtml(
+  cspSource: string,
+  scriptUri: string,
+): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource};" />
+<style>
+  :root{--deep:#091315;--panel:#0f1d20;--panel2:#132529;--line:#214044;--ink:#edf6f4;--muted:#86a5a5;--signal:#3de0be;--warn:#ffd166;--danger:#ff6b6b;--blue:#8bb8ff;--mono:ui-monospace,Menlo,monospace}
+  body{margin:0;background:var(--deep);color:var(--ink);font-family:var(--mono);font-size:13px}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header b{color:var(--signal)}
+  main{display:grid;grid-template-columns:290px 1fr;min-height:calc(100vh - 50px)}
+  aside{border-right:1px solid var(--line);padding:14px;display:grid;align-content:start;gap:12px;background:#0b1719}
+  section{padding:16px;display:grid;align-content:start;gap:14px}
+  h2{font-size:12px;letter-spacing:0;text-transform:uppercase;color:var(--muted);margin:0}
+  form{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;display:grid;gap:8px}
+  label{display:grid;gap:4px;color:var(--muted)}
+  input,textarea,select{min-width:0;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;padding:8px;outline:none}
+  textarea{min-height:92px;resize:vertical}
+  input:focus,textarea:focus,select:focus{border-color:var(--signal)}
+  button{background:var(--signal);border:0;border-radius:6px;color:#001714;font:inherit;font-weight:700;padding:7px 10px}
+  button.secondary{background:var(--panel2);border:1px solid var(--line);color:var(--ink)}
+  button.danger{background:var(--panel2);border:1px solid rgba(255,107,107,.55);color:var(--danger)}
+  .list{display:grid;gap:8px}.spec{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:10px;text-align:left;color:var(--ink)}
+  .spec.active{border-color:var(--signal)}.spec .name{font-weight:700}.meta{color:var(--muted);font-size:12px}
+  .summary{display:flex;gap:8px;flex-wrap:wrap}.pill{border:1px solid var(--line);border-radius:999px;padding:2px 8px;color:var(--muted)}
+  .pill.ok{color:var(--signal);border-color:rgba(61,224,190,.5)}.pill.bad{color:var(--danger);border-color:rgba(255,107,107,.55)}
+  .task{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;display:grid;gap:8px}
+  .task-head{display:flex;justify-content:space-between;gap:12px;align-items:start}.state{color:var(--blue)}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}.history{display:grid;gap:4px}
+  .transition{display:grid;grid-template-columns:48px 1fr auto;gap:8px;color:var(--muted)}
+  .transition b{color:var(--ink);font-weight:400}.evidence{color:var(--signal)}
+  .status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
+  .status.ok{border-color:var(--signal);color:var(--signal)}.status.bad{border-color:var(--danger);color:var(--danger)}.status.warn{border-color:var(--warn);color:var(--warn)}
+  @media (max-width:880px){main{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<header><div><b>&#x259A; reef</b> specs</div><div class="actions"><button id="refresh" class="secondary" type="button">Refresh</button><button id="verify" class="secondary" type="button">Verify</button></div></header>
+<main>
+  <aside>
+    <h2>Specs</h2>
+    <div id="specs" class="list"></div>
+    <form id="create">
+      <h2>Create New Spec</h2>
+      <label>Title<input id="title" placeholder="Governed work plan" /></label>
+      <label>Tasks<textarea id="tasks" spellcheck="false">Clarify requirements
+Design governed change
+Implement and verify</textarea></label>
+      <button type="submit">Create New Spec</button>
+    </form>
+  </aside>
+  <section>
+    <div id="detail"></div>
+    <div id="status" class="status">Waiting for Specs.</div>
+  </section>
+</main>
+<script src="${scriptUri}"></script>
+</body>
+</html>`;
+}

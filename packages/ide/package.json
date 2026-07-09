@@ -36,6 +36,11 @@
         "category": "Reef"
       },
       {
+        "command": "reef.openSpecs",
+        "title": "Reef: Specs",
+        "category": "Reef"
+      },
+      {
         "command": "reef.runMcpDemo",
         "title": "Reef: Run MCP Demo",
         "category": "Reef"

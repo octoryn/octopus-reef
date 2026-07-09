@@ -15,9 +15,10 @@ import type {
   ReefEvent,
   SessionOutcome,
   SessionSnapshot,
+  WorkState,
 } from "@octopus-reef/engine";
 
-export type { ReefEvent, SessionOutcome, SessionSnapshot };
+export type { ReefEvent, SessionOutcome, SessionSnapshot, WorkState };
 
 /** Bumped when the wire shapes below change incompatibly. */
 export const REEF_PROTOCOL_VERSION = "0.1.0";
@@ -59,6 +60,17 @@ export interface CreateSessionRequest {
     readonly tool?: string;
     readonly input?: unknown;
     readonly expectDenied?: boolean;
+  };
+  /**
+   * N2 offline Specs proof path. When present, the daemon uses a deterministic
+   * governed session that advances the named spec task through octopus-workstate
+   * via a governed `tool` action. This does not require an LLM key.
+   */
+  readonly spec?: {
+    readonly specId?: string;
+    readonly itemId?: string;
+    readonly to?: WorkState;
+    readonly reason?: string;
   };
 }
 
@@ -102,4 +114,98 @@ export type ServerEvent =
 /** An error body returned by the server (non-2xx responses). */
 export interface ErrorResponse {
   readonly error: string;
+}
+
+export interface SpecVerifyResult {
+  readonly ok: boolean;
+  readonly work: string;
+  readonly anchor?: {
+    readonly length: number;
+    readonly head: string;
+  };
+}
+
+export interface SpecTransitionView {
+  readonly itemId: string;
+  readonly from: WorkState | null;
+  readonly to: WorkState;
+  readonly by: {
+    readonly id: string;
+    readonly kind: "human" | "agent" | "system";
+    readonly source?: string;
+    readonly displayName?: string;
+  };
+  readonly at: string;
+  readonly evidenceId: string;
+  readonly sequence: number;
+  readonly reason?: string;
+}
+
+export interface SpecTaskView {
+  readonly id: string;
+  readonly title: string;
+  readonly state: WorkState;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly assignee?: {
+    readonly id: string;
+    readonly kind: "human" | "agent" | "system";
+    readonly source?: string;
+    readonly displayName?: string;
+  };
+  readonly history: readonly SpecTransitionView[];
+}
+
+export interface SpecView {
+  readonly id: string;
+  readonly title: string;
+  readonly tasks: readonly SpecTaskView[];
+  readonly transitions: readonly SpecTransitionView[];
+  readonly anchor: {
+    readonly length: number;
+    readonly head: string;
+  };
+  readonly verify: SpecVerifyResult;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface SpecSummary {
+  readonly id: string;
+  readonly title: string;
+  readonly taskCount: number;
+  readonly states: Readonly<Record<WorkState, number>>;
+  readonly anchor: {
+    readonly length: number;
+    readonly head: string;
+  };
+  readonly verify: SpecVerifyResult;
+  readonly updatedAt: string;
+}
+
+/** `GET /specs` — list governed workstate specs. */
+export interface SpecListResponse {
+  readonly specs: readonly SpecSummary[];
+}
+
+/** `POST /specs` — create a spec and seed its workstate graph. */
+export interface CreateSpecRequest {
+  readonly title?: string;
+  readonly tasks?: readonly string[];
+}
+
+export interface CreateSpecResponse {
+  readonly spec: SpecView;
+}
+
+/** `POST /specs/:id/advance` — attempt a workstate transition. */
+export interface AdvanceSpecRequest {
+  readonly itemId: string;
+  readonly to: WorkState;
+  readonly reason?: string;
+}
+
+export interface AdvanceSpecResponse {
+  readonly transition: SpecTransitionView;
+  readonly spec: SpecView;
 }

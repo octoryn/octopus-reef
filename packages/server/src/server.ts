@@ -42,6 +42,7 @@ import {
   type ReefEvent,
   type SessionOutcome,
   type SessionSnapshot,
+  type Tool,
 } from "@octopus-reef/engine";
 import {
   AgentWorker,
@@ -49,6 +50,7 @@ import {
   BedrockProvider,
   type ModelProvider,
 } from "@octopus-reef/agent";
+import type { JsonValue } from "octopus-evidence";
 import type {
   CreateSessionRequest,
   ServerEvent,
@@ -60,6 +62,11 @@ import {
   type AddCustomPowerRequest,
   type InstalledPower,
 } from "./mcp.js";
+import {
+  SpecRegistry,
+  type AdvanceSpecRequest,
+  type CreateSpecRequest,
+} from "./specs.js";
 
 interface SessionRecord {
   readonly id: string;
@@ -79,6 +86,13 @@ interface McpSessionRequest {
   readonly tool?: string;
   readonly input?: unknown;
   readonly expectDenied?: boolean;
+}
+
+interface SpecSessionRequest {
+  readonly specId?: string;
+  readonly itemId?: string;
+  readonly to?: string;
+  readonly reason?: string;
 }
 
 class McpDemoDriver implements Driver {
@@ -145,6 +159,73 @@ class McpDemoDriver implements Driver {
     yield {
       type: "fail",
       summary: `MCP tool ${this.#tool} did not execute: ${result?.error ?? result?.reason ?? "no result"}`,
+    };
+  }
+}
+
+class SpecAdvanceDriver implements Driver {
+  readonly name = "spec-demo";
+  readonly #specId: string;
+  readonly #itemId: string;
+  readonly #to: string;
+  readonly #input: Readonly<Record<string, unknown>>;
+
+  constructor(options: {
+    readonly specId: string;
+    readonly itemId: string;
+    readonly to: string;
+    readonly input: Readonly<Record<string, unknown>>;
+  }) {
+    this.#specId = options.specId;
+    this.#itemId = options.itemId;
+    this.#to = options.to;
+    this.#input = options.input;
+  }
+
+  async *run(ctx: DriverContext): AsyncIterable<DriverStep> {
+    yield {
+      type: "observe",
+      summary: `resolved spec workstate transition for "${ctx.task}"`,
+      data: { specId: this.#specId, itemId: this.#itemId, to: this.#to },
+    };
+    const result = (yield {
+      type: "action",
+      action: {
+        type: "tool",
+        summary: `Spec transition: ${this.#itemId} -> ${this.#to}`,
+        target: "reef-spec.advance",
+        payload: { tool: "reef-spec.advance", input: this.#input },
+        required: true,
+      },
+    }) as ActionResult | undefined;
+
+    if (result?.executed === true && result.error === undefined) {
+      const recorded = parseSpecAdvanceOutput(result.output);
+      yield {
+        type: "observe",
+        summary: `Spec transition recorded: ${this.#itemId} -> ${this.#to}`,
+        data: {
+          specId: this.#specId,
+          itemId: this.#itemId,
+          to: this.#to,
+          ...(recorded.transitionEvidenceId !== undefined
+            ? { transitionEvidenceId: recorded.transitionEvidenceId }
+            : {}),
+          ...(recorded.sequence !== undefined
+            ? { sequence: recorded.sequence }
+            : {}),
+        },
+      };
+      yield {
+        type: "done",
+        summary: `advanced spec ${this.#specId} task ${this.#itemId} to ${this.#to}`,
+      };
+      return;
+    }
+
+    yield {
+      type: "fail",
+      summary: `spec transition failed: ${result?.error ?? result?.reason ?? "no result"}`,
     };
   }
 }
@@ -216,6 +297,30 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== ""
     ? value.trim()
     : undefined;
+}
+
+function jsonObject(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function parseSpecAdvanceOutput(output: string | undefined): {
+  readonly transitionEvidenceId?: string;
+  readonly sequence?: number;
+} {
+  if (output === undefined) return {};
+  try {
+    const parsed = JSON.parse(output) as Record<string, unknown>;
+    return {
+      ...(typeof parsed.transitionEvidenceId === "string"
+        ? { transitionEvidenceId: parsed.transitionEvidenceId }
+        : {}),
+      ...(typeof parsed.sequence === "number" ? { sequence: parsed.sequence } : {}),
+    };
+  } catch {
+    return {};
+  }
 }
 
 function sessionContext(
@@ -347,11 +452,13 @@ export class ReefServer {
   readonly #options: ReefServerOptions;
   readonly #http: Server;
   readonly #powers: McpPowerRegistry;
+  readonly #specs: SpecRegistry;
   #counter = 0;
 
   constructor(options: ReefServerOptions = {}) {
     this.#options = options;
     this.#powers = new McpPowerRegistry(options.persistDir);
+    this.#specs = new SpecRegistry(options.persistDir);
     this.#http = createServer((req, res) => {
       this.#handle(req, res).catch((err: unknown) => {
         this.#fail(res, 500, err instanceof Error ? err.message : String(err));
@@ -424,6 +531,76 @@ export class ReefServer {
           return this.#json(res, 201, {
             installed: this.#powers.addCustom(body),
           });
+        } catch (err) {
+          return this.#fail(
+            res,
+            400,
+            err instanceof Error ? err.message : "bad body",
+          );
+        }
+      }
+    }
+    if (parts[0] === "specs") {
+      if (method === "GET" && parts.length === 1) {
+        try {
+          return this.#json(res, 200, this.#specs.list());
+        } catch (err) {
+          return this.#fail(
+            res,
+            500,
+            err instanceof Error ? err.message : "could not list specs",
+          );
+        }
+      }
+      if (method === "POST" && parts.length === 1) {
+        try {
+          const body = (await this.#readJson(req)) as CreateSpecRequest;
+          return this.#json(res, 201, { spec: this.#specs.create(body) });
+        } catch (err) {
+          return this.#fail(
+            res,
+            400,
+            err instanceof Error ? err.message : "bad body",
+          );
+        }
+      }
+      const specId = parts[1];
+      if (specId !== undefined && method === "GET" && parts.length === 2) {
+        try {
+          return this.#json(res, 200, this.#specs.get(specId));
+        } catch (err) {
+          return this.#fail(
+            res,
+            404,
+            err instanceof Error ? err.message : "unknown spec",
+          );
+        }
+      }
+      if (
+        specId !== undefined &&
+        method === "GET" &&
+        parts.length === 3 &&
+        parts[2] === "verify"
+      ) {
+        try {
+          return this.#json(res, 200, this.#specs.verify(specId));
+        } catch (err) {
+          return this.#fail(
+            res,
+            404,
+            err instanceof Error ? err.message : "unknown spec",
+          );
+        }
+      }
+      if (
+        specId !== undefined &&
+        method === "POST" &&
+        parts.length === 3 &&
+        parts[2] === "advance"
+      ) {
+        try {
+          const body = (await this.#readJson(req)) as AdvanceSpecRequest;
+          return this.#json(res, 200, this.#specs.advance(specId, body));
         } catch (err) {
           return this.#fail(
             res,
@@ -512,11 +689,13 @@ export class ReefServer {
     const id = `sess-${(this.#counter++).toString(36)}-${Date.now().toString(36)}`;
     const context = sessionContext(task, body);
     const runtime =
-      body.mcp !== undefined
-        ? this.#mcpRuntime(body.mcp)
-        : normalizeRuntime(
-            this.#options.driverFactory?.(context) ?? defaultRuntime(context),
-          );
+      body.spec !== undefined
+        ? this.#specRuntime(body.spec)
+        : body.mcp !== undefined
+          ? this.#mcpRuntime(body.mcp)
+          : normalizeRuntime(
+              this.#options.driverFactory?.(context) ?? defaultRuntime(context),
+            );
     const rec: SessionRecord = {
       id,
       task,
@@ -586,6 +765,74 @@ export class ReefServer {
         tools: this.#powers.allowedFullToolNames(power),
       }),
       executor: new ToolExecutor(tools),
+    };
+  }
+
+  #specRuntime(request: SpecSessionRequest): SessionRuntime {
+    const specId = optionalString(request.specId);
+    const itemId = optionalString(request.itemId);
+    const to = optionalString(request.to);
+    if (specId === undefined || itemId === undefined || to === undefined) {
+      return {
+        driver: new ConfigurationFailureDriver(
+          "spec session requires specId, itemId, and to",
+        ),
+      };
+    }
+
+    const input = {
+      specId,
+      itemId,
+      to,
+      ...(request.reason !== undefined ? { reason: request.reason } : {}),
+    };
+    const tool: Tool = {
+      name: "reef-spec.advance",
+      description:
+        "Advance a Reef spec task through the octopus-workstate state machine.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          specId: { type: "string" },
+          itemId: { type: "string" },
+          to: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["specId", "itemId", "to"],
+        additionalProperties: false,
+      },
+      run: async (raw: JsonValue) => {
+        const body = jsonObject(raw);
+        try {
+          const advanced = this.#specs.advance(String(body.specId ?? ""), {
+            itemId: String(body.itemId ?? ""),
+            to: String(body.to ?? ""),
+            ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
+          });
+          return {
+            ok: true,
+            output: JSON.stringify({
+              specId: advanced.spec.id,
+              itemId: advanced.transition.itemId,
+              from: advanced.transition.from,
+              to: advanced.transition.to,
+              transitionEvidenceId: advanced.transition.evidenceId,
+              sequence: advanced.transition.sequence,
+            }),
+          };
+        } catch (err) {
+          return {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      },
+    };
+
+    return {
+      driver: new SpecAdvanceDriver({ specId, itemId, to, input }),
+      authorizer: reefAllowlist({ tools: [tool.name] }),
+      executor: new ToolExecutor([tool]),
     };
   }
 

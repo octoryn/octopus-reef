@@ -5,8 +5,15 @@
  * network or a browser.
  */
 import type {
+  AdvanceSpecRequest,
+  AdvanceSpecResponse,
+  CreateSpecRequest,
+  CreateSpecResponse,
   CreateSessionResponse,
   ServerEvent,
+  SpecListResponse,
+  SpecView,
+  SpecVerifyResult,
 } from "@octopus-reef/protocol";
 
 export type { ServerEvent };
@@ -59,6 +66,12 @@ export interface CreateSessionOptions {
     readonly input?: unknown;
     readonly expectDenied?: boolean;
   };
+  readonly spec?: {
+    readonly specId?: string;
+    readonly itemId?: string;
+    readonly to?: import("@octopus-reef/protocol").WorkState;
+    readonly reason?: string;
+  };
 }
 
 /** Start a governed session on the daemon; resolves with its id. */
@@ -79,6 +92,7 @@ export async function createSession(
         : {}),
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
+      ...(options.spec !== undefined ? { spec: options.spec } : {}),
     }),
   });
   if (!res.ok) {
@@ -185,6 +199,53 @@ export async function addCustomPower(
     },
   );
   return body.installed;
+}
+
+export async function listSpecs(baseUrl: string): Promise<SpecListResponse> {
+  return await jsonRequest<SpecListResponse>(`${baseUrl}/specs`);
+}
+
+export async function createSpec(
+  baseUrl: string,
+  input: CreateSpecRequest,
+): Promise<SpecView> {
+  const body = await jsonRequest<CreateSpecResponse>(`${baseUrl}/specs`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return body.spec;
+}
+
+export async function getSpec(
+  baseUrl: string,
+  id: string,
+): Promise<SpecView> {
+  return await jsonRequest<SpecView>(
+    `${baseUrl}/specs/${encodeURIComponent(id)}`,
+  );
+}
+
+export async function advanceSpec(
+  baseUrl: string,
+  id: string,
+  input: AdvanceSpecRequest,
+): Promise<AdvanceSpecResponse> {
+  return await jsonRequest<AdvanceSpecResponse>(
+    `${baseUrl}/specs/${encodeURIComponent(id)}/advance`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function verifySpec(
+  baseUrl: string,
+  id: string,
+): Promise<SpecVerifyResult> {
+  return await jsonRequest<SpecVerifyResult>(
+    `${baseUrl}/specs/${encodeURIComponent(id)}/verify`,
+  );
 }
 
 /** Re-verify a sealed session through the daemon. */

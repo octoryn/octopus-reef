@@ -407,6 +407,93 @@ test("N5: installs an MCP power, records a governed tool call, and denies an una
   }
 });
 
+test("N2: creates a spec, advances workstate through governance, rejects illegal moves, and detects tamper", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-n2-specs-"));
+  const server = new ReefServer({ persistDir: dir });
+  const port = await server.listen(0);
+  try {
+    const created = await request(port, "POST", "/specs", {
+      title: "N2 governed spec",
+      tasks: ["Draft spec", "Implement spec"],
+    });
+    assert.equal(created.status, 201);
+    const spec = created.json.spec;
+    assert.match(spec.id, /^spec-/);
+    assert.equal(spec.tasks.length, 2);
+    assert.equal(spec.tasks[0].state, "proposed");
+    assert.equal(spec.tasks[0].history[0].to, "proposed");
+    assert.match(spec.tasks[0].history[0].evidenceId, /^ev_[a-f0-9]{64}$/);
+
+    const itemId = spec.tasks[0].id as string;
+    const advanced = await request(port, "POST", "/sessions", {
+      task: "N2 governed spec advance",
+      persist: true,
+      spec: {
+        specId: spec.id,
+        itemId,
+        to: "ready",
+        reason: "legal N2 transition",
+      },
+    });
+    assert.equal(advanced.status, 201);
+    const sessionId = advanced.json.id as string;
+    const frames = await collectSSE(port, `/sessions/${sessionId}/events`);
+    const action = frames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "action.executed" &&
+        frame.event.summary.includes("Spec transition"),
+    );
+    assert.ok(action, "spec transition should run through a governed tool action");
+    const observed = frames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "observation" &&
+        typeof frame.event.data.transitionEvidenceId === "string",
+    );
+    assert.ok(observed, "session should observe the spec transition evidence id");
+
+    const view = await request(port, "GET", `/specs/${spec.id}`);
+    assert.equal(view.status, 200);
+    assert.equal(view.json.tasks[0].state, "ready");
+    const transition = view.json.transitions.find(
+      (candidate: { itemId: string; from: string | null; to: string }) =>
+        candidate.itemId === itemId &&
+        candidate.from === "proposed" &&
+        candidate.to === "ready",
+    );
+    assert.ok(transition, "legal transition should be in workstate history");
+    assert.match(transition.evidenceId, /^ev_[a-f0-9]{64}$/);
+
+    const illegal = await request(port, "POST", `/specs/${spec.id}/advance`, {
+      itemId,
+      to: "in_progress",
+      reason: "skip claim illegally",
+    });
+    assert.equal(illegal.status, 400);
+    assert.match(illegal.json.error, /illegal transition/i);
+
+    const before = await request(port, "GET", `/specs/${spec.id}/verify`);
+    assert.equal(before.status, 200);
+    assert.equal(before.json.ok, true);
+    assert.equal(before.json.work, "intact");
+
+    const workPath = join(dir, "specs", spec.id, "workstate.jsonl");
+    const raw = readFileSync(workPath);
+    const offset = raw.indexOf(Buffer.from("ready"));
+    assert.ok(offset >= 0, "workstate trail should contain a flippable transition byte");
+    raw[offset] = raw[offset] === 0x72 ? 0x73 : 0x72;
+    writeFileSync(workPath, raw);
+
+    const after = await request(port, "GET", `/specs/${spec.id}/verify`);
+    assert.equal(after.status, 200);
+    assert.equal(after.json.ok, false);
+    assert.match(after.json.work, /broken/i);
+  } finally {
+    await server.close();
+  }
+});
+
 test("M5: serves the web SPA for non-API routes, confined, API still works", async () => {
   const dir = mkdtempSync(join(tmpdir(), "reef-static-"));
   writeFileSync(
