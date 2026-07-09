@@ -53,7 +53,9 @@ import {
 import type { JsonValue } from "octopus-evidence";
 import type {
   AddCustomSteeringRequest,
+  CreateHookRequest,
   CreateSessionRequest,
+  FireHookRequest,
   SetSteeringActiveRequest,
   ServerEvent,
   SessionView,
@@ -65,6 +67,7 @@ import {
   type AddCustomPowerRequest,
   type InstalledPower,
 } from "./mcp.js";
+import { HookRegistry } from "./hooks.js";
 import {
   SpecRegistry,
   type AdvanceSpecRequest,
@@ -102,6 +105,13 @@ interface SpecSessionRequest {
 
 interface SteeringSessionRequest {
   readonly ids?: readonly string[];
+}
+
+interface HookSessionRequest {
+  readonly id?: string;
+  readonly name?: string;
+  readonly trigger?: string;
+  readonly event?: Readonly<Record<string, unknown>>;
 }
 
 class McpDemoDriver implements Driver {
@@ -272,6 +282,41 @@ class SteeringDriver implements Driver {
   }
 }
 
+class HookDriver implements Driver {
+  readonly name: string;
+  readonly #inner: Driver;
+  readonly #hook: Required<Pick<HookSessionRequest, "id" | "name" | "trigger">> &
+    Pick<HookSessionRequest, "event">;
+
+  constructor(inner: Driver, hook: HookSessionRequest) {
+    this.#inner = inner;
+    this.#hook = {
+      id: optionalString(hook.id) ?? "hook",
+      name: optionalString(hook.name) ?? "Reef hook",
+      trigger: optionalString(hook.trigger) ?? "on-demand",
+      event: hook.event ?? {},
+    };
+    this.name = `${inner.name}+hook`;
+  }
+
+  async *run(ctx: DriverContext): AsyncIterable<DriverStep> {
+    yield {
+      type: "observe",
+      summary: `hook fired: ${this.#hook.name}`,
+      data: {
+        hook: {
+          id: this.#hook.id,
+          name: this.#hook.name,
+          trigger: this.#hook.trigger,
+          event: this.#hook.event ?? {},
+          task: ctx.task,
+        },
+      },
+    };
+    yield* this.#inner.run(ctx);
+  }
+}
+
 export interface DriverFactoryContext {
   readonly task: string;
   readonly workspaceRoot?: string;
@@ -332,6 +377,15 @@ class ConfigurationFailureDriver implements Driver {
 
   async *run(): AsyncIterable<DriverStep> {
     yield { type: "fail", summary: this.#message };
+  }
+}
+
+class RequestFailure extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
   }
 }
 
@@ -494,6 +548,7 @@ export class ReefServer {
   readonly #options: ReefServerOptions;
   readonly #http: Server;
   readonly #powers: McpPowerRegistry;
+  readonly #hooks: HookRegistry;
   readonly #specs: SpecRegistry;
   readonly #steering: SteeringRegistry;
   #counter = 0;
@@ -501,6 +556,7 @@ export class ReefServer {
   constructor(options: ReefServerOptions = {}) {
     this.#options = options;
     this.#powers = new McpPowerRegistry(options.persistDir);
+    this.#hooks = new HookRegistry(options.persistDir);
     this.#specs = new SpecRegistry(options.persistDir);
     this.#steering = new SteeringRegistry(options.persistDir);
     this.#http = createServer((req, res) => {
@@ -701,6 +757,52 @@ export class ReefServer {
         }
       }
     }
+    if (parts[0] === "hooks") {
+      if (method === "GET" && parts.length === 1) {
+        return this.#json(res, 200, this.#hooks.list());
+      }
+      if (method === "POST" && parts.length === 1) {
+        try {
+          const body = (await this.#readJson(req)) as CreateHookRequest;
+          return this.#json(res, 201, { hook: this.#hooks.create(body) });
+        } catch (err) {
+          return this.#fail(
+            res,
+            400,
+            err instanceof Error ? err.message : "bad body",
+          );
+        }
+      }
+      const hookId = parts[1];
+      if (
+        hookId !== undefined &&
+        method === "POST" &&
+        parts.length === 3 &&
+        parts[2] === "fire"
+      ) {
+        try {
+          const body = (await this.#readJson(req)) as FireHookRequest;
+          const fired = this.#hooks.fire(hookId, body);
+          const sessionId = this.#startSession({
+            task: fired.hook.task,
+            persist: body.persist !== false,
+            hook: {
+              id: fired.hook.id,
+              name: fired.hook.name,
+              trigger: fired.hook.trigger,
+              event: fired.event,
+            },
+          });
+          return this.#json(res, 201, { hook: fired.hook, sessionId });
+        } catch (err) {
+          return this.#fail(
+            res,
+            err instanceof RequestFailure ? err.status : 400,
+            err instanceof Error ? err.message : "bad body",
+          );
+        }
+      }
+    }
     if (method === "POST" && parts.length === 1 && parts[0] === "sessions") {
       return this.#createSession(req, res);
     }
@@ -749,18 +851,21 @@ export class ReefServer {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    let body: CreateSessionRequest;
     try {
-      body = (await this.#readJson(req)) as CreateSessionRequest;
+      const body = (await this.#readJson(req)) as CreateSessionRequest;
+      return this.#json(res, 201, { id: this.#startSession(body) });
     } catch (err) {
       return this.#fail(
         res,
-        400,
+        err instanceof RequestFailure ? err.status : 400,
         err instanceof Error ? err.message : "bad body",
       );
     }
+  }
+
+  #startSession(body: CreateSessionRequest): string {
     const task = typeof body.task === "string" ? body.task.trim() : "";
-    if (task === "") return this.#fail(res, 400, "task is required");
+    if (task === "") throw new RequestFailure(400, "task is required");
 
     // Bound memory: evict the oldest SEALED session when at capacity (Map
     // iteration is insertion order). If everything resident is still running,
@@ -774,7 +879,7 @@ export class ReefServer {
           break;
         }
       }
-      if (!evicted) return this.#fail(res, 503, "too many active sessions");
+      if (!evicted) throw new RequestFailure(503, "too many active sessions");
     }
 
     const id = `sess-${(this.#counter++).toString(36)}-${Date.now().toString(36)}`;
@@ -787,7 +892,8 @@ export class ReefServer {
           : normalizeRuntime(
               this.#options.driverFactory?.(context) ?? defaultRuntime(context),
             );
-    const runtime = this.#steeredRuntime(runtimeBase, body.steering);
+    const steeredRuntime = this.#steeredRuntime(runtimeBase, body.steering);
+    const runtime = this.#hookedRuntime(steeredRuntime, body.hook);
     const rec: SessionRecord = {
       id,
       task,
@@ -818,7 +924,7 @@ export class ReefServer {
     });
     this.#sessions.set(id, rec);
     void this.#run(rec, body.persist === true);
-    this.#json(res, 201, { id });
+    return id;
   }
 
   #mcpRuntime(request: McpSessionRequest): SessionRuntime {
@@ -937,6 +1043,17 @@ export class ReefServer {
     return {
       ...runtime,
       driver: new SteeringDriver(runtime.driver, items),
+    };
+  }
+
+  #hookedRuntime(
+    runtime: SessionRuntime,
+    request: HookSessionRequest | undefined,
+  ): SessionRuntime {
+    if (request === undefined) return runtime;
+    return {
+      ...runtime,
+      driver: new HookDriver(runtime.driver, request),
     };
   }
 

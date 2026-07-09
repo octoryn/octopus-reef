@@ -16,9 +16,12 @@ import {
   advanceSpec,
   createSession,
   createSpec,
+  createHook,
+  fireHook,
   getUsage,
   getSpec,
   installPower,
+  listHooks,
   listPowers,
   listSpecs,
   listSteering,
@@ -29,6 +32,7 @@ import {
   type ServerEvent,
 } from "./client.js";
 import {
+  hooksWebviewHtml,
   powersWebviewHtml,
   specsWebviewHtml,
   steeringWebviewHtml,
@@ -444,6 +448,7 @@ async function waitForBundledServer(
 export function activate(context: vscode.ExtensionContext): void {
   let panel: vscode.WebviewPanel | undefined;
   let powersPanel: vscode.WebviewPanel | undefined;
+  let hooksPanel: vscode.WebviewPanel | undefined;
   let specsPanel: vscode.WebviewPanel | undefined;
   let steeringPanel: vscode.WebviewPanel | undefined;
   let usagePanel: vscode.WebviewPanel | undefined;
@@ -670,6 +675,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const refreshSteering = async (): Promise<void> => {
     const steering = await listSteering(activeServerUrl);
     void steeringPanel?.webview.postMessage({ kind: "steering", steering });
+  };
+
+  const refreshHooks = async (): Promise<void> => {
+    const hooks = await listHooks(activeServerUrl);
+    void hooksPanel?.webview.postMessage({ kind: "hooks", hooks });
   };
 
   const runSpecAdvance = async (
@@ -971,6 +981,65 @@ export function activate(context: vscode.ExtensionContext): void {
     steeringPanel.reveal(vscode.ViewColumn.Beside);
   };
 
+  const openHooksPanel = (): void => {
+    if (hooksPanel === undefined) {
+      hooksPanel = vscode.window.createWebviewPanel(
+        "reef.hooks",
+        "Reef Hooks",
+        vscode.ViewColumn.Beside,
+        { enableScripts: true, retainContextWhenHidden: true },
+      );
+      hooksPanel.webview.html = hooksWebviewHtml(
+        hooksPanel.webview.cspSource,
+        hooksPanel.webview
+          .asWebviewUri(
+            vscode.Uri.joinPath(context.extensionUri, "media", "hooks.js"),
+          )
+          .toString(),
+      );
+      hooksPanel.onDidDispose(() => {
+        hooksPanel = undefined;
+      });
+      hooksPanel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+        void (async () => {
+          try {
+            if (message.kind === "listHooks") {
+              await refreshHooks();
+            } else if (
+              message.kind === "createHook" &&
+              message.input !== undefined
+            ) {
+              await createHook(activeServerUrl, message.input);
+              await refreshHooks();
+            } else if (
+              message.kind === "fireHook" &&
+              typeof message.id === "string"
+            ) {
+              const fired = await fireHook(
+                activeServerUrl,
+                message.id,
+                message.input ?? {},
+              );
+              void hooksPanel?.webview.postMessage({
+                kind: "status",
+                tone: "ok",
+                message: `Hook fired into governed session ${fired.sessionId}`,
+              });
+              await refreshHooks();
+            }
+          } catch (err) {
+            void hooksPanel?.webview.postMessage({
+              kind: "status",
+              tone: "bad",
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+        })();
+      });
+    }
+    hooksPanel.reveal(vscode.ViewColumn.Beside);
+  };
+
   const run = vscode.commands.registerCommand("reef.runSession", async () => {
     const task = await vscode.window.showInputBox({
       prompt: "Describe the task for the governed session",
@@ -1037,6 +1106,19 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     },
   );
+
+  const hooks = vscode.commands.registerCommand("reef.openHooks", async () => {
+    openHooksPanel();
+    try {
+      await refreshHooks();
+    } catch (err) {
+      void hooksPanel?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
 
   const mcpDemo = vscode.commands.registerCommand(
     "reef.runMcpDemo",
@@ -1179,6 +1261,7 @@ export function activate(context: vscode.ExtensionContext): void {
     specs,
     usage,
     steering,
+    hooks,
     mcpDemo,
     mcpDenyDemo,
     verify,

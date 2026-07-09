@@ -51,6 +51,11 @@
         "category": "Reef"
       },
       {
+        "command": "reef.openHooks",
+        "title": "Reef: Hooks",
+        "category": "Reef"
+      },
+      {
         "command": "reef.runMcpDemo",
         "title": "Reef: Run MCP Demo",
         "category": "Reef"

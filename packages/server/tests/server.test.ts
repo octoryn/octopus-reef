@@ -588,6 +588,71 @@ test("N3: active steering is evidence-pinned, changes mock behavior, and detects
   }
 });
 
+test("N4: firing a hook creates a governed session and detects evidence tamper", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-n4-hooks-"));
+  const server = new ReefServer({ persistDir: dir });
+  const port = await server.listen(0);
+  try {
+    const createdHook = await request(port, "POST", "/hooks", {
+      name: "N4 on-save verifier",
+      trigger: "on-save",
+      task: "N4 hook governed mock session",
+    });
+    assert.equal(createdHook.status, 201);
+    const hook = createdHook.json.hook;
+    assert.match(hook.id, /^hook-/);
+    assert.equal(hook.trigger, "on-save");
+
+    const listed = await request(port, "GET", "/hooks");
+    assert.equal(listed.status, 200);
+    assert.equal(listed.json.hooks.length, 1);
+
+    const fired = await request(port, "POST", `/hooks/${hook.id}/fire`, {
+      event: { path: "src/n4.ts", reason: "manual verifier fire" },
+    });
+    assert.equal(fired.status, 201);
+    assert.equal(fired.json.hook.id, hook.id);
+    const sessionId = fired.json.sessionId as string;
+    assert.match(sessionId, /^sess-/);
+
+    const frames = await collectSSE(port, `/sessions/${sessionId}/events`);
+    const hookEvidence = frames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "observation" &&
+        (frame.event.data.hook as { id?: string } | undefined)?.id === hook.id,
+    );
+    assert.ok(hookEvidence, "hook fire should be recorded as evidence");
+    if (hookEvidence?.type === "event") {
+      assert.match(hookEvidence.event.evidenceId, /^ev_[a-f0-9]{64}$/);
+      const data = hookEvidence.event.data.hook as {
+        trigger?: string;
+        event?: { path?: string };
+      };
+      assert.equal(data.trigger, "on-save");
+      assert.equal(data.event?.path, "src/n4.ts");
+    }
+
+    const before = await request(port, "GET", `/sessions/${sessionId}/verify`);
+    assert.equal(before.status, 200);
+    assert.equal(before.json.ok, true);
+
+    const logPath = join(dir, sessionId, "session.log.jsonl");
+    const raw = readFileSync(logPath);
+    const offset = raw.indexOf(Buffer.from("N4 on-save verifier"));
+    assert.ok(offset >= 0, "hook evidence should contain a flippable byte");
+    raw[offset] = raw[offset] === 0x4e ? 0x4f : 0x4e;
+    writeFileSync(logPath, raw);
+
+    const after = await request(port, "GET", `/sessions/${sessionId}/verify`);
+    assert.equal(after.status, 200);
+    assert.equal(after.json.ok, false);
+    assert.match(after.json.log, /broken/i);
+  } finally {
+    await server.close();
+  }
+});
+
 test("N2: creates a spec, advances workstate through governance, rejects illegal moves, and detects tamper", async () => {
   const dir = mkdtempSync(join(tmpdir(), "reef-n2-specs-"));
   const server = new ReefServer({ persistDir: dir });

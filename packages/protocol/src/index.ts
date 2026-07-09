@@ -79,6 +79,13 @@ export interface CreateSessionRequest {
   readonly steering?: {
     readonly ids?: readonly string[];
   };
+  /** N4 hook context, recorded into the session evidence when a hook fires. */
+  readonly hook?: {
+    readonly id?: string;
+    readonly name?: string;
+    readonly trigger?: HookTrigger;
+    readonly event?: Readonly<Record<string, unknown>>;
+  };
 }
 
 /** `POST /sessions` response. */
@@ -314,4 +321,37 @@ export interface AddCustomSteeringRequest {
   readonly kind?: SteeringItemKind;
   readonly content?: string;
   readonly mockEffect?: string;
+}
+
+export type HookTrigger = "on-demand" | "on-save";
+
+export interface HookDefinitionView {
+  readonly id: string;
+  readonly name: string;
+  readonly trigger: HookTrigger;
+  readonly task: string;
+  readonly enabled: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface HookListResponse {
+  readonly hooks: readonly HookDefinitionView[];
+}
+
+export interface CreateHookRequest {
+  readonly name?: string;
+  readonly trigger?: HookTrigger;
+  readonly task?: string;
+  readonly enabled?: boolean;
+}
+
+export interface FireHookRequest {
+  readonly event?: Readonly<Record<string, unknown>>;
+  readonly persist?: boolean;
+}
+
+export interface FireHookResponse {
+  readonly hook: HookDefinitionView;
+  readonly sessionId: string;
 }

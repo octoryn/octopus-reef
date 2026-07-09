@@ -15,6 +15,11 @@ import type {
   SpecView,
   SpecVerifyResult,
   AddCustomSteeringRequest,
+  CreateHookRequest,
+  FireHookRequest,
+  FireHookResponse,
+  HookDefinitionView,
+  HookListResponse,
   SetSteeringActiveRequest,
   SteeringItemView,
   SteeringListResponse,
@@ -289,6 +294,38 @@ export async function addCustomSteering(
     },
   );
   return body.steering;
+}
+
+export async function listHooks(baseUrl: string): Promise<HookListResponse> {
+  return await jsonRequest<HookListResponse>(`${baseUrl}/hooks`);
+}
+
+export async function createHook(
+  baseUrl: string,
+  input: CreateHookRequest,
+): Promise<HookDefinitionView> {
+  const body = await jsonRequest<{ hook: HookDefinitionView }>(
+    `${baseUrl}/hooks`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+  return body.hook;
+}
+
+export async function fireHook(
+  baseUrl: string,
+  id: string,
+  input: FireHookRequest = {},
+): Promise<FireHookResponse> {
+  return await jsonRequest<FireHookResponse>(
+    `${baseUrl}/hooks/${encodeURIComponent(id)}/fire`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 /** Re-verify a sealed session through the daemon. */
