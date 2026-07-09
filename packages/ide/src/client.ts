@@ -88,6 +88,13 @@ export interface CreateSessionOptions {
   readonly steering?: {
     readonly ids?: readonly string[];
   };
+  readonly conversation?: {
+    readonly id?: string;
+    readonly turn?: number;
+    readonly parentSessionId?: string;
+    readonly autopilot?: boolean;
+    readonly approvalMode?: "auto" | "ask";
+  };
 }
 
 /** Start a governed session on the daemon; resolves with its id. */
@@ -110,6 +117,9 @@ export async function createSession(
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
       ...(options.spec !== undefined ? { spec: options.spec } : {}),
       ...(options.steering !== undefined ? { steering: options.steering } : {}),
+      ...(options.conversation !== undefined
+        ? { conversation: options.conversation }
+        : {}),
     }),
   });
   if (!res.ok) {
@@ -237,10 +247,7 @@ export async function createSpec(
   return body.spec;
 }
 
-export async function getSpec(
-  baseUrl: string,
-  id: string,
-): Promise<SpecView> {
+export async function getSpec(baseUrl: string, id: string): Promise<SpecView> {
   return await jsonRequest<SpecView>(
     `${baseUrl}/specs/${encodeURIComponent(id)}`,
   );

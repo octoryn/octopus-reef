@@ -125,6 +125,14 @@ interface HookSessionRequest {
   readonly event?: Readonly<Record<string, unknown>>;
 }
 
+interface ConversationSessionRequest {
+  readonly id?: string;
+  readonly turn?: number;
+  readonly parentSessionId?: string;
+  readonly autopilot?: boolean;
+  readonly approvalMode?: "auto" | "ask";
+}
+
 class McpDemoDriver implements Driver {
   readonly name = "mcp-demo";
   readonly #tool: string;
@@ -296,7 +304,9 @@ class SteeringDriver implements Driver {
 class HookDriver implements Driver {
   readonly name: string;
   readonly #inner: Driver;
-  readonly #hook: Required<Pick<HookSessionRequest, "id" | "name" | "trigger">> &
+  readonly #hook: Required<
+    Pick<HookSessionRequest, "id" | "name" | "trigger">
+  > &
     Pick<HookSessionRequest, "event">;
 
   constructor(inner: Driver, hook: HookSessionRequest) {
@@ -320,6 +330,67 @@ class HookDriver implements Driver {
           name: this.#hook.name,
           trigger: this.#hook.trigger,
           event: this.#hook.event ?? {},
+          task: ctx.task,
+        },
+      },
+    };
+    yield* this.#inner.run(ctx);
+  }
+}
+
+class ConversationDriver implements Driver {
+  readonly name: string;
+  readonly #inner: Driver;
+  readonly #conversation: {
+    readonly id: string;
+    readonly turn: number;
+    readonly parentSessionId: string | null;
+    readonly autopilot: boolean;
+    readonly approvalMode: "auto" | "ask";
+  };
+
+  constructor(inner: Driver, request: ConversationSessionRequest) {
+    this.#inner = inner;
+    const autopilot = request.autopilot === true;
+    this.#conversation = {
+      id: optionalString(request.id) ?? "reef-chat",
+      turn:
+        typeof request.turn === "number" &&
+        Number.isInteger(request.turn) &&
+        request.turn > 0
+          ? request.turn
+          : 1,
+      parentSessionId: optionalString(request.parentSessionId) ?? null,
+      autopilot,
+      approvalMode:
+        request.approvalMode === "ask" && !autopilot ? "ask" : "auto",
+    };
+    this.name = `${inner.name}+conversation`;
+  }
+
+  async *run(ctx: DriverContext): AsyncIterable<DriverStep> {
+    const decision =
+      this.#conversation.approvalMode === "auto"
+        ? "autopilot auto-approved the turn"
+        : "human approval was requested and granted";
+    yield {
+      type: "observe",
+      summary: `chat turn ${this.#conversation.turn} approved: ${decision}`,
+      data: {
+        conversation: {
+          id: this.#conversation.id,
+          turn: this.#conversation.turn,
+          parentSessionId: this.#conversation.parentSessionId,
+          autopilot: this.#conversation.autopilot,
+          approvalMode: this.#conversation.approvalMode,
+          approvalDecision: {
+            approved: true,
+            source:
+              this.#conversation.approvalMode === "auto"
+                ? "autopilot"
+                : "human",
+            policy: "reef-chat-approval",
+          },
           task: ctx.task,
         },
       },
@@ -484,7 +555,9 @@ function parseSpecAdvanceOutput(output: string | undefined): {
       ...(typeof parsed.transitionEvidenceId === "string"
         ? { transitionEvidenceId: parsed.transitionEvidenceId }
         : {}),
-      ...(typeof parsed.sequence === "number" ? { sequence: parsed.sequence } : {}),
+      ...(typeof parsed.sequence === "number"
+        ? { sequence: parsed.sequence }
+        : {}),
     };
   } catch {
     return {};
@@ -1077,7 +1150,8 @@ export class ReefServer {
               this.#options.driverFactory?.(context) ?? defaultRuntime(context),
             );
     const steeredRuntime = this.#steeredRuntime(runtimeBase, body.steering);
-    const runtime = this.#hookedRuntime(steeredRuntime, body.hook);
+    const hookedRuntime = this.#hookedRuntime(steeredRuntime, body.hook);
+    const runtime = this.#conversationRuntime(hookedRuntime, body.conversation);
     const rec: SessionRecord = {
       id,
       task,
@@ -1238,6 +1312,17 @@ export class ReefServer {
     return {
       ...runtime,
       driver: new HookDriver(runtime.driver, request),
+    };
+  }
+
+  #conversationRuntime(
+    runtime: SessionRuntime,
+    request: ConversationSessionRequest | undefined,
+  ): SessionRuntime {
+    if (request === undefined) return runtime;
+    return {
+      ...runtime,
+      driver: new ConversationDriver(runtime.driver, request),
     };
   }
 

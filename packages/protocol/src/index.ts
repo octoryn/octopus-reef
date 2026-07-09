@@ -107,6 +107,18 @@ export interface CreateSessionRequest {
     readonly trigger?: HookTrigger;
     readonly event?: Readonly<Record<string, unknown>>;
   };
+  /**
+   * N8 conversational surface context. Each chat turn is still its own governed
+   * session, but the daemon records the conversation/approval context as
+   * evidence before the driver starts working.
+   */
+  readonly conversation?: {
+    readonly id?: string;
+    readonly turn?: number;
+    readonly parentSessionId?: string;
+    readonly autopilot?: boolean;
+    readonly approvalMode?: "auto" | "ask";
+  };
 }
 
 /** `POST /sessions` response. */

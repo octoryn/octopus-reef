@@ -47,6 +47,12 @@ import {
   type FocusRunView,
 } from "./agentFocus.js";
 import {
+  chatApprovalLabel,
+  chatConversationContext,
+  chatModelChip,
+  type ChatConversationContext,
+} from "./chat.js";
+import {
   isWelcomeAction,
   shouldOpenReefWelcome,
   welcomeCommandForAction,
@@ -110,6 +116,19 @@ interface RunTaskResult {
   readonly error?: string;
 }
 
+interface ChatTurnRecord {
+  readonly turnId: string;
+  readonly conversationId: string;
+  readonly turn: number;
+  readonly task: string;
+  readonly autopilot: boolean;
+  sessionId?: string;
+  sessionDir?: string;
+  status: "running" | "sealed" | "error";
+  events: SessionEvent[];
+  verify?: VerifyResult;
+}
+
 interface FocusRunRecord {
   readonly id: string;
   readonly task: string;
@@ -121,6 +140,10 @@ interface FocusRunRecord {
 interface WebviewMessage {
   readonly kind?: string;
   readonly task?: string;
+  readonly turnId?: string;
+  readonly conversationId?: string;
+  readonly turn?: number;
+  readonly autopilot?: boolean;
   readonly id?: string;
   readonly input?: Record<string, unknown>;
   readonly mode?: string;
@@ -504,6 +527,9 @@ export function activate(context: vscode.ExtensionContext): void {
   let focusRuns: FocusRunRecord[] = [];
   let focusWindowMode: "ide" | "focus" = "ide";
   let focusRun: Promise<RunTaskResult> | undefined;
+  let chatRun: Promise<RunTaskResult> | undefined;
+  let chatConversationId = `reef-chat-${Date.now().toString(36)}`;
+  const chatTurns = new Map<string, ChatTurnRecord>();
   let activeSpecId: string | undefined;
   let activeServerUrl = serverUrl();
   let daemon: ChildProcess | undefined;
@@ -556,17 +582,65 @@ export function activate(context: vscode.ExtensionContext): void {
         abort?.abort();
       });
       panel.webview.onDidReceiveMessage((message: WebviewMessage) => {
-        if (
-          message.kind !== "runTask" ||
-          typeof message.task !== "string" ||
-          message.task.trim() === ""
-        ) {
-          return;
-        }
-        if (webviewRun !== undefined) return;
-        webviewRun = runTask(message.task).finally(() => {
-          webviewRun = undefined;
-        });
+        void (async () => {
+          try {
+            if (message.kind === "chatReady") {
+              await postChatConfig();
+              return;
+            }
+            if (
+              message.kind === "sendChatTurn" &&
+              typeof message.task === "string" &&
+              typeof message.turnId === "string" &&
+              message.task.trim() !== ""
+            ) {
+              if (chatRun !== undefined) return;
+              chatRun = runChatTurn({
+                task: message.task,
+                turnId: message.turnId,
+                conversationId:
+                  typeof message.conversationId === "string"
+                    ? message.conversationId
+                    : chatConversationId,
+                turn:
+                  typeof message.turn === "number" && message.turn > 0
+                    ? message.turn
+                    : chatTurns.size + 1,
+                autopilot: message.autopilot === true,
+              }).finally(() => {
+                chatRun = undefined;
+              });
+              await chatRun;
+              return;
+            }
+            if (
+              message.kind === "verifyChatTurn" &&
+              typeof message.turnId === "string"
+            ) {
+              await verifyChatTurn(message.turnId);
+              return;
+            }
+            if (message.kind === "refreshChatUsage") {
+              await postChatUsage();
+              return;
+            }
+            if (
+              message.kind === "runTask" &&
+              typeof message.task === "string" &&
+              message.task.trim() !== ""
+            ) {
+              if (webviewRun !== undefined) return;
+              webviewRun = runTask(message.task).finally(() => {
+                webviewRun = undefined;
+              });
+              await webviewRun;
+            }
+          } catch (err) {
+            webviewSurface().error(
+              err instanceof Error ? err.message : String(err),
+            );
+          }
+        })();
       });
     }
     return webviewSurface();
@@ -590,6 +664,109 @@ export function activate(context: vscode.ExtensionContext): void {
       ) + "\n",
       "utf8",
     );
+  };
+
+  const writeChatState = async (): Promise<void> => {
+    await mkdir(context.globalStorageUri.fsPath, { recursive: true });
+    await writeFile(
+      join(context.globalStorageUri.fsPath, "last-chat.json"),
+      JSON.stringify(
+        {
+          serverUrl: activeServerUrl,
+          conversationId: chatConversationId,
+          turns: [...chatTurns.values()].map((turn) => ({
+            turnId: turn.turnId,
+            conversationId: turn.conversationId,
+            turn: turn.turn,
+            task: turn.task,
+            autopilot: turn.autopilot,
+            sessionId: turn.sessionId ?? null,
+            sessionDir: turn.sessionDir ?? null,
+            status: turn.status,
+            verify: turn.verify ?? null,
+            evidenceLinks: turn.events.length,
+          })),
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf8",
+    );
+  };
+
+  const chatView = (
+    turn: ChatTurnRecord,
+    usage?: Awaited<ReturnType<typeof getUsage>>,
+  ): FocusRunView =>
+    buildFocusRunView({
+      task: turn.task,
+      events: turn.events,
+      ...(turn.verify !== undefined ? { verify: turn.verify } : {}),
+      ...(usage !== undefined ? { usage } : {}),
+      ...(turn.sessionId !== undefined ? { sessionId: turn.sessionId } : {}),
+    });
+
+  const postChatConfig = async (): Promise<void> => {
+    const usage = await getUsage(activeServerUrl).catch(() => undefined);
+    void panel?.webview.postMessage({
+      kind: "chatConfig",
+      conversationId: chatConversationId,
+      modelChip: chatModelChip(modelSettings(), process.env),
+      usage: focusUsageSnapshot(usage, lastSessionId),
+    });
+  };
+
+  const postChatUsage = async (): Promise<void> => {
+    const usage = await getUsage(activeServerUrl);
+    void panel?.webview.postMessage({
+      kind: "chatUsage",
+      usage: focusUsageSnapshot(usage, lastSessionId),
+    });
+  };
+
+  const postChatError = (message: string, turnId?: string): void => {
+    void panel?.webview.postMessage({
+      kind: "chatError",
+      message,
+      ...(turnId !== undefined ? { turnId } : {}),
+    });
+  };
+
+  const verifyChatTurn = async (
+    turnId: string,
+  ): Promise<VerifyResult | undefined> => {
+    const turn = chatTurns.get(turnId);
+    if (turn?.sessionId === undefined) {
+      postChatError(
+        "Reef: this chat turn has not sealed a session yet.",
+        turnId,
+      );
+      return undefined;
+    }
+    const v = await verifySession(activeServerUrl, turn.sessionId);
+    turn.verify = v;
+    if (
+      lastSessionId === turn.sessionId &&
+      lastVerify !== undefined &&
+      lastVerify.type === "sealed"
+    ) {
+      lastVerify = {
+        type: "sealed",
+        snapshot: lastVerify.snapshot,
+        verify: v,
+      };
+      await writeState();
+    }
+    await writeChatState();
+    const usage = await getUsage(activeServerUrl).catch(() => undefined);
+    void panel?.webview.postMessage({
+      kind: "chatTurnVerified",
+      turnId,
+      verify: v,
+      view: chatView(turn, usage),
+    });
+    setStatus(status, v);
+    return v;
   };
 
   const runTask = async (
@@ -666,6 +843,129 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(
         `Reef: could not reach the daemon at ${base} — is \`reef serve\` running? (${message})`,
       );
+      return { error: message };
+    }
+  };
+
+  const runChatTurn = async (input: {
+    readonly task: string;
+    readonly turnId: string;
+    readonly conversationId: string;
+    readonly turn: number;
+    readonly autopilot: boolean;
+  }): Promise<RunTaskResult> => {
+    const base = activeServerUrl;
+    const trimmed = input.task.trim();
+    if (trimmed === "") return { error: "task is required" };
+    const workspaceRoot = firstWorkspaceRoot();
+    const model = modelSettings();
+    chatConversationId = input.conversationId;
+    const parentSessionId = [...chatTurns.values()]
+      .filter((turn) => turn.sessionId !== undefined)
+      .sort((a, b) => b.turn - a.turn)[0]?.sessionId;
+    const conversation: ChatConversationContext = chatConversationContext({
+      conversationId: input.conversationId,
+      turn: input.turn,
+      ...(parentSessionId !== undefined ? { parentSessionId } : {}),
+      autopilot: input.autopilot,
+    });
+    const record: ChatTurnRecord = {
+      turnId: input.turnId,
+      conversationId: conversation.id,
+      turn: conversation.turn,
+      task: trimmed,
+      autopilot: input.autopilot,
+      status: "running",
+      events: [],
+    };
+    chatTurns.set(input.turnId, record);
+    await writeChatState();
+    const surface = ensureSurface();
+    await surface.reveal();
+    abort?.abort();
+    abort = new AbortController();
+    lastVerify = undefined;
+    lastSessionId = undefined;
+    lastSessionDir = undefined;
+    let runVerify: VerifyResult | undefined;
+    setStatus(status, undefined, "Reef chat turn running");
+    void panel?.webview.postMessage({
+      kind: "chatTurnStarted",
+      turnId: input.turnId,
+      conversationId: conversation.id,
+      turn: conversation.turn,
+      approval: chatApprovalLabel(input.autopilot),
+      modelChip: chatModelChip(model, process.env),
+    });
+
+    try {
+      const id = await createSession(base, trimmed, {
+        persist: true,
+        ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+        ...(model !== undefined ? { model } : {}),
+        conversation,
+      });
+      record.sessionId = id;
+      record.sessionDir = join(persistDir, id);
+      lastSessionId = id;
+      lastSessionDir = record.sessionDir;
+      await writeState();
+      await writeChatState();
+      void panel?.webview.postMessage({
+        kind: "chatTurnSession",
+        turnId: input.turnId,
+        sessionId: id,
+        sessionDir: record.sessionDir,
+      });
+      await streamEvents(
+        base,
+        id,
+        (event) => {
+          if (event.type === "event") {
+            record.events.push(event.event);
+            void panel?.webview.postMessage({
+              kind: "chatTurnEvent",
+              turnId: input.turnId,
+              event: event.event,
+              view: chatView(record),
+            });
+          } else if (event.type === "sealed") {
+            lastVerify = event;
+            runVerify = event.verify;
+            record.status = "sealed";
+            record.verify = event.verify;
+            setStatus(status, event.verify);
+            void writeState();
+            void writeChatState();
+            void panel?.webview.postMessage({
+              kind: "chatTurnSealed",
+              turnId: input.turnId,
+              snapshot: event.snapshot,
+              verify: event.verify,
+              view: chatView(record),
+            });
+            void postChatUsage().catch((err) => {
+              postChatError(err instanceof Error ? err.message : String(err));
+            });
+          }
+        },
+        abort.signal,
+      );
+      return {
+        sessionId: id,
+        ...(runVerify !== undefined ? { verify: runVerify } : {}),
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      record.status = "error";
+      await writeChatState();
+      postChatError(message, input.turnId);
+      status.text = "Reef ✗ chat turn failed";
+      status.tooltip = message;
+      status.backgroundColor = new vscode.ThemeColor(
+        "statusBarItem.errorBackground",
+      );
+      status.show();
       return { error: message };
     }
   };
@@ -1477,6 +1777,15 @@ export function activate(context: vscode.ExtensionContext): void {
     await runTask(task);
   });
 
+  const openChat = vscode.commands.registerCommand(
+    "reef.openChat",
+    async () => {
+      const surface = ensureSurface();
+      await surface.reveal();
+      await postChatConfig();
+    },
+  );
+
   const welcome = vscode.commands.registerCommand("reef.openWelcome", () => {
     openWelcomePanel();
   });
@@ -1709,6 +2018,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     status,
     run,
+    openChat,
     welcome,
     agentFocus,
     verifyAgentFocus,

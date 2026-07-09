@@ -26,6 +26,11 @@
         "category": "Reef"
       },
       {
+        "command": "reef.openChat",
+        "title": "Reef: Chat",
+        "category": "Reef"
+      },
+      {
         "command": "reef.openWelcome",
         "title": "Reef: Welcome",
         "category": "Reef"

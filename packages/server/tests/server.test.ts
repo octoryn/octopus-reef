@@ -504,8 +504,10 @@ test("C1: commercial gateway records entitlement, quota, route evidence and deni
       (frame) =>
         frame.type === "event" &&
         frame.event.kind === "observation" &&
-        (frame.event.data.entitlementDecision as { allowed?: boolean } | undefined)
-          ?.allowed === true,
+        (
+          frame.event.data.entitlementDecision as
+            { allowed?: boolean } | undefined
+        )?.allowed === true,
     );
     assert.ok(entitlement, "entitlement decision should be evidence");
     if (entitlement?.type === "event") {
@@ -563,7 +565,10 @@ test("C1: commercial gateway records entitlement, quota, route evidence and deni
     const logPath = join(dir, id, "session.log.jsonl");
     const raw = readFileSync(logPath);
     const offset = raw.indexOf(Buffer.from("gateway route selected"));
-    assert.ok(offset >= 0, "gateway route evidence should contain flippable text");
+    assert.ok(
+      offset >= 0,
+      "gateway route evidence should contain flippable text",
+    );
     raw[offset] = raw[offset] === 0x67 ? 0x68 : 0x67;
     writeFileSync(logPath, raw);
 
@@ -590,9 +595,10 @@ test("C1: commercial gateway records entitlement, quota, route evidence and deni
         (frame) =>
           frame.type === "event" &&
           frame.event.kind === "observation" &&
-          (frame.event.data.entitlementDecision as
-            | { allowed?: boolean }
-            | undefined)?.allowed === false,
+          (
+            frame.event.data.entitlementDecision as
+              { allowed?: boolean } | undefined
+          )?.allowed === false,
       ),
       "no-license denial should record entitlement evidence",
     );
@@ -654,6 +660,135 @@ test("C1: commercial gateway records entitlement, quota, route evidence and deni
     );
   } finally {
     await community.close();
+  }
+});
+
+test("N8: chat turns record conversation approval evidence and tamper per turn", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-n8-chat-"));
+  const server = new ReefServer({ persistDir: dir });
+  const port = await server.listen(0);
+  try {
+    const first = await request(port, "POST", "/sessions", {
+      task: "N8 first conversational turn",
+      persist: true,
+      conversation: {
+        id: "conv-n8",
+        turn: 1,
+        autopilot: false,
+        approvalMode: "ask",
+      },
+    });
+    assert.equal(first.status, 201);
+    const firstId = first.json.id as string;
+    const firstFrames = await collectSSE(port, `/sessions/${firstId}/events`);
+    const askEvidence = firstFrames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "observation" &&
+        (
+          frame.event.data.conversation as
+            | { id?: string; approvalMode?: string; autopilot?: boolean }
+            | undefined
+        )?.id === "conv-n8",
+    );
+    assert.ok(askEvidence, "ask-mode approval should be recorded as evidence");
+    if (askEvidence?.type === "event") {
+      assert.match(askEvidence.event.evidenceId, /^ev_[a-f0-9]{64}$/);
+      const conversation = askEvidence.event.data.conversation as {
+        turn?: number;
+        autopilot?: boolean;
+        approvalMode?: string;
+        approvalDecision?: { source?: string; approved?: boolean };
+      };
+      assert.equal(conversation.turn, 1);
+      assert.equal(conversation.autopilot, false);
+      assert.equal(conversation.approvalMode, "ask");
+      assert.equal(conversation.approvalDecision?.source, "human");
+      assert.equal(conversation.approvalDecision?.approved, true);
+    }
+
+    const second = await request(port, "POST", "/sessions", {
+      task: "N8 second conversational turn",
+      persist: true,
+      conversation: {
+        id: "conv-n8",
+        turn: 2,
+        parentSessionId: firstId,
+        autopilot: true,
+        approvalMode: "auto",
+      },
+    });
+    assert.equal(second.status, 201);
+    const secondId = second.json.id as string;
+    const secondFrames = await collectSSE(port, `/sessions/${secondId}/events`);
+    const autoEvidence = secondFrames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "observation" &&
+        (
+          frame.event.data.conversation as
+            { parentSessionId?: string; approvalMode?: string } | undefined
+        )?.parentSessionId === firstId,
+    );
+    assert.ok(
+      autoEvidence,
+      "autopilot approval should be recorded as evidence",
+    );
+    if (autoEvidence?.type === "event") {
+      const conversation = autoEvidence.event.data.conversation as {
+        turn?: number;
+        autopilot?: boolean;
+        approvalMode?: string;
+        approvalDecision?: { source?: string };
+      };
+      assert.equal(conversation.turn, 2);
+      assert.equal(conversation.autopilot, true);
+      assert.equal(conversation.approvalMode, "auto");
+      assert.equal(conversation.approvalDecision?.source, "autopilot");
+    }
+
+    const firstBefore = await request(
+      port,
+      "GET",
+      `/sessions/${firstId}/verify`,
+    );
+    const secondBefore = await request(
+      port,
+      "GET",
+      `/sessions/${secondId}/verify`,
+    );
+    assert.equal(firstBefore.status, 200);
+    assert.equal(secondBefore.status, 200);
+    assert.equal(firstBefore.json.ok, true);
+    assert.equal(secondBefore.json.ok, true);
+
+    const logPath = join(dir, firstId, "session.log.jsonl");
+    const raw = readFileSync(logPath);
+    const offset = raw.indexOf(Buffer.from("human"));
+    assert.ok(
+      offset >= 0,
+      "chat approval evidence should contain flippable text",
+    );
+    raw[offset] = raw[offset] === 0x68 ? 0x69 : 0x68;
+    writeFileSync(logPath, raw);
+
+    const firstAfter = await request(
+      port,
+      "GET",
+      `/sessions/${firstId}/verify`,
+    );
+    const secondAfter = await request(
+      port,
+      "GET",
+      `/sessions/${secondId}/verify`,
+    );
+    assert.equal(firstAfter.status, 200);
+    assert.equal(firstAfter.json.ok, false);
+    assert.match(firstAfter.json.log, /broken/i);
+    assert.equal(secondAfter.status, 200);
+    assert.equal(secondAfter.json.ok, true);
+  } finally {
+    await server.close();
   }
 });
 
@@ -732,10 +867,12 @@ test("N6: usage endpoint aggregates persisted provider usage and labelled cost",
       /injected-provider test price table/,
     );
     assert.deepEqual(
-      usage.json.remaining.map((entry: { provider: string; status: string }) => [
-        entry.provider,
-        entry.status,
-      ]),
+      usage.json.remaining.map(
+        (entry: { provider: string; status: string }) => [
+          entry.provider,
+          entry.status,
+        ],
+      ),
       [
         ["anthropic", "pending-key"],
         ["bedrock", "not-available"],
@@ -790,11 +927,8 @@ test("N3: active steering is evidence-pinned, changes mock behavior, and detects
         frame.type === "event" &&
         frame.event.kind === "observation" &&
         Array.isArray(
-          (
-            frame.event.data.steeringSet as
-              | { active?: unknown }
-              | undefined
-          )?.active,
+          (frame.event.data.steeringSet as { active?: unknown } | undefined)
+            ?.active,
         ),
     );
     assert.ok(applied, "active steering set should be pinned into evidence");
@@ -813,7 +947,8 @@ test("N3: active steering is evidence-pinned, changes mock behavior, and detects
         (frame) =>
           frame.type === "event" &&
           frame.event.kind === "message" &&
-          frame.event.summary === "N3 custom steering changed the mock session.",
+          frame.event.summary ===
+            "N3 custom steering changed the mock session.",
       ),
       "steering doc should change the mock session behavior",
     );
@@ -940,14 +1075,20 @@ test("N2: creates a spec, advances workstate through governance, rejects illegal
         frame.event.kind === "action.executed" &&
         frame.event.summary.includes("Spec transition"),
     );
-    assert.ok(action, "spec transition should run through a governed tool action");
+    assert.ok(
+      action,
+      "spec transition should run through a governed tool action",
+    );
     const observed = frames.find(
       (frame) =>
         frame.type === "event" &&
         frame.event.kind === "observation" &&
         typeof frame.event.data.transitionEvidenceId === "string",
     );
-    assert.ok(observed, "session should observe the spec transition evidence id");
+    assert.ok(
+      observed,
+      "session should observe the spec transition evidence id",
+    );
 
     const view = await request(port, "GET", `/specs/${spec.id}`);
     assert.equal(view.status, 200);
@@ -977,7 +1118,10 @@ test("N2: creates a spec, advances workstate through governance, rejects illegal
     const workPath = join(dir, "specs", spec.id, "workstate.jsonl");
     const raw = readFileSync(workPath);
     const offset = raw.indexOf(Buffer.from("ready"));
-    assert.ok(offset >= 0, "workstate trail should contain a flippable transition byte");
+    assert.ok(
+      offset >= 0,
+      "workstate trail should contain a flippable transition byte",
+    );
     raw[offset] = raw[offset] === 0x72 ? 0x73 : 0x72;
     writeFileSync(workPath, raw);
 

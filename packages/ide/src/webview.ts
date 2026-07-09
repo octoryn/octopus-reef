@@ -11,35 +11,140 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
 <meta http-equiv="Content-Security-Policy"
   content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource};" />
 <style>
-  :root{--deep:#0a1416;--deep2:#0f1e21;--line:#1b3034;--ink:#eaf2f0;--muted:#7c9a9b;--signal:#3de0be;--danger:#ff6b6b;--mono:ui-monospace,Menlo,monospace}
-  body{margin:0;background:var(--deep);color:var(--ink);font-family:var(--mono);font-size:13px;padding:16px}
-  .hd{color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:12px}
-  .hd b{color:var(--signal)}
-  .chat{display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:14px}
-  .chat input{min-width:0;background:var(--deep2);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;padding:9px 10px;outline:none}
-  .chat input:focus{border-color:var(--signal)}
-  .chat button{background:var(--signal);border:0;border-radius:6px;color:#001714;font:inherit;font-weight:700;padding:0 14px}
-  .chat button:disabled,.chat input:disabled{opacity:.55}
-  .row{display:grid;grid-template-columns:26px 74px 1fr auto;gap:10px;padding:5px 0;border-bottom:1px solid rgba(27,48,52,.5)}
-  .row .k{color:var(--muted)}
-  .row.exec .k,.row.seal .k{color:var(--signal)}
-  .row.deny .k,.row.deny .s{color:var(--danger)}
-  .row .s{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .row .e{color:var(--muted);opacity:.6}
-  .proof{margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:14px;background:var(--deep2)}
-  .proof.ok{border-color:var(--signal)}.proof.bad{border-color:var(--danger)}
-  .proof .v{font-weight:700;letter-spacing:.04em}
-  .proof.ok .v{color:var(--signal)}.proof.bad .v{color:var(--danger)}
-  .checks{display:flex;gap:18px;margin:10px 0;color:var(--muted)}
-  .checks b{color:var(--signal)}.checks b.bad{color:var(--danger)}
-  .chains{color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
+  :root{--bg:#0a0e15;--panel:#0d1219;--panel2:#121922;--line:rgba(255,255,255,.08);--line2:rgba(51,230,192,.34);--ink:#eef7f5;--muted:#8a97a5;--faint:#56616e;--signal:#33e6c0;--danger:#ff5e76;--warn:#ffd166;--blue:#7ab7ff;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;--sans:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13px;letter-spacing:0}
+  button,input,textarea{font:inherit}
+  button{border:0;cursor:pointer}
+  button:disabled,textarea:disabled{opacity:.55;cursor:default}
+  .app{height:100vh;display:grid;grid-template-rows:52px 1fr auto;background:radial-gradient(circle at 50% 38%,rgba(51,230,192,.055),transparent 270px),var(--bg)}
+  .tabs{height:52px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 18px;background:#0a0f16}
+  .tab-left{display:flex;align-items:center;gap:10px;min-width:0}
+  .tab{display:flex;align-items:center;gap:9px;height:32px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);font-weight:700}
+  .tab-dot{width:8px;height:8px;border-radius:50%;background:var(--signal);box-shadow:0 0 16px rgba(51,230,192,.65)}
+  .icon-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--line);display:grid;place-items:center;background:var(--panel);color:var(--muted);font-weight:800}
+  .icon-btn:hover{border-color:var(--line2);color:var(--ink)}
+  .tab-actions{display:flex;align-items:center;gap:8px}
+  main{min-height:0;overflow:auto;padding:22px 20px 18px}
+  .empty{min-height:100%;display:grid;place-items:center;padding:16px 0 28px}
+  .empty-inner{width:min(720px,100%);display:grid;justify-items:center;text-align:center}
+  .logo{width:132px;height:132px;margin-bottom:27px}
+  .logo svg{width:100%;height:100%;display:block}
+  h1{margin:0;font-size:44px;line-height:1.04;font-weight:780;letter-spacing:0}
+  h1 span{color:var(--signal)}
+  .subtitle{margin:15px 0 31px;color:#c8d2dc;font-size:16px;line-height:1.5}
+  .shortcuts{width:min(530px,100%);display:grid;gap:10px}
+  .shortcut{display:grid;grid-template-columns:38px 1fr;gap:12px;align-items:center;text-align:left;padding:13px 14px;border:1px solid var(--line);border-radius:8px;background:rgba(13,18,25,.78);color:var(--ink)}
+  .shortcut:hover{border-color:rgba(51,230,192,.5);background:#111923}
+  .shortcut .glyph{width:38px;height:38px;border-radius:8px;border:1px solid var(--line);background:#0a0f16;display:grid;place-items:center;color:var(--signal);font-family:var(--mono);font-weight:800}
+  .shortcut b{display:block;font-size:14px}
+  .shortcut span{display:block;margin-top:3px;color:var(--muted);font-size:12px;line-height:1.35}
+  .diffline{margin-top:23px;color:var(--faint);font-family:var(--mono);font-size:12px}
+  .conversation{display:grid;gap:18px;width:min(920px,100%);margin:0 auto;padding-bottom:8px}
+  .hidden{display:none!important}
+  .message{display:grid;gap:8px}
+  .message.user{justify-items:end}
+  .bubble{max-width:min(680px,100%);border:1px solid var(--line);border-radius:8px;padding:12px 14px;line-height:1.5;background:#111923;color:#dbe8e5;white-space:pre-wrap}
+  .message.user .bubble{background:#10211f;border-color:rgba(51,230,192,.28)}
+  .turn{border:1px solid var(--line);border-radius:8px;background:rgba(13,18,25,.88);overflow:hidden}
+  .turn-head{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding:12px 14px}
+  .turn-title{display:flex;align-items:center;gap:9px;min-width:0;font-weight:760}
+  .turn-title span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .badge{border:1px solid var(--line);border-radius:999px;padding:5px 9px;font-family:var(--mono);font-size:11px;font-weight:800;color:var(--warn);white-space:nowrap}
+  .badge.ok{color:var(--signal);border-color:rgba(51,230,192,.6)}
+  .badge.bad{color:var(--danger);border-color:rgba(255,94,118,.58)}
+  .turn-body{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px}
+  .section{border:1px solid var(--line);border-radius:8px;background:#0b1118;padding:12px;min-width:0}
+  .section.wide{grid-column:1 / -1}
+  .section h2{margin:0 0 9px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0;font-weight:800}
+  ul{margin:0;padding-left:17px;display:grid;gap:6px}
+  li{line-height:1.42}
+  li span{color:var(--muted);font-family:var(--mono);font-size:11px}
+  li.bad b{color:var(--danger)}li.ok b{color:var(--signal)}
+  pre{margin:0;white-space:pre-wrap;overflow:auto;max-height:220px;color:#dbe8e5;font-family:var(--mono);font-size:12px;line-height:1.45}
+  .evidence{display:grid;grid-template-columns:34px 72px 1fr 88px;gap:8px;align-items:start;border-bottom:1px solid rgba(255,255,255,.055);padding:6px 0;color:var(--muted);font-family:var(--mono);font-size:11px}
+  .evidence span:nth-child(3){color:var(--ink);font-family:var(--sans);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .evidence.ok span:nth-child(2){color:var(--signal)}.evidence.bad span:nth-child(2),.evidence.bad span:nth-child(3){color:var(--danger)}
+  .turn-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--line);padding:10px 14px;color:var(--muted);font-family:var(--mono);font-size:11px}
+  .verify-btn{border:1px solid var(--line);border-radius:7px;background:#111923;color:var(--ink);padding:6px 9px;font-weight:800}
+  .verify-btn:hover{border-color:var(--line2)}
+  .approval{display:flex;align-items:center;gap:8px;color:var(--muted)}
+  .approval-card{width:min(680px,100%);justify-self:end;border:1px solid rgba(255,209,102,.42);border-radius:8px;background:#19150a;padding:12px 14px;display:grid;gap:10px;color:#f3df9f}
+  .approval-card button{width:max-content;border-radius:7px;background:var(--warn);color:#1b1300;font-weight:800;padding:7px 11px}
+  .composer{border-top:1px solid var(--line);background:#0a0f16;padding:14px 18px}
+  .composer form{width:min(920px,100%);margin:0 auto;display:grid;grid-template-columns:auto auto 1fr auto auto auto;gap:9px;align-items:center;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:9px}
+  textarea{min-width:0;width:100%;height:40px;max-height:130px;resize:none;background:transparent;border:0;color:var(--ink);outline:none;padding:10px 4px;line-height:1.35}
+  textarea::placeholder{color:#65717e}
+  .model{border:1px solid var(--line);border-radius:999px;color:#c4d0da;background:#101720;padding:7px 10px;font-family:var(--mono);font-size:11px;white-space:nowrap}
+  .toggle{display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;background:#101720;color:var(--muted);padding:5px 8px;font-family:var(--mono);font-size:11px}
+  .switch{width:28px;height:16px;border-radius:999px;background:#26303b;position:relative}
+  .switch::after{content:"";position:absolute;width:12px;height:12px;border-radius:50%;left:2px;top:2px;background:#8793a0;transition:transform .15s,background .15s}
+  .toggle.on{color:var(--signal);border-color:rgba(51,230,192,.45)}
+  .toggle.on .switch::after{transform:translateX(12px);background:var(--signal)}
+  .send{width:38px;height:38px;border-radius:10px;background:var(--signal);color:#021411;font-size:19px;font-weight:900;display:grid;place-items:center}
+  .send:disabled{background:#23313a;color:#71808d}
+  .usage{width:min(920px,100%);margin:9px auto 0;display:grid;grid-template-columns:110px 120px minmax(220px,1fr) minmax(260px,1fr);gap:8px;color:var(--muted)}
+  .usage div{border:1px solid var(--line);border-radius:8px;background:#0b1118;padding:8px;min-width:0}
+  .usage b{display:block;color:var(--signal);font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis}
+  .usage span{display:block;margin-top:2px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  @media (max-width:760px){h1{font-size:34px}.turn-body{grid-template-columns:1fr}.composer form{grid-template-columns:auto auto 1fr auto}.model,.toggle{grid-column:1 / -1;width:max-content}.usage{grid-template-columns:1fr 1fr}.evidence{grid-template-columns:28px 56px 1fr}.evidence span:last-child{display:none}}
 </style>
 </head>
 <body>
-<div class="hd"><b>&#x259A; reef</b> &mdash; <span id="task">idle</span></div>
-<form class="chat" id="chat"><input id="chat-input" autocomplete="off" placeholder="Let's build..." /><button id="chat-submit" type="submit">Run</button></form>
-<div id="timeline"></div>
-<div id="proof"></div>
+<div class="app">
+  <header class="tabs">
+    <div class="tab-left">
+      <div class="tab"><span class="tab-dot"></span><span>New Session</span></div>
+      <button class="icon-btn" id="new-session" type="button" title="New Session">+</button>
+    </div>
+    <div class="tab-actions">
+      <button class="icon-btn" type="button" title="More">...</button>
+    </div>
+  </header>
+  <main id="main">
+    <section id="empty" class="empty">
+      <div class="empty-inner">
+        <div class="logo" aria-label="Reef octopus logo">
+          <svg viewBox="0 0 140 140" role="img" aria-hidden="true">
+            <defs><linearGradient id="reef-octo" x1="22" x2="118" y1="18" y2="124"><stop stop-color="#33e6c0"/><stop offset="1" stop-color="#7ab7ff"/></linearGradient></defs>
+            <circle cx="70" cy="55" r="34" fill="none" stroke="url(#reef-octo)" stroke-width="7"/>
+            <circle cx="57" cy="51" r="4" fill="#e9fffb"/><circle cx="83" cy="51" r="4" fill="#e9fffb"/>
+            <path d="M54 69c9 8 23 8 32 0" fill="none" stroke="#e9fffb" stroke-width="5" stroke-linecap="round"/>
+            <path d="M38 85c-15 8-20 19-15 30 5 10 19 10 27-1M52 91c-12 15-11 28-1 35 10 7 22 1 23-13M70 94c-2 18 6 29 18 29 13 0 20-11 15-24M88 90c10 15 23 18 32 10 9-9 5-22-11-28" fill="none" stroke="url(#reef-octo)" stroke-width="7" stroke-linecap="round"/>
+            <path d="M35 63c-13 0-21-8-22-18M105 63c13 0 21-8 22-18" fill="none" stroke="url(#reef-octo)" stroke-width="7" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h1>Let&rsquo;s <span>build.</span></h1>
+        <div class="subtitle">Describe a task &mdash; Reef gets it done, and proves every step.</div>
+        <div class="shortcuts">
+          <button class="shortcut" type="button" data-shortcut="Spec"><span class="glyph">SP</span><span><b>Spec</b><span>Shape a governed workstate spec before the run.</span></span></button>
+          <button class="shortcut" type="button" data-shortcut="Plan"><span class="glyph">PL</span><span><b>Plan</b><span>Ask for the sequence of actions before edits begin.</span></span></button>
+          <button class="shortcut" type="button" data-shortcut="Bug Fix"><span class="glyph">BF</span><span><b>Bug Fix</b><span>Trace a failure, patch it, and verify the result.</span></span></button>
+          <button class="shortcut" type="button" data-shortcut="Replay"><span class="glyph">RP</span><span><b>Replay</b><span>Re-check evidence and explain what changed.</span></span></button>
+        </div>
+        <div class="diffline">every action is evidence-chained · verify green, tamper &rarr; red</div>
+      </div>
+    </section>
+    <section id="conversation" class="conversation hidden" aria-live="polite"></section>
+  </main>
+  <footer class="composer">
+    <form id="chat">
+      <button id="hash" class="icon-btn" type="button" title="Reference">#</button>
+      <button id="attach" class="icon-btn" type="button" title="Attach">&#8679;</button>
+      <textarea id="chat-input" spellcheck="false" placeholder="Ask a question or describe a task..."></textarea>
+      <div id="model-chip" class="model">Mock · Offline</div>
+      <button id="autopilot" class="toggle" type="button" aria-pressed="false"><span class="switch"></span><span>Autopilot</span></button>
+      <button id="chat-submit" class="send" type="submit" title="Send">&rsaquo;</button>
+    </form>
+    <div id="usage" class="usage">
+      <div><b>0</b><span>tokens used</span></div>
+      <div><b>$0.000000</b><span>cost</span></div>
+      <div><b>0 calls</b><span>provider usage from evidence</span></div>
+      <div><b>remaining</b><span>not available from the offline mock provider</span></div>
+    </div>
+  </footer>
+</div>
 <script src="${scriptUri}"></script>
 </body>
 </html>`;
