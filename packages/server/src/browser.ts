@@ -312,10 +312,19 @@ export class BrowserPowerRuntime {
   close(): void {
     this.#cdp?.close();
     this.#cdp = undefined;
-    this.#child?.kill();
+    this.#child?.kill("SIGKILL");
     this.#child = undefined;
     if (this.#profileDir !== undefined) {
-      rmSync(this.#profileDir, { recursive: true, force: true });
+      try {
+        rmSync(this.#profileDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 50,
+          retryDelay: 100,
+        });
+      } catch {
+        /* Chrome can leave profile files briefly locked after CDP shutdown. */
+      }
       this.#profileDir = undefined;
     }
   }
