@@ -574,6 +574,136 @@ test(
   },
 );
 
+test(
+  "N11c: browser annotation is evidence-logged and the annotated DOM is reachable",
+  { skip: chromeAvailable() ? false : "Google Chrome is not available" },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "reef-n11c-browser-"));
+    const page = await startLocalPage(`<!doctype html>
+<html>
+  <head><title>Reef Browser Annotation Test</title></head>
+  <body>
+    <section id="annotated" style="position:absolute;left:400px;top:180px;width:420px;height:220px">
+      <h1>Annotated Reef Element</h1>
+      <p>Agent should read this exact DOM after annotation.</p>
+    </section>
+  </body>
+</html>`);
+    const server = new ReefServer({ persistDir: dir });
+    const port = await server.listen(0);
+    try {
+      const created = await request(port, "POST", "/sessions", {
+        task: "N11c governed browser annotation",
+        persist: true,
+        browser: {
+          url: page.url,
+          annotation: {
+            url: page.url,
+            note: "Annotate the Reef element for the agent",
+            bbox: {
+              x: 480,
+              y: 220,
+              width: 80,
+              height: 60,
+              viewportWidth: 1280,
+              viewportHeight: 900,
+            },
+          },
+        },
+      });
+      assert.equal(created.status, 201);
+      const id = created.json.id as string;
+      const frames = await collectSSE(port, `/sessions/${id}/events`);
+      const annotationInput = frames.find(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          frame.event.summary.includes("browser annotation input"),
+      );
+      assert.ok(annotationInput, "annotation input should be evidence");
+      if (annotationInput?.type === "event") {
+        assert.match(annotationInput.event.evidenceId, /^ev_[a-f0-9]{64}$/);
+        assert.equal(
+          (
+            annotationInput.event.data.annotation as
+              { note?: string } | undefined
+          )?.note,
+          "Annotate the Reef element for the agent",
+        );
+      }
+
+      const tools = frames
+        .filter(
+          (frame) =>
+            frame.type === "event" &&
+            frame.event.kind === "action.executed" &&
+            frame.event.data.actionType === "tool",
+        )
+        .map((frame) =>
+          frame.type === "event"
+            ? (frame.event.data.payload as { tool?: string } | undefined)?.tool
+            : undefined,
+        );
+      assert.deepEqual(tools, [
+        "browser.navigate",
+        "browser.annotate",
+        "browser.getDom",
+      ]);
+
+      const resolved = frames.find(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          frame.event.summary.includes("browser annotation resolved"),
+      );
+      assert.ok(resolved, "annotation should resolve to a selector");
+      if (resolved?.type === "event") {
+        const annotation = resolved.event.data.annotation as
+          { selector?: string; xpath?: string; text?: string } | undefined;
+        assert.equal(annotation?.selector, "#annotated");
+        assert.match(annotation?.xpath ?? "", /annotated/);
+        assert.match(annotation?.text ?? "", /Agent should read/);
+      }
+
+      const domRead = frames.find(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "action.executed" &&
+          frame.event.summary.includes("browser.getDom"),
+      );
+      assert.ok(domRead, "annotated element DOM should be read");
+      if (domRead?.type === "event") {
+        const output = (
+          domRead.event.data.result as { output?: { sha256?: string } }
+        ).output;
+        assert.match(output?.sha256 ?? "", /^[a-f0-9]{64}$/);
+      }
+
+      const before = await request(port, "GET", `/sessions/${id}/verify`);
+      assert.equal(before.status, 200);
+      assert.equal(before.json.ok, true);
+
+      const logPath = join(dir, id, "session.log.jsonl");
+      const raw = readFileSync(logPath);
+      const offset = raw.indexOf(Buffer.from("Annotate the Reef element"));
+      assert.ok(
+        offset >= 0,
+        "annotation evidence should contain a flippable note byte",
+      );
+      raw[offset] = raw[offset] === 0x41 ? 0x42 : 0x41;
+      writeFileSync(logPath, raw);
+
+      const after = await request(port, "GET", `/sessions/${id}/verify`);
+      assert.equal(after.status, 200);
+      assert.equal(after.json.ok, false);
+      assert.match(after.json.log, /broken/i);
+    } finally {
+      await server.close();
+      await page.close();
+    }
+  },
+);
+
 test("C0: edition split reports flavor and community rejects gateway provider", async () => {
   const community = new ReefServer({ edition: "community" });
   const communityPort = await community.listen(0);

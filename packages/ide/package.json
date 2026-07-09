@@ -97,6 +97,11 @@
         "category": "Reef"
       },
       {
+        "command": "reef.runBrowserAnnotation",
+        "title": "Reef: Run Browser Annotation",
+        "category": "Reef"
+      },
+      {
         "command": "reef.runMcpDemo",
         "title": "Reef: Run MCP Demo",
         "category": "Reef"
@@ -121,7 +126,8 @@
       }
     ],
     "configurationDefaults": {
-      "workbench.colorTheme": "octopus-reef.dark"
+      "workbench.colorTheme": "octopus-reef.dark",
+      "workbench.startupEditor": "none"
     },
     "viewsContainers": {
       "activitybar": [

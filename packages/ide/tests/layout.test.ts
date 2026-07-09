@@ -67,8 +67,23 @@ test("layout: Reef Browser has command and local URL configuration", () => {
   assert.equal(commands.has("reef.openBrowserPreview"), true);
   assert.equal(commands.has("reef.runBrowserRead"), true);
   assert.equal(commands.has("reef.runBrowserDenial"), true);
+  assert.equal(commands.has("reef.runBrowserAnnotation"), true);
   assert.equal(
     pkg.contributes?.configuration?.properties?.["reef.browser.url"]?.default,
     "http://127.0.0.1:5173/",
   );
+});
+
+test("layout: Reef suppresses stock startup welcome and avoids beside editor reveals", () => {
+  const pkg = readJson("package.json");
+  assert.equal(
+    pkg.contributes?.configurationDefaults?.["workbench.startupEditor"],
+    "none",
+  );
+
+  const extensionSource = readFileSync(
+    path.join(ideRoot, "src", "extension.ts"),
+    "utf8",
+  );
+  assert.equal(extensionSource.includes("ViewColumn.Beside"), false);
 });

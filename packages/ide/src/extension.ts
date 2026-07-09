@@ -166,6 +166,15 @@ interface WebviewMessage {
   readonly action?: string;
   readonly url?: string;
   readonly selector?: string;
+  readonly note?: string;
+  readonly bbox?: {
+    readonly x?: number;
+    readonly y?: number;
+    readonly width?: number;
+    readonly height?: number;
+    readonly viewportWidth?: number;
+    readonly viewportHeight?: number;
+  };
 }
 
 class ReefTextSurface
@@ -214,7 +223,7 @@ class ReefTextSurface
   async reveal(): Promise<void> {
     const doc = await vscode.workspace.openTextDocument(this.uri);
     await vscode.window.showTextDocument(doc, {
-      viewColumn: vscode.ViewColumn.Beside,
+      viewColumn: vscode.ViewColumn.One,
       preview: false,
     });
   }
@@ -746,6 +755,18 @@ export function activate(context: vscode.ExtensionContext): void {
         readonly tool?: string;
         readonly selector?: string;
         readonly expectDenied?: boolean;
+        readonly annotation?: {
+          readonly url?: string;
+          readonly note?: string;
+          readonly bbox?: {
+            readonly x?: number;
+            readonly y?: number;
+            readonly width?: number;
+            readonly height?: number;
+            readonly viewportWidth?: number;
+            readonly viewportHeight?: number;
+          };
+        };
       };
       readonly spec?: {
         readonly specId?: string;
@@ -1242,6 +1263,41 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   };
 
+  const runBrowserAnnotation = async (
+    url: string,
+    note: string,
+    bbox: NonNullable<WebviewMessage["bbox"]>,
+  ): Promise<void> => {
+    const trimmed = url.trim();
+    if (trimmed === "") {
+      void browserView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: "Enter a local URL before annotating.",
+      });
+      return;
+    }
+    const result = await runTask(`N11c browser annotation: ${note.trim()}`, {
+      browser: {
+        url: trimmed,
+        annotation: {
+          url: trimmed,
+          note: note.trim() === "" ? "Annotated browser region" : note.trim(),
+          bbox,
+        },
+      },
+    });
+    void browserView?.webview.postMessage({
+      kind: "annotationSealed",
+      tone: result.error === undefined ? "ok" : "bad",
+      sessionId: result.sessionId,
+      message:
+        result.error === undefined
+          ? `Annotation evidence sealed: ${result.sessionId ?? "unknown"}`
+          : result.error,
+    });
+  };
+
   const configuredBrowserUrl = (): string =>
     vscode.workspace
       .getConfiguration("reef")
@@ -1734,6 +1790,16 @@ export function activate(context: vscode.ExtensionContext): void {
           message.mode === "denied" ? "denied" : "allowed",
           message.url,
         );
+      } else if (
+        message.kind === "runBrowserAnnotation" &&
+        typeof message.url === "string" &&
+        message.bbox !== undefined
+      ) {
+        await runBrowserAnnotation(
+          message.url,
+          message.note ?? "",
+          message.bbox,
+        );
       }
     } catch (err) {
       void browserView?.webview.postMessage({
@@ -2049,6 +2115,24 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   );
 
+  const browserAnnotation = vscode.commands.registerCommand(
+    "reef.runBrowserAnnotation",
+    async () => {
+      await runBrowserAnnotation(
+        configuredBrowserUrl(),
+        "N11c verifier annotation",
+        {
+          x: 480,
+          y: 260,
+          width: 160,
+          height: 90,
+          viewportWidth: 1280,
+          viewportHeight: 900,
+        },
+      );
+    },
+  );
+
   const mcpDemo = vscode.commands.registerCommand(
     "reef.runMcpDemo",
     async () => {
@@ -2204,6 +2288,7 @@ export function activate(context: vscode.ExtensionContext): void {
     browserPreview,
     browserRead,
     browserDenial,
+    browserAnnotation,
     mcpDemo,
     mcpDenyDemo,
     sessionViewProvider,

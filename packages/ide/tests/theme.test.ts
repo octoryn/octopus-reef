@@ -28,6 +28,10 @@ test("theme: Reef Dark is shipped and contributed as the default", () => {
     pkg.contributes?.configurationDefaults?.["workbench.colorTheme"],
     "octopus-reef.dark",
   );
+  assert.equal(
+    pkg.contributes?.configurationDefaults?.["workbench.startupEditor"],
+    "none",
+  );
 });
 
 test("theme: Reef Dark palette matches the Reef webview chrome colors", () => {

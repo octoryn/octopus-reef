@@ -16,7 +16,7 @@ export function registerCommercialSurface(
       panel = vscode.window.createWebviewPanel(
         "reef.commercial",
         "Reef Commercial",
-        vscode.ViewColumn.Beside,
+        vscode.ViewColumn.One,
         { enableScripts: false, retainContextWhenHidden: true },
       );
       panel.onDidDispose(() => {
@@ -33,7 +33,7 @@ export function registerCommercialSurface(
         ...(licenseToken !== "" ? { licenseToken } : {}),
       }),
     );
-    panel.reveal(vscode.ViewColumn.Beside);
+    panel.reveal(vscode.ViewColumn.One);
   });
   return [open];
 }

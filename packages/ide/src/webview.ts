@@ -446,11 +446,15 @@ export function browserWebviewHtml(
   button{background:var(--signal);border:0;border-radius:6px;color:#001714;font:inherit;font-weight:700;padding:8px 10px}
   button.secondary{background:var(--panel2);border:1px solid var(--line);color:var(--ink)}
   button.danger{background:var(--panel2);border:1px solid rgba(255,107,107,.55);color:var(--danger)}
-  .actions{display:flex;gap:8px;flex-wrap:wrap}
+  .actions{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center}
   .preview{min-height:360px;background:#071012;display:grid;position:relative}
   iframe{width:100%;height:100%;min-height:360px;border:0;background:white}
   .empty{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);padding:20px;text-align:center;pointer-events:none}
   .empty.hidden{display:none}
+  .annotation-layer{position:absolute;inset:0;display:none;cursor:crosshair;background:rgba(9,19,21,.08);z-index:2}
+  .annotation-layer.active{display:block}
+  .annotation-box{position:absolute;border:2px solid var(--signal);background:rgba(61,224,190,.16);box-shadow:0 0 0 9999px rgba(0,0,0,.18);display:none}
+  .annotation-box.active{display:block}
   .status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
   .status.ok{border-color:var(--signal);color:var(--signal)}
   .status.bad{border-color:var(--danger);color:var(--danger)}
@@ -469,11 +473,14 @@ export function browserWebviewHtml(
       <button id="read" class="secondary" type="button">Governed Read</button>
     </form>
     <div class="actions">
+      <input id="annotationNote" placeholder="Annotation note" value="Inspect this element" />
+      <button id="annotate" class="secondary" type="button">Annotate</button>
       <button id="deny" class="danger" type="button">Prove Denial</button>
     </div>
   </header>
   <main class="preview">
     <iframe id="frame" title="Reef Browser preview" sandbox="allow-forms allow-scripts allow-same-origin"></iframe>
+    <div id="annotationLayer" class="annotation-layer"><div id="annotationBox" class="annotation-box"></div></div>
     <div id="empty" class="empty">Open a localhost URL to preview it here.</div>
   </main>
   <footer>

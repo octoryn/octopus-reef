@@ -92,6 +92,18 @@ export interface CreateSessionRequest {
     readonly tool?: string;
     readonly selector?: string;
     readonly expectDenied?: boolean;
+    readonly annotation?: {
+      readonly url?: string;
+      readonly note?: string;
+      readonly bbox?: {
+        readonly x?: number;
+        readonly y?: number;
+        readonly width?: number;
+        readonly height?: number;
+        readonly viewportWidth?: number;
+        readonly viewportHeight?: number;
+      };
+    };
   };
   /**
    * N2 offline Specs proof path. When present, the daemon uses a deterministic

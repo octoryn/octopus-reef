@@ -15,9 +15,25 @@ import type {
 
 type BrowserToolName =
   | "browser.navigate"
+  | "browser.annotate"
   | "browser.getDom"
   | "browser.getContent"
   | "browser.screenshot";
+
+interface BrowserAnnotationBox {
+  readonly x?: number;
+  readonly y?: number;
+  readonly width?: number;
+  readonly height?: number;
+  readonly viewportWidth?: number;
+  readonly viewportHeight?: number;
+}
+
+export interface BrowserAnnotationInput {
+  readonly url?: string;
+  readonly note?: string;
+  readonly bbox?: BrowserAnnotationBox;
+}
 
 interface WebSocketEvent {
   readonly data: unknown;
@@ -48,6 +64,7 @@ interface CdpTarget {
 
 const BROWSER_TOOLS: readonly BrowserToolName[] = [
   "browser.navigate",
+  "browser.annotate",
   "browser.getDom",
   "browser.getContent",
   "browser.screenshot",
@@ -69,6 +86,57 @@ function jsonObject(value: unknown): Record<string, unknown> {
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== ""
     ? value.trim()
+    : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  const number = optionalNumber(value);
+  return number !== undefined && number > 0 ? number : undefined;
+}
+
+function clampRatio(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function annotationInput(value: unknown): BrowserAnnotationInput | undefined {
+  const body = jsonObject(value);
+  const note = optionalString(body.note);
+  const url = optionalString(body.url);
+  const bbox = jsonObject(body.bbox);
+  const cleanBbox: {
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    viewportWidth?: number;
+    viewportHeight?: number;
+  } = {};
+  const x = optionalNumber(bbox.x);
+  const y = optionalNumber(bbox.y);
+  const width = positiveNumber(bbox.width);
+  const height = positiveNumber(bbox.height);
+  const viewportWidth = positiveNumber(bbox.viewportWidth);
+  const viewportHeight = positiveNumber(bbox.viewportHeight);
+  if (x !== undefined) cleanBbox.x = x;
+  if (y !== undefined) cleanBbox.y = y;
+  if (width !== undefined) cleanBbox.width = width;
+  if (height !== undefined) cleanBbox.height = height;
+  if (viewportWidth !== undefined) cleanBbox.viewportWidth = viewportWidth;
+  if (viewportHeight !== undefined) cleanBbox.viewportHeight = viewportHeight;
+  const annotation: BrowserAnnotationInput = {
+    ...(url !== undefined ? { url } : {}),
+    ...(note !== undefined ? { note } : {}),
+    bbox: cleanBbox,
+  };
+  return annotation.note !== undefined || annotation.url !== undefined
+    ? annotation
     : undefined;
 }
 
@@ -278,6 +346,32 @@ export class BrowserPowerRuntime {
         run: (input) => this.#navigate(input),
       },
       {
+        name: "browser.annotate",
+        description:
+          "Resolve a user browser annotation to a stable selector/xpath and bounding box through local Chrome CDP.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            url: { type: "string" },
+            note: { type: "string" },
+            bbox: {
+              type: "object",
+              properties: {
+                x: { type: "number" },
+                y: { type: "number" },
+                width: { type: "number" },
+                height: { type: "number" },
+                viewportWidth: { type: "number" },
+                viewportHeight: { type: "number" },
+              },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+        run: (input) => this.#annotate(input),
+      },
+      {
         name: "browser.getDom",
         description:
           "Read the current page DOM or one selected element through local Chrome CDP.",
@@ -342,6 +436,104 @@ export class BrowserPowerRuntime {
     return {
       ok: true,
       output: JSON.stringify({ url, title }),
+    };
+  }
+
+  async #annotate(input: JsonValue) {
+    const body = jsonObject(input);
+    const url = optionalString(body.url);
+    if (url !== undefined) {
+      await this.#navigate({ url });
+    } else {
+      await this.#ensureAtInitialUrl();
+    }
+    const bbox = jsonObject(body.bbox);
+    const note = optionalString(body.note) ?? "";
+    const x = optionalNumber(bbox.x) ?? 0;
+    const y = optionalNumber(bbox.y) ?? 0;
+    const width = positiveNumber(bbox.width) ?? 1;
+    const height = positiveNumber(bbox.height) ?? 1;
+    const viewportWidth = positiveNumber(bbox.viewportWidth) ?? 1;
+    const viewportHeight = positiveNumber(bbox.viewportHeight) ?? 1;
+    const rx = clampRatio((x + width / 2) / viewportWidth);
+    const ry = clampRatio((y + height / 2) / viewportHeight);
+    const requestedBbox = {
+      x,
+      y,
+      width,
+      height,
+      viewportWidth,
+      viewportHeight,
+    };
+    const output = await this.#evaluateString(`(() => {
+      const rx = ${JSON.stringify(rx)};
+      const ry = ${JSON.stringify(ry)};
+      const note = ${JSON.stringify(note)};
+      const requestedBbox = ${JSON.stringify(requestedBbox)};
+      const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+      const point = {
+        x: clamp(rx * window.innerWidth, 0, Math.max(0, window.innerWidth - 1)),
+        y: clamp(ry * window.innerHeight, 0, Math.max(0, window.innerHeight - 1))
+      };
+      const escapeCss = (value) =>
+        typeof CSS !== "undefined" && typeof CSS.escape === "function"
+          ? CSS.escape(value)
+          : String(value).replace(/[^a-zA-Z0-9_-]/g, "\\\\$&");
+      const cssPath = (node) => {
+        if (!(node instanceof Element)) return "";
+        if (node.id) return "#" + escapeCss(node.id);
+        const parts = [];
+        let current = node;
+        while (current && current instanceof Element && current !== document.documentElement) {
+          let part = current.tagName.toLowerCase();
+          const parent = current.parentElement;
+          if (parent) {
+            const same = Array.from(parent.children).filter((child) => child.tagName === current.tagName);
+            if (same.length > 1) part += ":nth-of-type(" + (same.indexOf(current) + 1) + ")";
+          }
+          parts.unshift(part);
+          current = parent;
+        }
+        return parts.length > 0 ? parts.join(" > ") : document.documentElement.tagName.toLowerCase();
+      };
+      const xpath = (node) => {
+        if (!(node instanceof Element)) return "";
+        if (node.id) return "//*[@id=" + JSON.stringify(node.id) + "]";
+        const parts = [];
+        let current = node;
+        while (current && current instanceof Element) {
+          const parent = current.parentElement;
+          let index = 1;
+          if (parent) {
+            const same = Array.from(parent.children).filter((child) => child.tagName === current.tagName);
+            index = same.indexOf(current) + 1;
+          }
+          parts.unshift(current.tagName.toLowerCase() + "[" + index + "]");
+          current = parent;
+        }
+        return "/" + parts.join("/");
+      };
+      const hit = document.elementFromPoint(point.x, point.y) || document.body || document.documentElement;
+      const node = hit instanceof Element ? (hit.closest("[id]") || hit) : hit;
+      const rect = node instanceof Element ? node.getBoundingClientRect() : { x: 0, y: 0, width: 0, height: 0 };
+      const text = node instanceof HTMLElement || node instanceof SVGElement
+        ? (node.innerText || node.textContent || "").slice(0, 500)
+        : "";
+      return JSON.stringify({
+        url: location.href,
+        note,
+        selector: cssPath(node),
+        xpath: xpath(node),
+        tagName: node instanceof Element ? node.tagName.toLowerCase() : "",
+        text,
+        point,
+        bbox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        requestedBbox
+      });
+    })()`);
+    return {
+      ok: true,
+      output,
     };
   }
 
@@ -490,12 +682,14 @@ export class BrowserDemoDriver implements Driver {
   readonly #url: string | undefined;
   readonly #tool: BrowserToolName | undefined;
   readonly #selector: string | undefined;
+  readonly #annotation: BrowserAnnotationInput | undefined;
   readonly #expectDenied: boolean;
 
   constructor(options: {
     readonly url?: string;
     readonly tool?: string;
     readonly selector?: string;
+    readonly annotation?: BrowserAnnotationInput;
     readonly expectDenied?: boolean;
   }) {
     this.#url = options.url === undefined ? undefined : localUrl(options.url);
@@ -503,6 +697,10 @@ export class BrowserDemoDriver implements Driver {
       ? (options.tool as BrowserToolName)
       : undefined;
     this.#selector = options.selector;
+    this.#annotation =
+      options.annotation === undefined
+        ? undefined
+        : annotationInput(options.annotation);
     this.#expectDenied = options.expectDenied === true;
   }
 
@@ -527,6 +725,122 @@ export class BrowserDemoDriver implements Driver {
         expectDenied: this.#expectDenied,
       },
     };
+
+    if (this.#annotation !== undefined) {
+      yield {
+        type: "observe" as const,
+        summary: "browser annotation input received",
+        data: { annotation: this.#annotation },
+      };
+      const annotationUrl =
+        this.#annotation.url !== undefined
+          ? localUrl(this.#annotation.url)
+          : this.#url;
+      if (annotationUrl !== undefined) {
+        const navigated = yield {
+          type: "action" as const,
+          action: {
+            type: "tool" as const,
+            summary: "Browser tool call: browser.navigate",
+            target: "browser.navigate",
+            payload: {
+              tool: "browser.navigate",
+              input: { url: annotationUrl },
+            },
+            required: true,
+          },
+        };
+        if (
+          typeof navigated !== "object" ||
+          navigated === null ||
+          navigated.executed !== true ||
+          navigated.error !== undefined
+        ) {
+          yield {
+            type: "fail" as const,
+            summary: "browser annotation navigation did not execute",
+          };
+          return;
+        }
+      }
+      const resolved = yield {
+        type: "action" as const,
+        action: {
+          type: "tool" as const,
+          summary: "Browser tool call: browser.annotate",
+          target: "browser.annotate",
+          payload: {
+            tool: "browser.annotate",
+            input: {
+              ...(this.#annotation.note !== undefined
+                ? { note: this.#annotation.note }
+                : {}),
+              ...(this.#annotation.bbox !== undefined
+                ? { bbox: this.#annotation.bbox }
+                : {}),
+            },
+          },
+          required: true,
+        },
+      };
+      if (
+        typeof resolved !== "object" ||
+        resolved === null ||
+        resolved.executed !== true ||
+        resolved.error !== undefined
+      ) {
+        yield {
+          type: "fail" as const,
+          summary: "browser annotation did not resolve",
+        };
+        return;
+      }
+      const output =
+        "output" in resolved && typeof resolved.output === "string"
+          ? resolved.output
+          : "{}";
+      const annotation = jsonObject(JSON.parse(output));
+      const selector = optionalString(annotation.selector) ?? this.#selector;
+      yield {
+        type: "observe" as const,
+        summary: "browser annotation resolved for agent",
+        data: { annotation },
+      };
+      if (selector === undefined) {
+        yield {
+          type: "fail" as const,
+          summary: "browser annotation did not produce a selector",
+        };
+        return;
+      }
+      const dom = yield {
+        type: "action" as const,
+        action: {
+          type: "tool" as const,
+          summary: "Browser tool call: browser.getDom",
+          target: "browser.getDom",
+          payload: { tool: "browser.getDom", input: { selector } },
+          required: true,
+        },
+      };
+      if (
+        typeof dom === "object" &&
+        dom !== null &&
+        dom.executed === true &&
+        dom.error === undefined
+      ) {
+        yield {
+          type: "done" as const,
+          summary: "read annotated element through browser power",
+        };
+        return;
+      }
+      yield {
+        type: "fail" as const,
+        summary: "annotated element DOM was not reachable",
+      };
+      return;
+    }
 
     for (const tool of requestedTools) {
       const input =

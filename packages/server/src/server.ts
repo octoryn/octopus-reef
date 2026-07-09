@@ -113,6 +113,18 @@ interface BrowserSessionRequest {
   readonly tool?: string;
   readonly selector?: string;
   readonly expectDenied?: boolean;
+  readonly annotation?: {
+    readonly url?: string;
+    readonly note?: string;
+    readonly bbox?: {
+      readonly x?: number;
+      readonly y?: number;
+      readonly width?: number;
+      readonly height?: number;
+      readonly viewportWidth?: number;
+      readonly viewportHeight?: number;
+    };
+  };
 }
 
 interface SpecSessionRequest {
@@ -1247,6 +1259,9 @@ export class ReefServer {
         ...(tool !== undefined ? { tool } : {}),
         ...(request.selector !== undefined
           ? { selector: request.selector }
+          : {}),
+        ...(request.annotation !== undefined
+          ? { annotation: request.annotation }
           : {}),
         ...(request.expectDenied !== undefined
           ? { expectDenied: request.expectDenied }
