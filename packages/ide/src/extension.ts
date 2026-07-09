@@ -7,7 +7,6 @@
  * pure presentation, fed via postMessage.
  */
 import * as vscode from "vscode";
-import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -280,11 +279,6 @@ async function latestGitHubRelease(repository: string): Promise<GitHubRelease> {
   return (await res.json()) as GitHubRelease;
 }
 
-function nonce(): string {
-  // A CSP nonce must be unpredictable — use a CSPRNG, not Math.random().
-  return randomUUID().replace(/-/g, "");
-}
-
 function setStatus(
   item: vscode.StatusBarItem,
   verify: VerifyResult | undefined,
@@ -426,7 +420,14 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.ViewColumn.Beside,
         { enableScripts: true, retainContextWhenHidden: true },
       );
-      panel.webview.html = webviewHtml(panel.webview.cspSource, nonce());
+      panel.webview.html = webviewHtml(
+        panel.webview.cspSource,
+        panel.webview
+          .asWebviewUri(
+            vscode.Uri.joinPath(context.extensionUri, "media", "webview.js"),
+          )
+          .toString(),
+      );
       panel.onDidDispose(() => {
         panel = undefined;
         abort?.abort();
