@@ -45,6 +45,93 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
 </html>`;
 }
 
+export function welcomeWebviewHtml(
+  cspSource: string,
+  scriptUri: string,
+): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource};" />
+<style>
+  :root{--deep:#071113;--panel:#0e1c1f;--panel2:#13262a;--line:#244348;--ink:#eff8f6;--muted:#88a7a7;--signal:#3de0be;--blue:#8bb8ff;--warn:#ffd166;--danger:#ff6b6b;--mono:ui-monospace,Menlo,monospace;--sans:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:var(--deep);color:var(--ink);font-family:var(--sans);font-size:14px}
+  .shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr auto}
+  header{display:flex;align-items:center;justify-content:space-between;padding:18px 28px;border-bottom:1px solid var(--line);background:#091719}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:750;letter-spacing:0}
+  .mark{width:28px;height:28px;display:grid;place-items:center;border:1px solid rgba(61,224,190,.55);border-radius:8px;color:var(--signal);font-family:var(--mono);background:#102326}
+  .tag{color:var(--muted);font-size:12px}
+  main{display:grid;grid-template-columns:minmax(320px,.95fr) minmax(420px,1.05fr);gap:28px;align-items:center;padding:34px clamp(28px,5vw,68px)}
+  h1{font-size:48px;line-height:1.02;margin:0;letter-spacing:0;font-weight:760;max-width:690px}
+  .pitch{margin:18px 0 0;color:var(--signal);font-size:17px;font-weight:650}
+  .body{margin:14px 0 0;color:var(--muted);font-size:15px;line-height:1.6;max-width:590px}
+  .proofline{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
+  .pill{border:1px solid var(--line);border-radius:999px;padding:6px 10px;color:var(--muted);font-family:var(--mono);font-size:12px;background:#0b181b}
+  .pill.signal{color:var(--signal);border-color:rgba(61,224,190,.48)}
+  .actions{display:grid;gap:12px}
+  .action{width:100%;text-align:left;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);padding:18px 18px;display:grid;grid-template-columns:42px 1fr auto;align-items:center;gap:14px;font:inherit;cursor:pointer}
+  .action:hover{border-color:rgba(61,224,190,.65);background:var(--panel2)}
+  .action:focus{outline:2px solid rgba(61,224,190,.75);outline-offset:2px}
+  .action.primary{background:#102a2d;border-color:rgba(61,224,190,.7)}
+  .icon{width:42px;height:42px;border-radius:8px;display:grid;place-items:center;background:#091719;border:1px solid var(--line);font-family:var(--mono);color:var(--signal);font-weight:800}
+  .title{font-weight:760;font-size:16px}
+  .desc{color:var(--muted);font-size:13px;margin-top:4px}
+  .arrow{color:var(--muted);font-size:20px}
+  footer{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 28px;border-top:1px solid var(--line);background:#091719;color:var(--muted);font-family:var(--mono);font-size:12px}
+  .link{background:transparent;border:0;color:var(--muted);font:inherit;text-decoration:underline;cursor:pointer;padding:4px}
+  .link:hover{color:var(--ink)}
+  .status.ok{color:var(--signal)}.status.bad{color:var(--danger)}
+  @media (max-width:850px){main{grid-template-columns:1fr;align-items:start;padding:24px}h1{font-size:36px}header,footer{padding-left:18px;padding-right:18px}.tag{display:none}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="brand"><div class="mark">&#x259A;</div><div>Reef</div></div>
+    <div class="tag">governed agentic workspace</div>
+  </header>
+  <main>
+    <section>
+      <h1>Start work with proof built in.</h1>
+      <div class="pitch">The agentic workspace where every action is provable.</div>
+      <p class="body">Open a project, reconnect to recent work, or clone a repository. Reef keeps governed sessions, evidence links, usage, specs, powers, steering, and hooks in one local-first editor surface.</p>
+      <div class="proofline" aria-label="Reef proof surfaces">
+        <span class="pill signal">tamper-evident evidence</span>
+        <span class="pill">offline mock driver</span>
+        <span class="pill">BYOK when configured</span>
+      </div>
+    </section>
+    <section class="actions" aria-label="Getting started actions">
+      <button class="action primary" type="button" data-action="openProject">
+        <span class="icon">OP</span>
+        <span><span class="title">Open a project</span><span class="desc">Choose a local folder and start a governed Reef session.</span></span>
+        <span class="arrow">&rsaquo;</span>
+      </button>
+      <button class="action" type="button" data-action="openRecent">
+        <span class="icon">RC</span>
+        <span><span class="title">Recent projects</span><span class="desc">Jump back into a workspace you already opened.</span></span>
+        <span class="arrow">&rsaquo;</span>
+      </button>
+      <button class="action" type="button" data-action="cloneConnect">
+        <span class="icon">CL</span>
+        <span><span class="title">Clone or connect</span><span class="desc">Bring in a repository, then let Reef prove what happened.</span></span>
+        <span class="arrow">&rsaquo;</span>
+      </button>
+    </section>
+  </main>
+  <footer>
+    <div id="status" class="status">Ready.</div>
+    <button id="disable" class="link" type="button">Do not show on startup</button>
+  </footer>
+</div>
+<script src="${scriptUri}"></script>
+</body>
+</html>`;
+}
+
 export function powersWebviewHtml(
   cspSource: string,
   scriptUri: string,
@@ -119,10 +206,7 @@ export function powersWebviewHtml(
 </html>`;
 }
 
-export function specsWebviewHtml(
-  cspSource: string,
-  scriptUri: string,
-): string {
+export function specsWebviewHtml(cspSource: string, scriptUri: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -185,10 +269,7 @@ Implement and verify</textarea></label>
 </html>`;
 }
 
-export function usageWebviewHtml(
-  cspSource: string,
-  scriptUri: string,
-): string {
+export function usageWebviewHtml(cspSource: string, scriptUri: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -301,10 +382,7 @@ export function steeringWebviewHtml(
 </html>`;
 }
 
-export function hooksWebviewHtml(
-  cspSource: string,
-  scriptUri: string,
-): string {
+export function hooksWebviewHtml(cspSource: string, scriptUri: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>

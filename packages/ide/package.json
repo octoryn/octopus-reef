@@ -26,6 +26,11 @@
         "category": "Reef"
       },
       {
+        "command": "reef.openWelcome",
+        "title": "Reef: Welcome",
+        "category": "Reef"
+      },
+      {
         "command": "reef.verifySession",
         "title": "Reef: Verify",
         "category": "Reef"
@@ -92,6 +97,11 @@
           "type": "boolean",
           "default": true,
           "description": "Start the bundled local Reef daemon automatically on editor launch."
+        },
+        "reef.welcome.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Reef welcome tab on startup when no folder is open."
         },
         "reef.updateRepository": {
           "type": "string",

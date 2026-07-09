@@ -37,8 +37,15 @@ import {
   specsWebviewHtml,
   steeringWebviewHtml,
   usageWebviewHtml,
+  welcomeWebviewHtml,
   webviewHtml,
 } from "./webview.js";
+import {
+  isWelcomeAction,
+  shouldOpenReefWelcome,
+  welcomeCommandForAction,
+  type WelcomeAction,
+} from "./welcome.js";
 import type { WorkState } from "@octopus-reef/protocol";
 import {
   reefEdition,
@@ -110,6 +117,7 @@ interface WebviewMessage {
   readonly to?: string;
   readonly reason?: string;
   readonly activeIds?: readonly string[];
+  readonly action?: string;
 }
 
 class ReefTextSurface
@@ -219,6 +227,12 @@ function useBundledServer(): boolean {
   return vscode.workspace
     .getConfiguration("reef")
     .get<boolean>("useBundledServer", true);
+}
+
+function welcomeEnabled(): boolean {
+  return vscode.workspace
+    .getConfiguration("reef")
+    .get<boolean>("welcome.enabled", true);
 }
 
 function updateRepository(): string {
@@ -456,6 +470,7 @@ async function waitForBundledServer(
 
 export function activate(context: vscode.ExtensionContext): void {
   let panel: vscode.WebviewPanel | undefined;
+  let welcomePanel: vscode.WebviewPanel | undefined;
   let powersPanel: vscode.WebviewPanel | undefined;
   let hooksPanel: vscode.WebviewPanel | undefined;
   let specsPanel: vscode.WebviewPanel | undefined;
@@ -691,6 +706,36 @@ export function activate(context: vscode.ExtensionContext): void {
     void hooksPanel?.webview.postMessage({ kind: "hooks", hooks });
   };
 
+  const postWelcomeStatus = (message: string, tone = ""): void => {
+    void welcomePanel?.webview.postMessage({
+      kind: "welcomeStatus",
+      message,
+      tone,
+    });
+  };
+
+  const executeWelcomeAction = async (action: WelcomeAction): Promise<void> => {
+    const command = welcomeCommandForAction(action);
+    try {
+      await vscode.commands.executeCommand(command);
+      postWelcomeStatus("Opened.", "ok");
+    } catch (err) {
+      if (action === "cloneConnect") {
+        try {
+          await vscode.commands.executeCommand("workbench.view.scm");
+          postWelcomeStatus("Opened Source Control.", "ok");
+          return;
+        } catch {
+          /* Report the original clone failure below. */
+        }
+      }
+      postWelcomeStatus(
+        err instanceof Error ? err.message : String(err),
+        "bad",
+      );
+    }
+  };
+
   const runSpecAdvance = async (
     specId: string,
     itemId: string,
@@ -720,6 +765,55 @@ export function activate(context: vscode.ExtensionContext): void {
       tone: "ok",
       message: `Governed spec transition sealed: ${result.sessionId ?? "unknown"}`,
     });
+  };
+
+  const openWelcomePanel = (): void => {
+    if (welcomePanel === undefined) {
+      welcomePanel = vscode.window.createWebviewPanel(
+        "reef.welcome",
+        "Reef Welcome",
+        vscode.ViewColumn.Active,
+        { enableScripts: true, retainContextWhenHidden: true },
+      );
+      welcomePanel.webview.html = welcomeWebviewHtml(
+        welcomePanel.webview.cspSource,
+        welcomePanel.webview
+          .asWebviewUri(
+            vscode.Uri.joinPath(context.extensionUri, "media", "welcome.js"),
+          )
+          .toString(),
+      );
+      welcomePanel.onDidDispose(() => {
+        welcomePanel = undefined;
+      });
+      welcomePanel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+        void (async () => {
+          try {
+            if (
+              message.kind === "welcomeAction" &&
+              isWelcomeAction(message.action)
+            ) {
+              await executeWelcomeAction(message.action);
+            } else if (message.kind === "disableWelcome") {
+              await vscode.workspace
+                .getConfiguration("reef")
+                .update(
+                  "welcome.enabled",
+                  false,
+                  vscode.ConfigurationTarget.Global,
+                );
+              postWelcomeStatus("Welcome disabled for future launches.", "ok");
+            }
+          } catch (err) {
+            postWelcomeStatus(
+              err instanceof Error ? err.message : String(err),
+              "bad",
+            );
+          }
+        })();
+      });
+    }
+    welcomePanel.reveal(vscode.ViewColumn.Active);
   };
 
   const openPowersPanel = (): void => {
@@ -806,7 +900,9 @@ export function activate(context: vscode.ExtensionContext): void {
                 message.title.trim() !== ""
                   ? { title: message.title.trim() }
                   : {}),
-                ...(Array.isArray(message.tasks) ? { tasks: message.tasks } : {}),
+                ...(Array.isArray(message.tasks)
+                  ? { tasks: message.tasks }
+                  : {}),
               });
               activeSpecId = spec.id;
               await refreshSpecs();
@@ -1058,6 +1154,10 @@ export function activate(context: vscode.ExtensionContext): void {
     await runTask(task);
   });
 
+  const welcome = vscode.commands.registerCommand("reef.openWelcome", () => {
+    openWelcomePanel();
+  });
+
   const powers = vscode.commands.registerCommand(
     "reef.openPowers",
     async () => {
@@ -1267,6 +1367,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     status,
     run,
+    welcome,
     powers,
     specs,
     usage,
@@ -1287,19 +1388,32 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   void (async () => {
+    let showWelcomeOnStartup = false;
     try {
+      showWelcomeOnStartup = shouldOpenReefWelcome({
+        enabled: welcomeEnabled(),
+        workspaceFolderCount: vscode.workspace.workspaceFolders?.length ?? 0,
+        uiKind: vscode.env.uiKind === vscode.UIKind.Web ? "web" : "desktop",
+      });
+      if (showWelcomeOnStartup) {
+        openWelcomePanel();
+      }
       if (useBundledServer()) {
         const started = await waitForBundledServer(context, persistDir);
         activeServerUrl = started.url;
         daemon = started.process;
       }
-      if (!demoStarted) {
+      if (!showWelcomeOnStartup && !demoStarted) {
         demoStarted = true;
         await runTask("offline keyless demo: verify a governed Reef session");
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      ensureSurface().error(message);
+      if (showWelcomeOnStartup) {
+        postWelcomeStatus(`Reef startup failed: ${message}`, "bad");
+      } else {
+        ensureSurface().error(message);
+      }
       void vscode.window.showErrorMessage(`Reef: startup failed (${message})`);
     }
   })();
