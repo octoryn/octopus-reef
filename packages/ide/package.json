@@ -103,6 +103,70 @@
     "configurationDefaults": {
       "workbench.colorTheme": "octopus-reef.dark"
     },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "reef",
+          "title": "Reef",
+          "icon": "$(beaker)"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "reef-session-dock",
+          "title": "Reef",
+          "icon": "$(comment-discussion)"
+        }
+      ]
+    },
+    "views": {
+      "reef-session-dock": [
+        {
+          "type": "webview",
+          "id": "reef.session",
+          "name": "Session",
+          "icon": "$(comment-discussion)",
+          "visibility": "visible"
+        }
+      ],
+      "reef": [
+        {
+          "type": "webview",
+          "id": "reef.powers",
+          "name": "Powers",
+          "icon": "$(plug)",
+          "visibility": "visible"
+        },
+        {
+          "type": "webview",
+          "id": "reef.specs",
+          "name": "Specs",
+          "icon": "$(list-tree)",
+          "visibility": "collapsed"
+        },
+        {
+          "type": "webview",
+          "id": "reef.steering",
+          "name": "Steering",
+          "icon": "$(book)",
+          "visibility": "collapsed"
+        },
+        {
+          "type": "webview",
+          "id": "reef.hooks",
+          "name": "Hooks",
+          "icon": "$(debug-start)",
+          "visibility": "collapsed"
+        },
+        {
+          "type": "webview",
+          "id": "reef.usage",
+          "name": "Usage",
+          "icon": "$(pulse)",
+          "visibility": "collapsed"
+        }
+      ]
+    },
     "chatParticipants": [
       {
         "id": "octopus-reef.ide.reef",

@@ -85,6 +85,13 @@ interface ReefSurface {
   error(message: string): void;
 }
 
+const REEF_SESSION_VIEW_ID = "reef.session";
+const REEF_POWERS_VIEW_ID = "reef.powers";
+const REEF_SPECS_VIEW_ID = "reef.specs";
+const REEF_USAGE_VIEW_ID = "reef.usage";
+const REEF_STEERING_VIEW_ID = "reef.steering";
+const REEF_HOOKS_VIEW_ID = "reef.hooks";
+
 interface StableChatRequest {
   readonly prompt: string;
 }
@@ -506,14 +513,14 @@ async function waitForBundledServer(
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  let panel: vscode.WebviewPanel | undefined;
+  let sessionView: vscode.WebviewView | undefined;
   let welcomePanel: vscode.WebviewPanel | undefined;
   let agentFocusPanel: vscode.WebviewPanel | undefined;
-  let powersPanel: vscode.WebviewPanel | undefined;
-  let hooksPanel: vscode.WebviewPanel | undefined;
-  let specsPanel: vscode.WebviewPanel | undefined;
-  let steeringPanel: vscode.WebviewPanel | undefined;
-  let usagePanel: vscode.WebviewPanel | undefined;
+  let powersView: vscode.WebviewView | undefined;
+  let hooksView: vscode.WebviewView | undefined;
+  let specsView: vscode.WebviewView | undefined;
+  let steeringView: vscode.WebviewView | undefined;
+  let usageView: vscode.WebviewView | undefined;
   let textSurface: ReefTextSurface | undefined;
   let abort: AbortController | undefined;
   let focusAbort: AbortController | undefined;
@@ -541,107 +548,57 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   setStatus(status, undefined, "Reef idle");
 
+  const revealView = async (
+    viewId: string,
+    view: vscode.WebviewView | undefined,
+  ): Promise<void> => {
+    if (view !== undefined) {
+      view.show(false);
+      return;
+    }
+    await vscode.commands.executeCommand(`${viewId}.focus`);
+  };
+
+  const setViewHtml = (
+    view: vscode.WebviewView,
+    scriptFile: string,
+    html: (cspSource: string, scriptUri: string) => string,
+  ): void => {
+    view.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [context.extensionUri],
+    };
+    view.webview.html = html(
+      view.webview.cspSource,
+      view.webview
+        .asWebviewUri(vscode.Uri.joinPath(context.extensionUri, scriptFile))
+        .toString(),
+    );
+  };
+
+  const sessionWebview = (): vscode.Webview | undefined => sessionView?.webview;
+
   const webviewSurface = (): ReefSurface => ({
-    reveal: () => panel?.reveal(vscode.ViewColumn.Active),
-    reset: (task) => void panel?.webview.postMessage({ kind: "reset", task }),
-    event: (event) => void panel?.webview.postMessage({ kind: "event", event }),
+    reveal: () => revealView(REEF_SESSION_VIEW_ID, sessionView),
+    reset: (task) => void sessionWebview()?.postMessage({ kind: "reset", task }),
+    event: (event) =>
+      void sessionWebview()?.postMessage({ kind: "event", event }),
     sealed: (event) =>
-      void panel?.webview.postMessage({
+      void sessionWebview()?.postMessage({
         kind: "sealed",
         snapshot: event.snapshot,
         verify: event.verify,
       }),
     verified: (verify) =>
-      void panel?.webview.postMessage({ kind: "verified", verify }),
+      void sessionWebview()?.postMessage({ kind: "verified", verify }),
     error: (message) =>
-      void panel?.webview.postMessage({ kind: "error", message }),
+      void sessionWebview()?.postMessage({ kind: "error", message }),
   });
 
   const ensureSurface = (): ReefSurface => {
     if (vscode.env.uiKind === vscode.UIKind.Web) {
       textSurface ??= new ReefTextSurface(context);
       return textSurface;
-    }
-    if (panel === undefined) {
-      panel = vscode.window.createWebviewPanel(
-        "reef.session",
-        "Reef Session",
-        vscode.ViewColumn.Active,
-        { enableScripts: true, retainContextWhenHidden: true },
-      );
-      panel.webview.html = webviewHtml(
-        panel.webview.cspSource,
-        panel.webview
-          .asWebviewUri(
-            vscode.Uri.joinPath(context.extensionUri, "media", "webview.js"),
-          )
-          .toString(),
-      );
-      panel.onDidDispose(() => {
-        panel = undefined;
-        abort?.abort();
-      });
-      panel.webview.onDidReceiveMessage((message: WebviewMessage) => {
-        void (async () => {
-          try {
-            if (message.kind === "chatReady") {
-              await postChatConfig();
-              return;
-            }
-            if (
-              message.kind === "sendChatTurn" &&
-              typeof message.task === "string" &&
-              typeof message.turnId === "string" &&
-              message.task.trim() !== ""
-            ) {
-              if (chatRun !== undefined) return;
-              chatRun = runChatTurn({
-                task: message.task,
-                turnId: message.turnId,
-                conversationId:
-                  typeof message.conversationId === "string"
-                    ? message.conversationId
-                    : chatConversationId,
-                turn:
-                  typeof message.turn === "number" && message.turn > 0
-                    ? message.turn
-                    : chatTurns.size + 1,
-                autopilot: message.autopilot === true,
-              }).finally(() => {
-                chatRun = undefined;
-              });
-              await chatRun;
-              return;
-            }
-            if (
-              message.kind === "verifyChatTurn" &&
-              typeof message.turnId === "string"
-            ) {
-              await verifyChatTurn(message.turnId);
-              return;
-            }
-            if (message.kind === "refreshChatUsage") {
-              await postChatUsage();
-              return;
-            }
-            if (
-              message.kind === "runTask" &&
-              typeof message.task === "string" &&
-              message.task.trim() !== ""
-            ) {
-              if (webviewRun !== undefined) return;
-              webviewRun = runTask(message.task).finally(() => {
-                webviewRun = undefined;
-              });
-              await webviewRun;
-            }
-          } catch (err) {
-            webviewSurface().error(
-              err instanceof Error ? err.message : String(err),
-            );
-          }
-        })();
-      });
     }
     return webviewSurface();
   };
@@ -708,7 +665,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const postChatConfig = async (): Promise<void> => {
     const usage = await getUsage(activeServerUrl).catch(() => undefined);
-    void panel?.webview.postMessage({
+    void sessionWebview()?.postMessage({
       kind: "chatConfig",
       conversationId: chatConversationId,
       modelChip: chatModelChip(modelSettings(), process.env),
@@ -718,14 +675,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const postChatUsage = async (): Promise<void> => {
     const usage = await getUsage(activeServerUrl);
-    void panel?.webview.postMessage({
+    void sessionWebview()?.postMessage({
       kind: "chatUsage",
       usage: focusUsageSnapshot(usage, lastSessionId),
     });
   };
 
   const postChatError = (message: string, turnId?: string): void => {
-    void panel?.webview.postMessage({
+    void sessionWebview()?.postMessage({
       kind: "chatError",
       message,
       ...(turnId !== undefined ? { turnId } : {}),
@@ -759,7 +716,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     await writeChatState();
     const usage = await getUsage(activeServerUrl).catch(() => undefined);
-    void panel?.webview.postMessage({
+    void sessionWebview()?.postMessage({
       kind: "chatTurnVerified",
       turnId,
       verify: v,
@@ -889,7 +846,7 @@ export function activate(context: vscode.ExtensionContext): void {
     lastSessionDir = undefined;
     let runVerify: VerifyResult | undefined;
     setStatus(status, undefined, "Reef chat turn running");
-    void panel?.webview.postMessage({
+    void sessionWebview()?.postMessage({
       kind: "chatTurnStarted",
       turnId: input.turnId,
       conversationId: conversation.id,
@@ -911,7 +868,7 @@ export function activate(context: vscode.ExtensionContext): void {
       lastSessionDir = record.sessionDir;
       await writeState();
       await writeChatState();
-      void panel?.webview.postMessage({
+      void sessionWebview()?.postMessage({
         kind: "chatTurnSession",
         turnId: input.turnId,
         sessionId: id,
@@ -923,7 +880,7 @@ export function activate(context: vscode.ExtensionContext): void {
         (event) => {
           if (event.type === "event") {
             record.events.push(event.event);
-            void panel?.webview.postMessage({
+            void sessionWebview()?.postMessage({
               kind: "chatTurnEvent",
               turnId: input.turnId,
               event: event.event,
@@ -937,7 +894,7 @@ export function activate(context: vscode.ExtensionContext): void {
             setStatus(status, event.verify);
             void writeState();
             void writeChatState();
-            void panel?.webview.postMessage({
+            void sessionWebview()?.postMessage({
               kind: "chatTurnSealed",
               turnId: input.turnId,
               snapshot: event.snapshot,
@@ -1224,7 +1181,7 @@ export function activate(context: vscode.ExtensionContext): void {
         expectDenied: denied,
       },
     });
-    void powersPanel?.webview.postMessage({
+    void powersView?.webview.postMessage({
       kind: "status",
       tone: result.error === undefined ? "ok" : "bad",
       message:
@@ -1236,7 +1193,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const refreshPowers = async (): Promise<void> => {
     const powers = await listPowers(activeServerUrl);
-    void powersPanel?.webview.postMessage({ kind: "powers", powers });
+    void powersView?.webview.postMessage({ kind: "powers", powers });
   };
 
   const refreshSpecs = async (): Promise<void> => {
@@ -1248,26 +1205,26 @@ export function activate(context: vscode.ExtensionContext): void {
     ) {
       activeSpecId = specs.specs[0].id;
     }
-    void specsPanel?.webview.postMessage({ kind: "specs", specs });
+    void specsView?.webview.postMessage({ kind: "specs", specs });
     if (activeSpecId !== undefined) {
       const spec = await getSpec(activeServerUrl, activeSpecId);
-      void specsPanel?.webview.postMessage({ kind: "spec", spec });
+      void specsView?.webview.postMessage({ kind: "spec", spec });
     }
   };
 
   const refreshUsage = async (): Promise<void> => {
     const usage = await getUsage(activeServerUrl);
-    void usagePanel?.webview.postMessage({ kind: "usage", usage });
+    void usageView?.webview.postMessage({ kind: "usage", usage });
   };
 
   const refreshSteering = async (): Promise<void> => {
     const steering = await listSteering(activeServerUrl);
-    void steeringPanel?.webview.postMessage({ kind: "steering", steering });
+    void steeringView?.webview.postMessage({ kind: "steering", steering });
   };
 
   const refreshHooks = async (): Promise<void> => {
     const hooks = await listHooks(activeServerUrl);
-    void hooksPanel?.webview.postMessage({ kind: "hooks", hooks });
+    void hooksView?.webview.postMessage({ kind: "hooks", hooks });
   };
 
   const postWelcomeStatus = (message: string, tone = ""): void => {
@@ -1316,7 +1273,7 @@ export function activate(context: vscode.ExtensionContext): void {
       },
     });
     if (result.error !== undefined) {
-      void specsPanel?.webview.postMessage({
+      void specsView?.webview.postMessage({
         kind: "status",
         tone: "bad",
         message: result.error,
@@ -1324,7 +1281,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     await refreshSpecs();
-    void specsPanel?.webview.postMessage({
+    void specsView?.webview.postMessage({
       kind: "status",
       tone: "ok",
       message: `Governed spec transition sealed: ${result.sessionId ?? "unknown"}`,
@@ -1439,334 +1396,413 @@ export function activate(context: vscode.ExtensionContext): void {
     welcomePanel.reveal(vscode.ViewColumn.Active);
   };
 
-  const openPowersPanel = (): void => {
-    if (powersPanel === undefined) {
-      powersPanel = vscode.window.createWebviewPanel(
-        "reef.powers",
-        "Reef Powers",
-        vscode.ViewColumn.Beside,
-        { enableScripts: true, retainContextWhenHidden: true },
-      );
-      powersPanel.webview.html = powersWebviewHtml(
-        powersPanel.webview.cspSource,
-        powersPanel.webview
-          .asWebviewUri(
-            vscode.Uri.joinPath(context.extensionUri, "media", "powers.js"),
-          )
-          .toString(),
-      );
-      powersPanel.onDidDispose(() => {
-        powersPanel = undefined;
-      });
-      powersPanel.webview.onDidReceiveMessage((message: WebviewMessage) => {
-        void (async () => {
-          try {
-            if (message.kind === "listPowers") {
-              await refreshPowers();
-            } else if (
-              message.kind === "installPower" &&
-              typeof message.id === "string"
-            ) {
-              await installPower(activeServerUrl, message.id);
-              await refreshPowers();
-            } else if (
-              message.kind === "addCustomPower" &&
-              message.input !== undefined
-            ) {
-              await addCustomPower(activeServerUrl, message.input);
-              await refreshPowers();
-            } else if (message.kind === "runMcpDemo") {
-              await runMcpDemo(
-                message.mode === "denied" ? "denied" : "allowed",
-              );
-            }
-          } catch (err) {
-            void powersPanel?.webview.postMessage({
-              kind: "status",
-              tone: "bad",
-              message: err instanceof Error ? err.message : String(err),
-            });
-          }
-        })();
-      });
+  const handleSessionMessage = async (
+    message: WebviewMessage,
+  ): Promise<void> => {
+    if (message.kind === "chatReady") {
+      await postChatConfig();
+      return;
     }
-    powersPanel.reveal(vscode.ViewColumn.Beside);
+    if (
+      message.kind === "sendChatTurn" &&
+      typeof message.task === "string" &&
+      typeof message.turnId === "string" &&
+      message.task.trim() !== ""
+    ) {
+      if (chatRun !== undefined) return;
+      chatRun = runChatTurn({
+        task: message.task,
+        turnId: message.turnId,
+        conversationId:
+          typeof message.conversationId === "string"
+            ? message.conversationId
+            : chatConversationId,
+        turn:
+          typeof message.turn === "number" && message.turn > 0
+            ? message.turn
+            : chatTurns.size + 1,
+        autopilot: message.autopilot === true,
+      }).finally(() => {
+        chatRun = undefined;
+      });
+      await chatRun;
+      return;
+    }
+    if (
+      message.kind === "verifyChatTurn" &&
+      typeof message.turnId === "string"
+    ) {
+      await verifyChatTurn(message.turnId);
+      return;
+    }
+    if (message.kind === "refreshChatUsage") {
+      await postChatUsage();
+      return;
+    }
+    if (
+      message.kind === "runTask" &&
+      typeof message.task === "string" &&
+      message.task.trim() !== ""
+    ) {
+      if (webviewRun !== undefined) return;
+      webviewRun = runTask(message.task).finally(() => {
+        webviewRun = undefined;
+      });
+      await webviewRun;
+    }
   };
 
-  const openSpecsPanel = (): void => {
-    if (specsPanel === undefined) {
-      specsPanel = vscode.window.createWebviewPanel(
-        "reef.specs",
-        "Reef Specs",
-        vscode.ViewColumn.Beside,
-        { enableScripts: true, retainContextWhenHidden: true },
-      );
-      specsPanel.webview.html = specsWebviewHtml(
-        specsPanel.webview.cspSource,
-        specsPanel.webview
-          .asWebviewUri(
-            vscode.Uri.joinPath(context.extensionUri, "media", "specs.js"),
-          )
-          .toString(),
-      );
-      specsPanel.onDidDispose(() => {
-        specsPanel = undefined;
+  const handlePowersMessage = async (
+    message: WebviewMessage,
+  ): Promise<void> => {
+    try {
+      if (message.kind === "listPowers") {
+        await refreshPowers();
+      } else if (
+        message.kind === "installPower" &&
+        typeof message.id === "string"
+      ) {
+        await installPower(activeServerUrl, message.id);
+        await refreshPowers();
+      } else if (
+        message.kind === "addCustomPower" &&
+        message.input !== undefined
+      ) {
+        await addCustomPower(activeServerUrl, message.input);
+        await refreshPowers();
+      } else if (message.kind === "runMcpDemo") {
+        await runMcpDemo(message.mode === "denied" ? "denied" : "allowed");
+      }
+    } catch (err) {
+      void powersView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: err instanceof Error ? err.message : String(err),
       });
-      specsPanel.webview.onDidReceiveMessage((message: WebviewMessage) => {
-        void (async () => {
-          try {
-            if (message.kind === "listSpecs") {
-              await refreshSpecs();
-            } else if (message.kind === "createSpec") {
-              const spec = await createSpec(activeServerUrl, {
-                ...(typeof message.title === "string" &&
-                message.title.trim() !== ""
-                  ? { title: message.title.trim() }
-                  : {}),
-                ...(Array.isArray(message.tasks)
-                  ? { tasks: message.tasks }
-                  : {}),
-              });
-              activeSpecId = spec.id;
-              await refreshSpecs();
-              void specsPanel?.webview.postMessage({
-                kind: "status",
-                tone: "ok",
-                message: `Created spec ${spec.id}`,
-              });
-            } else if (
-              message.kind === "selectSpec" &&
-              typeof message.id === "string"
-            ) {
-              activeSpecId = message.id;
-              const spec = await getSpec(activeServerUrl, activeSpecId);
-              void specsPanel?.webview.postMessage({ kind: "spec", spec });
-              await refreshSpecs();
-            } else if (
-              message.kind === "advanceSpec" &&
-              typeof message.specId === "string" &&
-              typeof message.itemId === "string" &&
-              typeof message.to === "string"
-            ) {
-              await runSpecAdvance(
-                message.specId,
-                message.itemId,
-                message.to as WorkState,
-                message.reason,
-              );
-            } else if (
-              message.kind === "illegalSpecTransition" &&
-              typeof message.specId === "string" &&
-              typeof message.itemId === "string" &&
-              typeof message.to === "string"
-            ) {
+    }
+  };
+
+  const handleSpecsMessage = async (
+    message: WebviewMessage,
+  ): Promise<void> => {
+    try {
+      if (message.kind === "listSpecs") {
+        await refreshSpecs();
+      } else if (message.kind === "createSpec") {
+        const spec = await createSpec(activeServerUrl, {
+          ...(typeof message.title === "string" && message.title.trim() !== ""
+            ? { title: message.title.trim() }
+            : {}),
+          ...(Array.isArray(message.tasks) ? { tasks: message.tasks } : {}),
+        });
+        activeSpecId = spec.id;
+        await refreshSpecs();
+        void specsView?.webview.postMessage({
+          kind: "status",
+          tone: "ok",
+          message: `Created spec ${spec.id}`,
+        });
+      } else if (
+        message.kind === "selectSpec" &&
+        typeof message.id === "string"
+      ) {
+        activeSpecId = message.id;
+        const spec = await getSpec(activeServerUrl, activeSpecId);
+        void specsView?.webview.postMessage({ kind: "spec", spec });
+        await refreshSpecs();
+      } else if (
+        message.kind === "advanceSpec" &&
+        typeof message.specId === "string" &&
+        typeof message.itemId === "string" &&
+        typeof message.to === "string"
+      ) {
+        await runSpecAdvance(
+          message.specId,
+          message.itemId,
+          message.to as WorkState,
+          message.reason,
+        );
+      } else if (
+        message.kind === "illegalSpecTransition" &&
+        typeof message.specId === "string" &&
+        typeof message.itemId === "string" &&
+        typeof message.to === "string"
+      ) {
+        try {
+          await advanceSpec(activeServerUrl, message.specId, {
+            itemId: message.itemId,
+            to: message.to as WorkState,
+            ...(message.reason !== undefined ? { reason: message.reason } : {}),
+          });
+          void specsView?.webview.postMessage({
+            kind: "status",
+            tone: "bad",
+            message: "Illegal transition unexpectedly succeeded.",
+          });
+        } catch (err) {
+          void specsView?.webview.postMessage({
+            kind: "status",
+            tone: "bad",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        } finally {
+          activeSpecId = message.specId;
+          await refreshSpecs();
+        }
+      } else if (
+        message.kind === "verifySpec" &&
+        typeof message.specId === "string"
+      ) {
+        activeSpecId = message.specId;
+        const verify = await verifySpec(activeServerUrl, message.specId);
+        setSpecStatus(status, verify);
+        void specsView?.webview.postMessage({
+          kind: "verified",
+          verify,
+        });
+      }
+    } catch (err) {
+      void specsView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const handleUsageMessage = async (
+    message: WebviewMessage,
+  ): Promise<void> => {
+    try {
+      if (message.kind === "getUsage") await refreshUsage();
+    } catch (err) {
+      void usageView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const handleSteeringMessage = async (
+    message: WebviewMessage,
+  ): Promise<void> => {
+    try {
+      if (message.kind === "listSteering") {
+        await refreshSteering();
+      } else if (
+        message.kind === "setActiveSteering" &&
+        Array.isArray(message.activeIds)
+      ) {
+        const steering = await setActiveSteering(activeServerUrl, {
+          activeIds: message.activeIds,
+        });
+        void steeringView?.webview.postMessage({
+          kind: "steering",
+          steering,
+        });
+      } else if (
+        message.kind === "addCustomSteering" &&
+        message.input !== undefined
+      ) {
+        await addCustomSteering(activeServerUrl, message.input);
+        await refreshSteering();
+      } else if (message.kind === "runSteeringDemo") {
+        const result = await runTask("N3 steered mock session");
+        void steeringView?.webview.postMessage({
+          kind: "status",
+          tone: result.error === undefined ? "ok" : "bad",
+          message:
+            result.error === undefined
+              ? `Steered session sealed: ${result.sessionId ?? "unknown"}`
+              : result.error,
+        });
+      }
+    } catch (err) {
+      void steeringView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const handleHooksMessage = async (
+    message: WebviewMessage,
+  ): Promise<void> => {
+    try {
+      if (message.kind === "listHooks") {
+        await refreshHooks();
+      } else if (
+        message.kind === "createHook" &&
+        message.input !== undefined
+      ) {
+        await createHook(activeServerUrl, message.input);
+        await refreshHooks();
+      } else if (
+        message.kind === "fireHook" &&
+        typeof message.id === "string"
+      ) {
+        const fired = await fireHook(
+          activeServerUrl,
+          message.id,
+          message.input ?? {},
+        );
+        void hooksView?.webview.postMessage({
+          kind: "status",
+          tone: "ok",
+          message: `Hook fired into governed session ${fired.sessionId}`,
+        });
+        await refreshHooks();
+      }
+    } catch (err) {
+      void hooksView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const openPowersView = (): Thenable<void> =>
+    revealView(REEF_POWERS_VIEW_ID, powersView);
+
+  const openSpecsView = (): Thenable<void> =>
+    revealView(REEF_SPECS_VIEW_ID, specsView);
+
+  const openUsageView = (): Thenable<void> =>
+    revealView(REEF_USAGE_VIEW_ID, usageView);
+
+  const openSteeringView = (): Thenable<void> =>
+    revealView(REEF_STEERING_VIEW_ID, steeringView);
+
+  const openHooksView = (): Thenable<void> =>
+    revealView(REEF_HOOKS_VIEW_ID, hooksView);
+
+  const registerReefView = (
+    viewId: string,
+    scriptFile: string,
+    html: (cspSource: string, scriptUri: string) => string,
+    setCurrentView: (view: vscode.WebviewView | undefined) => void,
+    handleMessage: (message: WebviewMessage) => Promise<void>,
+    handleError: (message: string) => void,
+    dispose?: () => void,
+  ): vscode.Disposable =>
+    vscode.window.registerWebviewViewProvider(
+      viewId,
+      {
+        resolveWebviewView(view) {
+          setCurrentView(view);
+          setViewHtml(view, scriptFile, html);
+          view.onDidDispose(() => {
+            setCurrentView(undefined);
+            dispose?.();
+          });
+          view.webview.onDidReceiveMessage((message: WebviewMessage) => {
+            void (async () => {
               try {
-                await advanceSpec(activeServerUrl, message.specId, {
-                  itemId: message.itemId,
-                  to: message.to as WorkState,
-                  ...(message.reason !== undefined
-                    ? { reason: message.reason }
-                    : {}),
-                });
-                void specsPanel?.webview.postMessage({
-                  kind: "status",
-                  tone: "bad",
-                  message: "Illegal transition unexpectedly succeeded.",
-                });
+                await handleMessage(message);
               } catch (err) {
-                void specsPanel?.webview.postMessage({
-                  kind: "status",
-                  tone: "bad",
-                  message: err instanceof Error ? err.message : String(err),
-                });
-              } finally {
-                activeSpecId = message.specId;
-                await refreshSpecs();
+                handleError(err instanceof Error ? err.message : String(err));
               }
-            } else if (
-              message.kind === "verifySpec" &&
-              typeof message.specId === "string"
-            ) {
-              activeSpecId = message.specId;
-              const verify = await verifySpec(activeServerUrl, message.specId);
-              setSpecStatus(status, verify);
-              void specsPanel?.webview.postMessage({
-                kind: "verified",
-                verify,
-              });
-            }
-          } catch (err) {
-            void specsPanel?.webview.postMessage({
-              kind: "status",
-              tone: "bad",
-              message: err instanceof Error ? err.message : String(err),
-            });
-          }
-        })();
-      });
-    }
-    specsPanel.reveal(vscode.ViewColumn.Beside);
-  };
+            })();
+          });
+        },
+      },
+      { webviewOptions: { retainContextWhenHidden: true } },
+    );
 
-  const openUsagePanel = (): void => {
-    if (usagePanel === undefined) {
-      usagePanel = vscode.window.createWebviewPanel(
-        "reef.usage",
-        "Reef Usage",
-        vscode.ViewColumn.Beside,
-        { enableScripts: true, retainContextWhenHidden: true },
-      );
-      usagePanel.webview.html = usageWebviewHtml(
-        usagePanel.webview.cspSource,
-        usagePanel.webview
-          .asWebviewUri(
-            vscode.Uri.joinPath(context.extensionUri, "media", "usage.js"),
-          )
-          .toString(),
-      );
-      usagePanel.onDidDispose(() => {
-        usagePanel = undefined;
-      });
-      usagePanel.webview.onDidReceiveMessage((message: WebviewMessage) => {
-        void (async () => {
-          try {
-            if (message.kind === "getUsage") await refreshUsage();
-          } catch (err) {
-            void usagePanel?.webview.postMessage({
-              kind: "status",
-              tone: "bad",
-              message: err instanceof Error ? err.message : String(err),
-            });
-          }
-        })();
-      });
-    }
-    usagePanel.reveal(vscode.ViewColumn.Beside);
-  };
+  const sessionViewProvider = registerReefView(
+    REEF_SESSION_VIEW_ID,
+    "media/webview.js",
+    webviewHtml,
+    (view) => {
+      sessionView = view;
+    },
+    handleSessionMessage,
+    (message) => webviewSurface().error(message),
+    () => abort?.abort(),
+  );
 
-  const openSteeringPanel = (): void => {
-    if (steeringPanel === undefined) {
-      steeringPanel = vscode.window.createWebviewPanel(
-        "reef.steering",
-        "Reef Steering",
-        vscode.ViewColumn.Beside,
-        { enableScripts: true, retainContextWhenHidden: true },
-      );
-      steeringPanel.webview.html = steeringWebviewHtml(
-        steeringPanel.webview.cspSource,
-        steeringPanel.webview
-          .asWebviewUri(
-            vscode.Uri.joinPath(context.extensionUri, "media", "steering.js"),
-          )
-          .toString(),
-      );
-      steeringPanel.onDidDispose(() => {
-        steeringPanel = undefined;
-      });
-      steeringPanel.webview.onDidReceiveMessage((message: WebviewMessage) => {
-        void (async () => {
-          try {
-            if (message.kind === "listSteering") {
-              await refreshSteering();
-            } else if (
-              message.kind === "setActiveSteering" &&
-              Array.isArray(message.activeIds)
-            ) {
-              const steering = await setActiveSteering(activeServerUrl, {
-                activeIds: message.activeIds,
-              });
-              void steeringPanel?.webview.postMessage({
-                kind: "steering",
-                steering,
-              });
-            } else if (
-              message.kind === "addCustomSteering" &&
-              message.input !== undefined
-            ) {
-              await addCustomSteering(activeServerUrl, message.input);
-              await refreshSteering();
-            } else if (message.kind === "runSteeringDemo") {
-              const result = await runTask("N3 steered mock session");
-              void steeringPanel?.webview.postMessage({
-                kind: "status",
-                tone: result.error === undefined ? "ok" : "bad",
-                message:
-                  result.error === undefined
-                    ? `Steered session sealed: ${result.sessionId ?? "unknown"}`
-                    : result.error,
-              });
-            }
-          } catch (err) {
-            void steeringPanel?.webview.postMessage({
-              kind: "status",
-              tone: "bad",
-              message: err instanceof Error ? err.message : String(err),
-            });
-          }
-        })();
-      });
-    }
-    steeringPanel.reveal(vscode.ViewColumn.Beside);
-  };
+  const powersViewProvider = registerReefView(
+    REEF_POWERS_VIEW_ID,
+    "media/powers.js",
+    powersWebviewHtml,
+    (view) => {
+      powersView = view;
+    },
+    handlePowersMessage,
+    (message) =>
+      void powersView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message,
+      }),
+  );
 
-  const openHooksPanel = (): void => {
-    if (hooksPanel === undefined) {
-      hooksPanel = vscode.window.createWebviewPanel(
-        "reef.hooks",
-        "Reef Hooks",
-        vscode.ViewColumn.Beside,
-        { enableScripts: true, retainContextWhenHidden: true },
-      );
-      hooksPanel.webview.html = hooksWebviewHtml(
-        hooksPanel.webview.cspSource,
-        hooksPanel.webview
-          .asWebviewUri(
-            vscode.Uri.joinPath(context.extensionUri, "media", "hooks.js"),
-          )
-          .toString(),
-      );
-      hooksPanel.onDidDispose(() => {
-        hooksPanel = undefined;
-      });
-      hooksPanel.webview.onDidReceiveMessage((message: WebviewMessage) => {
-        void (async () => {
-          try {
-            if (message.kind === "listHooks") {
-              await refreshHooks();
-            } else if (
-              message.kind === "createHook" &&
-              message.input !== undefined
-            ) {
-              await createHook(activeServerUrl, message.input);
-              await refreshHooks();
-            } else if (
-              message.kind === "fireHook" &&
-              typeof message.id === "string"
-            ) {
-              const fired = await fireHook(
-                activeServerUrl,
-                message.id,
-                message.input ?? {},
-              );
-              void hooksPanel?.webview.postMessage({
-                kind: "status",
-                tone: "ok",
-                message: `Hook fired into governed session ${fired.sessionId}`,
-              });
-              await refreshHooks();
-            }
-          } catch (err) {
-            void hooksPanel?.webview.postMessage({
-              kind: "status",
-              tone: "bad",
-              message: err instanceof Error ? err.message : String(err),
-            });
-          }
-        })();
-      });
-    }
-    hooksPanel.reveal(vscode.ViewColumn.Beside);
-  };
+  const specsViewProvider = registerReefView(
+    REEF_SPECS_VIEW_ID,
+    "media/specs.js",
+    specsWebviewHtml,
+    (view) => {
+      specsView = view;
+    },
+    handleSpecsMessage,
+    (message) =>
+      void specsView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message,
+      }),
+  );
+
+  const usageViewProvider = registerReefView(
+    REEF_USAGE_VIEW_ID,
+    "media/usage.js",
+    usageWebviewHtml,
+    (view) => {
+      usageView = view;
+    },
+    handleUsageMessage,
+    (message) =>
+      void usageView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message,
+      }),
+  );
+
+  const steeringViewProvider = registerReefView(
+    REEF_STEERING_VIEW_ID,
+    "media/steering.js",
+    steeringWebviewHtml,
+    (view) => {
+      steeringView = view;
+    },
+    handleSteeringMessage,
+    (message) =>
+      void steeringView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message,
+      }),
+  );
+
+  const hooksViewProvider = registerReefView(
+    REEF_HOOKS_VIEW_ID,
+    "media/hooks.js",
+    hooksWebviewHtml,
+    (view) => {
+      hooksView = view;
+    },
+    handleHooksMessage,
+    (message) =>
+      void hooksView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message,
+      }),
+  );
 
   const run = vscode.commands.registerCommand("reef.runSession", async () => {
     const task = await vscode.window.showInputBox({
@@ -1808,11 +1844,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const powers = vscode.commands.registerCommand(
     "reef.openPowers",
     async () => {
-      openPowersPanel();
+      await openPowersView();
       try {
         await refreshPowers();
       } catch (err) {
-        void powersPanel?.webview.postMessage({
+        void powersView?.webview.postMessage({
           kind: "status",
           tone: "bad",
           message: err instanceof Error ? err.message : String(err),
@@ -1822,11 +1858,11 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const specs = vscode.commands.registerCommand("reef.openSpecs", async () => {
-    openSpecsPanel();
+    await openSpecsView();
     try {
       await refreshSpecs();
     } catch (err) {
-      void specsPanel?.webview.postMessage({
+      void specsView?.webview.postMessage({
         kind: "status",
         tone: "bad",
         message: err instanceof Error ? err.message : String(err),
@@ -1835,11 +1871,11 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   const usage = vscode.commands.registerCommand("reef.openUsage", async () => {
-    openUsagePanel();
+    await openUsageView();
     try {
       await refreshUsage();
     } catch (err) {
-      void usagePanel?.webview.postMessage({
+      void usageView?.webview.postMessage({
         kind: "status",
         tone: "bad",
         message: err instanceof Error ? err.message : String(err),
@@ -1850,11 +1886,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const steering = vscode.commands.registerCommand(
     "reef.openSteering",
     async () => {
-      openSteeringPanel();
+      await openSteeringView();
       try {
         await refreshSteering();
       } catch (err) {
-        void steeringPanel?.webview.postMessage({
+        void steeringView?.webview.postMessage({
           kind: "status",
           tone: "bad",
           message: err instanceof Error ? err.message : String(err),
@@ -1864,11 +1900,11 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const hooks = vscode.commands.registerCommand("reef.openHooks", async () => {
-    openHooksPanel();
+    await openHooksView();
     try {
       await refreshHooks();
     } catch (err) {
-      void hooksPanel?.webview.postMessage({
+      void hooksView?.webview.postMessage({
         kind: "status",
         tone: "bad",
         message: err instanceof Error ? err.message : String(err),
@@ -1879,7 +1915,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const mcpDemo = vscode.commands.registerCommand(
     "reef.runMcpDemo",
     async () => {
-      openPowersPanel();
+      await openPowersView();
       await runMcpDemo("allowed");
     },
   );
@@ -1887,7 +1923,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const mcpDenyDemo = vscode.commands.registerCommand(
     "reef.runMcpDenialDemo",
     async () => {
-      openPowersPanel();
+      await openPowersView();
       await runMcpDemo("denied");
     },
   );
@@ -1938,10 +1974,10 @@ export function activate(context: vscode.ExtensionContext): void {
         await verifyFocusSession(true);
         return;
       }
-      if (specsPanel?.visible === true && activeSpecId !== undefined) {
+      if (specsView?.visible === true && activeSpecId !== undefined) {
         const v = await verifySpec(activeServerUrl, activeSpecId);
         setSpecStatus(status, v);
-        void specsPanel.webview.postMessage({ kind: "verified", verify: v });
+        void specsView.webview.postMessage({ kind: "verified", verify: v });
         void vscode.window.showInformationMessage(
           v.ok
             ? `Reef ✓ SPEC VERIFIED — workstate ${v.work}`
@@ -2029,6 +2065,12 @@ export function activate(context: vscode.ExtensionContext): void {
     hooks,
     mcpDemo,
     mcpDenyDemo,
+    sessionViewProvider,
+    powersViewProvider,
+    specsViewProvider,
+    usageViewProvider,
+    steeringViewProvider,
+    hooksViewProvider,
     verify,
     checkForUpdates,
     ...commercialDisposables,
