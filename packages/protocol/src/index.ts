@@ -49,6 +49,17 @@ export interface CreateSessionRequest {
     readonly apiKey?: string;
     readonly name?: string;
   };
+  /**
+   * N5 offline MCP proof path. When present, the daemon uses an explicit
+   * deterministic driver that calls the named MCP tool through the governed
+   * `tool` action path. This does not require an LLM key.
+   */
+  readonly mcp?: {
+    readonly serverId?: string;
+    readonly tool?: string;
+    readonly input?: unknown;
+    readonly expectDenied?: boolean;
+  };
 }
 
 /** `POST /sessions` response. */

@@ -18,6 +18,7 @@
  * driver errors is recorded *as such* — it never seals a misleading `done`.
  */
 import { WorkStateGraph, type Actor, type WorkState } from "octopus-workstate";
+import { createHash } from "node:crypto";
 import type { JsonValue } from "octopus-evidence";
 import { EvidenceLog } from "./log.js";
 import { DefaultGate, type ActionGate } from "./gate.js";
@@ -374,6 +375,7 @@ export class GovernedSession {
         reason: "not permitted by the allowlist",
         policy: "reef-allowlist",
         stage: "authorize",
+        resource: resourceId,
       });
       return {
         allowed: false,
@@ -398,13 +400,29 @@ export class GovernedSession {
       "command" in action.payload
         ? String((action.payload as { command: unknown }).command)
         : undefined;
+    const tool =
+      action.type === "tool" &&
+      action.payload !== null &&
+      typeof action.payload === "object" &&
+      !Array.isArray(action.payload) &&
+      "tool" in action.payload
+        ? String((action.payload as { tool: unknown }).tool)
+        : undefined;
+    const output =
+      exec.output !== undefined
+        ? {
+            bytes: exec.output.length,
+            sha256: createHash("sha256").update(exec.output).digest("hex"),
+          }
+        : undefined;
     this.#emit("action.executed", action.summary, {
       actionType: action.type,
       ...(action.target !== undefined ? { target: action.target } : {}),
       ...(command !== undefined ? { payload: { command } } : {}),
+      ...(tool !== undefined ? { payload: { tool } } : {}),
       executor: this.#executor.name,
       ok: exec.ok,
-      result: { passed: exec.ok },
+      result: { passed: exec.ok, ...(output !== undefined ? { output } : {}) },
       ...(exec.error !== undefined ? { error: exec.error } : {}),
     });
     return {

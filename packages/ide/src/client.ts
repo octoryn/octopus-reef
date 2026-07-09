@@ -53,6 +53,12 @@ export interface CreateSessionOptions {
     readonly apiKey?: string;
     readonly name?: string;
   };
+  readonly mcp?: {
+    readonly serverId?: string;
+    readonly tool?: string;
+    readonly input?: unknown;
+    readonly expectDenied?: boolean;
+  };
 }
 
 /** Start a governed session on the daemon; resolves with its id. */
@@ -68,8 +74,11 @@ export async function createSession(
       task,
       ...(options.secret ? { secret: options.secret } : {}),
       ...(options.persist ? { persist: true } : {}),
-      ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}),
+      ...(options.workspaceRoot
+        ? { workspaceRoot: options.workspaceRoot }
+        : {}),
       ...(options.model !== undefined ? { model: options.model } : {}),
+      ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
     }),
   });
   if (!res.ok) {
@@ -77,6 +86,105 @@ export async function createSession(
   }
   const body = (await res.json()) as CreateSessionResponse;
   return body.id;
+}
+
+export interface McpToolDefinition {
+  readonly name: string;
+  readonly description?: string;
+  readonly inputSchema?: Record<string, unknown>;
+}
+
+export interface InstalledPower {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly source: "available" | "custom";
+  readonly transport:
+    | {
+        readonly type: "stdio";
+        readonly command: string;
+        readonly args: readonly string[];
+      }
+    | { readonly type: "http"; readonly url: string };
+  readonly tools: readonly McpToolDefinition[];
+  readonly allowedTools: readonly string[];
+}
+
+export interface AvailablePower {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly transport: "stdio" | "http";
+  readonly tools: readonly McpToolDefinition[];
+  readonly allowedTools: readonly string[];
+}
+
+export interface PowersList {
+  readonly installed: readonly InstalledPower[];
+  readonly available: readonly AvailablePower[];
+  readonly host: {
+    readonly mode: "reef-managed";
+    readonly reason: string;
+  };
+}
+
+async function jsonRequest<T>(
+  url: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const res = await fetch(url, {
+    headers: {
+      accept: "application/json",
+      ...(options.body !== undefined
+        ? { "content-type": "application/json" }
+        : {}),
+      ...(options.headers ?? {}),
+    },
+    ...options,
+  });
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      if (typeof body.error === "string") detail = body.error;
+    } catch {
+      /* keep status text */
+    }
+    throw new Error(`daemon returned ${detail}`);
+  }
+  return (await res.json()) as T;
+}
+
+export async function listPowers(baseUrl: string): Promise<PowersList> {
+  return await jsonRequest<PowersList>(`${baseUrl}/powers`);
+}
+
+export async function installPower(
+  baseUrl: string,
+  id: string,
+): Promise<InstalledPower> {
+  const body = await jsonRequest<{ installed: InstalledPower }>(
+    `${baseUrl}/powers/install`,
+    {
+      method: "POST",
+      body: JSON.stringify({ id }),
+    },
+  );
+  return body.installed;
+}
+
+export async function addCustomPower(
+  baseUrl: string,
+  input: Record<string, unknown>,
+): Promise<InstalledPower> {
+  const body = await jsonRequest<{ installed: InstalledPower }>(
+    `${baseUrl}/powers/custom`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+  return body.installed;
 }
 
 /** Re-verify a sealed session through the daemon. */

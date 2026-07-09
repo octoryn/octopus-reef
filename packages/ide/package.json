@@ -31,6 +31,21 @@
         "category": "Reef"
       },
       {
+        "command": "reef.openPowers",
+        "title": "Reef: Powers",
+        "category": "Reef"
+      },
+      {
+        "command": "reef.runMcpDemo",
+        "title": "Reef: Run MCP Demo",
+        "category": "Reef"
+      },
+      {
+        "command": "reef.runMcpDenialDemo",
+        "title": "Reef: Run MCP Denial Demo",
+        "category": "Reef"
+      },
+      {
         "command": "reef.checkForUpdates",
         "title": "Reef: Check for Updates",
         "category": "Reef"

@@ -11,12 +11,15 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import {
+  addCustomPower,
   createSession,
+  installPower,
+  listPowers,
   streamEvents,
   verifySession,
   type ServerEvent,
 } from "./client.js";
-import { webviewHtml } from "./webview.js";
+import { powersWebviewHtml, webviewHtml } from "./webview.js";
 
 type SessionEvent = Extract<ServerEvent, { type: "event" }>["event"];
 type SealedEvent = Extract<ServerEvent, { type: "sealed" }>;
@@ -73,9 +76,14 @@ interface RunTaskResult {
 interface WebviewMessage {
   readonly kind?: string;
   readonly task?: string;
+  readonly id?: string;
+  readonly input?: Record<string, unknown>;
+  readonly mode?: string;
 }
 
-class ReefTextSurface implements ReefSurface, vscode.TextDocumentContentProvider {
+class ReefTextSurface
+  implements ReefSurface, vscode.TextDocumentContentProvider
+{
   private readonly uri = vscode.Uri.from({
     scheme: "reef-session",
     path: "/Reef Session",
@@ -91,7 +99,10 @@ class ReefTextSurface implements ReefSurface, vscode.TextDocumentContentProvider
 
   constructor(context: vscode.ExtensionContext) {
     context.subscriptions.push(
-      vscode.workspace.registerTextDocumentContentProvider("reef-session", this),
+      vscode.workspace.registerTextDocumentContentProvider(
+        "reef-session",
+        this,
+      ),
       this.changed,
     );
   }
@@ -247,8 +258,12 @@ function normalizeReleaseVersion(tag: string): string {
 }
 
 function compareReleaseVersions(left: string, right: string): number {
-  const a = normalizeReleaseVersion(left).split(".").map((part) => Number(part));
-  const b = normalizeReleaseVersion(right).split(".").map((part) => Number(part));
+  const a = normalizeReleaseVersion(left)
+    .split(".")
+    .map((part) => Number(part));
+  const b = normalizeReleaseVersion(right)
+    .split(".")
+    .map((part) => Number(part));
   const n = Math.max(a.length, b.length);
   for (let i = 0; i < n; i += 1) {
     const ai = a[i];
@@ -300,7 +315,9 @@ function setStatus(
   } else {
     item.text = "Reef ✗ UNVERIFIED";
     item.tooltip = `work ${verify.work}, log ${verify.log}, binding ${verify.binding}`;
-    item.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
+    item.backgroundColor = new vscode.ThemeColor(
+      "statusBarItem.errorBackground",
+    );
   }
   item.show();
 }
@@ -377,6 +394,7 @@ async function waitForBundledServer(
 
 export function activate(context: vscode.ExtensionContext): void {
   let panel: vscode.WebviewPanel | undefined;
+  let powersPanel: vscode.WebviewPanel | undefined;
   let textSurface: ReefTextSurface | undefined;
   let abort: AbortController | undefined;
   let lastVerify: ServerEvent | undefined;
@@ -469,7 +487,17 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   };
 
-  const runTask = async (task: string): Promise<RunTaskResult> => {
+  const runTask = async (
+    task: string,
+    extra: {
+      readonly mcp?: {
+        readonly serverId?: string;
+        readonly tool?: string;
+        readonly input?: unknown;
+        readonly expectDenied?: boolean;
+      };
+    } = {},
+  ): Promise<RunTaskResult> => {
     const base = activeServerUrl;
     const workspaceRoot = firstWorkspaceRoot();
     const model = modelSettings();
@@ -489,6 +517,7 @@ export function activate(context: vscode.ExtensionContext): void {
         persist: true,
         ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
         ...(model !== undefined ? { model } : {}),
+        ...(extra.mcp !== undefined ? { mcp: extra.mcp } : {}),
       });
       lastSessionId = id;
       lastSessionDir = join(persistDir, id);
@@ -518,13 +547,97 @@ export function activate(context: vscode.ExtensionContext): void {
       surface.error(message);
       status.text = "Reef ✗ session failed";
       status.tooltip = message;
-      status.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
+      status.backgroundColor = new vscode.ThemeColor(
+        "statusBarItem.errorBackground",
+      );
       status.show();
       void vscode.window.showErrorMessage(
         `Reef: could not reach the daemon at ${base} — is \`reef serve\` running? (${message})`,
       );
       return { error: message };
     }
+  };
+
+  const runMcpDemo = async (mode: "allowed" | "denied"): Promise<void> => {
+    const denied = mode === "denied";
+    const task = denied
+      ? "N5 MCP denial demo: unallowlisted reef-echo.reverse"
+      : "N5 MCP demo: call reef-echo.echo offline";
+    const result = await runTask(task, {
+      mcp: {
+        serverId: "reef-echo",
+        tool: denied ? "reverse" : "echo",
+        input: { text: "reef n5 offline" },
+        expectDenied: denied,
+      },
+    });
+    void powersPanel?.webview.postMessage({
+      kind: "status",
+      tone: result.error === undefined ? "ok" : "bad",
+      message:
+        result.error === undefined
+          ? `Governed MCP ${mode} session sealed: ${result.sessionId ?? "unknown"}`
+          : result.error,
+    });
+  };
+
+  const refreshPowers = async (): Promise<void> => {
+    const powers = await listPowers(activeServerUrl);
+    void powersPanel?.webview.postMessage({ kind: "powers", powers });
+  };
+
+  const openPowersPanel = (): void => {
+    if (powersPanel === undefined) {
+      powersPanel = vscode.window.createWebviewPanel(
+        "reef.powers",
+        "Reef Powers",
+        vscode.ViewColumn.Beside,
+        { enableScripts: true, retainContextWhenHidden: true },
+      );
+      powersPanel.webview.html = powersWebviewHtml(
+        powersPanel.webview.cspSource,
+        powersPanel.webview
+          .asWebviewUri(
+            vscode.Uri.joinPath(context.extensionUri, "media", "powers.js"),
+          )
+          .toString(),
+      );
+      powersPanel.onDidDispose(() => {
+        powersPanel = undefined;
+      });
+      powersPanel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+        void (async () => {
+          try {
+            if (message.kind === "listPowers") {
+              await refreshPowers();
+            } else if (
+              message.kind === "installPower" &&
+              typeof message.id === "string"
+            ) {
+              await installPower(activeServerUrl, message.id);
+              await refreshPowers();
+            } else if (
+              message.kind === "addCustomPower" &&
+              message.input !== undefined
+            ) {
+              await addCustomPower(activeServerUrl, message.input);
+              await refreshPowers();
+            } else if (message.kind === "runMcpDemo") {
+              await runMcpDemo(
+                message.mode === "denied" ? "denied" : "allowed",
+              );
+            }
+          } catch (err) {
+            void powersPanel?.webview.postMessage({
+              kind: "status",
+              tone: "bad",
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+        })();
+      });
+    }
+    powersPanel.reveal(vscode.ViewColumn.Beside);
   };
 
   const run = vscode.commands.registerCommand("reef.runSession", async () => {
@@ -535,6 +648,38 @@ export function activate(context: vscode.ExtensionContext): void {
     if (task === undefined || task.trim() === "") return;
     await runTask(task);
   });
+
+  const powers = vscode.commands.registerCommand(
+    "reef.openPowers",
+    async () => {
+      openPowersPanel();
+      try {
+        await refreshPowers();
+      } catch (err) {
+        void powersPanel?.webview.postMessage({
+          kind: "status",
+          tone: "bad",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  const mcpDemo = vscode.commands.registerCommand(
+    "reef.runMcpDemo",
+    async () => {
+      openPowersPanel();
+      await runMcpDemo("allowed");
+    },
+  );
+
+  const mcpDenyDemo = vscode.commands.registerCommand(
+    "reef.runMcpDenialDemo",
+    async () => {
+      openPowersPanel();
+      await runMcpDemo("denied");
+    },
+  );
 
   const chatApi = (vscode as unknown as { chat?: StableChatApi }).chat;
   const chatParticipant = chatApi?.createChatParticipant(
@@ -613,9 +758,12 @@ export function activate(context: vscode.ExtensionContext): void {
         const current = await currentProductVersion(context);
         const latest = await latestGitHubRelease(repository);
         const tag = latest.tag_name ?? "";
-        const page = latest.html_url ?? `https://github.com/${repository}/releases`;
+        const page =
+          latest.html_url ?? `https://github.com/${repository}/releases`;
         if (tag === "") {
-          throw new Error(`GitHub release for ${repository} did not include a tag`);
+          throw new Error(
+            `GitHub release for ${repository} did not include a tag`,
+          );
         }
         const comparison = compareReleaseVersions(tag, current);
         if (comparison > 0) {
@@ -643,6 +791,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     status,
     run,
+    powers,
+    mcpDemo,
+    mcpDenyDemo,
     verify,
     checkForUpdates,
     ...(chatParticipant !== undefined ? [chatParticipant] : []),

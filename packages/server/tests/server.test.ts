@@ -294,6 +294,119 @@ test("N1: server can run a real governed edit driver when BYOK runtime is config
   }
 });
 
+test("N5: installs an MCP power, records a governed tool call, and denies an unallowlisted tool", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-n5-mcp-"));
+  const server = new ReefServer({ persistDir: dir });
+  const port = await server.listen(0);
+  try {
+    const initialPowers = await request(port, "GET", "/powers");
+    assert.equal(initialPowers.status, 200);
+    assert.equal(initialPowers.json.installed.length, 0);
+    assert.ok(
+      initialPowers.json.available.some(
+        (power: { id: string }) => power.id === "reef-echo",
+      ),
+    );
+
+    const installed = await request(port, "POST", "/powers/install", {
+      id: "reef-echo",
+    });
+    assert.equal(installed.status, 201);
+    assert.equal(installed.json.installed.id, "reef-echo");
+
+    const powers = await request(port, "GET", "/powers");
+    assert.equal(powers.status, 200);
+    assert.equal(powers.json.installed.length, 1);
+    assert.equal(powers.json.installed[0].id, "reef-echo");
+    assert.deepEqual(powers.json.installed[0].allowedTools, ["echo"]);
+
+    const created = await request(port, "POST", "/sessions", {
+      task: "N5 MCP allowed call",
+      persist: true,
+      mcp: {
+        serverId: "reef-echo",
+        tool: "echo",
+        input: { text: "offline" },
+      },
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.id as string;
+    const frames = await collectSSE(port, `/sessions/${id}/events`);
+    const executed = frames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "action.executed" &&
+        frame.event.summary.includes("reef-echo.echo"),
+    );
+    assert.ok(executed, "MCP call should be an evidence-linked action");
+    if (executed?.type === "event") {
+      assert.match(executed.event.evidenceId, /^ev_[a-f0-9]{64}$/);
+      assert.equal(
+        (executed.event.data.payload as { tool?: string }).tool,
+        "reef-echo.echo",
+      );
+      assert.equal(
+        (
+          executed.event.data.result as {
+            output?: { bytes?: number; sha256?: string };
+          }
+        ).output?.bytes,
+        "echo:offline".length,
+      );
+    }
+
+    const before = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(before.status, 200);
+    assert.equal(before.json.ok, true);
+
+    const logPath = join(dir, id, "session.log.jsonl");
+    const raw = readFileSync(logPath);
+    const offset = raw.indexOf(Buffer.from("reef-echo.echo"));
+    assert.ok(offset >= 0, "evidence log should name the MCP tool");
+    raw[offset] = raw[offset] === 0x72 ? 0x73 : 0x72;
+    writeFileSync(logPath, raw);
+
+    const after = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(after.status, 200);
+    assert.equal(after.json.ok, false);
+    assert.match(after.json.log, /broken/i);
+
+    const deniedCreated = await request(port, "POST", "/sessions", {
+      task: "N5 MCP deny unallowlisted reverse",
+      persist: true,
+      mcp: {
+        serverId: "reef-echo",
+        tool: "reverse",
+        input: { text: "offline" },
+        expectDenied: true,
+      },
+    });
+    assert.equal(deniedCreated.status, 201);
+    const deniedId = deniedCreated.json.id as string;
+    const deniedFrames = await collectSSE(port, `/sessions/${deniedId}/events`);
+    const denied = deniedFrames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "action.denied" &&
+        frame.event.summary.includes("reef-echo.reverse"),
+    );
+    assert.ok(denied, "unallowlisted MCP tool should be denied as evidence");
+    if (denied?.type === "event") {
+      assert.equal(denied.event.data.stage, "authorize");
+      assert.equal(denied.event.data.resource, "reef-echo.reverse");
+    }
+    const deniedVerify = await request(
+      port,
+      "GET",
+      `/sessions/${deniedId}/verify`,
+    );
+    assert.equal(deniedVerify.status, 200);
+    assert.equal(deniedVerify.json.ok, true);
+  } finally {
+    await server.close();
+  }
+});
+
 test("M5: serves the web SPA for non-API routes, confined, API still works", async () => {
   const dir = mkdtempSync(join(tmpdir(), "reef-static-"));
   writeFileSync(

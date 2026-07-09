@@ -29,12 +29,15 @@ import {
   GovernedSession,
   MockDriver,
   SandboxExecutor,
+  ToolExecutor,
   loadSession,
   persistSession,
   reefAllowlist,
   type ActionExecutor,
+  type ActionResult,
   type Authorizer,
   type Driver,
+  type DriverContext,
   type DriverStep,
   type ReefEvent,
   type SessionOutcome,
@@ -52,6 +55,11 @@ import type {
   SessionView,
   VerifyResult,
 } from "@octopus-reef/protocol";
+import {
+  McpPowerRegistry,
+  type AddCustomPowerRequest,
+  type InstalledPower,
+} from "./mcp.js";
 
 interface SessionRecord {
   readonly id: string;
@@ -64,6 +72,81 @@ interface SessionRecord {
   verify: VerifyResult | null;
   outcome: SessionOutcome | null;
   cleanup?: () => void;
+}
+
+interface McpSessionRequest {
+  readonly serverId?: string;
+  readonly tool?: string;
+  readonly input?: unknown;
+  readonly expectDenied?: boolean;
+}
+
+class McpDemoDriver implements Driver {
+  readonly name = "mcp-demo";
+  readonly #tool: string;
+  readonly #input: unknown;
+  readonly #expectDenied: boolean;
+
+  constructor(options: {
+    readonly tool: string;
+    readonly input: unknown;
+    readonly expectDenied?: boolean;
+  }) {
+    this.#tool = options.tool;
+    this.#input = options.input;
+    this.#expectDenied = options.expectDenied === true;
+  }
+
+  async *run(ctx: DriverContext): AsyncIterable<DriverStep> {
+    yield {
+      type: "observe",
+      summary: `resolved MCP power for "${ctx.task}"`,
+      data: { tool: this.#tool, expectDenied: this.#expectDenied },
+    };
+    const result = (yield {
+      type: "action",
+      action: {
+        type: "tool",
+        summary: `MCP tool call: ${this.#tool}`,
+        target: this.#tool,
+        payload: { tool: this.#tool, input: this.#input },
+        required: !this.#expectDenied,
+      },
+    }) as ActionResult | undefined;
+
+    if (this.#expectDenied) {
+      if (result?.allowed === false && result.executed === false) {
+        yield {
+          type: "done",
+          summary: `denied unallowlisted MCP tool ${this.#tool}`,
+        };
+        return;
+      }
+      yield {
+        type: "fail",
+        summary: `expected MCP tool ${this.#tool} to be denied`,
+      };
+      return;
+    }
+
+    if (result?.executed === true && result.error === undefined) {
+      yield {
+        type: "observe",
+        summary: `MCP tool ${this.#tool} returned`,
+        data: {
+          tool: this.#tool,
+          outputBytes: result.output?.length ?? 0,
+        },
+      };
+      yield { type: "done", summary: `called MCP tool ${this.#tool}` };
+      return;
+    }
+
+    yield {
+      type: "fail",
+      summary: `MCP tool ${this.#tool} did not execute: ${result?.error ?? result?.reason ?? "no result"}`,
+    };
+  }
 }
 
 export interface DriverFactoryContext {
@@ -263,10 +346,12 @@ export class ReefServer {
   readonly #sessions = new Map<string, SessionRecord>();
   readonly #options: ReefServerOptions;
   readonly #http: Server;
+  readonly #powers: McpPowerRegistry;
   #counter = 0;
 
   constructor(options: ReefServerOptions = {}) {
     this.#options = options;
+    this.#powers = new McpPowerRegistry(options.persistDir);
     this.#http = createServer((req, res) => {
       this.#handle(req, res).catch((err: unknown) => {
         this.#fail(res, 500, err instanceof Error ? err.message : String(err));
@@ -311,6 +396,42 @@ export class ReefServer {
 
     if (method === "GET" && parts.length === 1 && parts[0] === "health") {
       return this.#json(res, 200, { ok: true });
+    }
+    if (parts[0] === "powers") {
+      if (method === "GET" && parts.length === 1) {
+        return this.#json(res, 200, this.#powers.list());
+      }
+      if (method === "POST" && parts.length === 2 && parts[1] === "install") {
+        let body: { readonly id?: unknown };
+        try {
+          body = (await this.#readJson(req)) as { readonly id?: unknown };
+          const id = optionalString(body.id);
+          if (id === undefined) throw new Error("id is required");
+          return this.#json(res, 201, {
+            installed: this.#powers.installAvailable(id),
+          });
+        } catch (err) {
+          return this.#fail(
+            res,
+            400,
+            err instanceof Error ? err.message : "bad body",
+          );
+        }
+      }
+      if (method === "POST" && parts.length === 2 && parts[1] === "custom") {
+        try {
+          const body = (await this.#readJson(req)) as AddCustomPowerRequest;
+          return this.#json(res, 201, {
+            installed: this.#powers.addCustom(body),
+          });
+        } catch (err) {
+          return this.#fail(
+            res,
+            400,
+            err instanceof Error ? err.message : "bad body",
+          );
+        }
+      }
     }
     if (method === "POST" && parts.length === 1 && parts[0] === "sessions") {
       return this.#createSession(req, res);
@@ -390,9 +511,12 @@ export class ReefServer {
 
     const id = `sess-${(this.#counter++).toString(36)}-${Date.now().toString(36)}`;
     const context = sessionContext(task, body);
-    const runtime = normalizeRuntime(
-      this.#options.driverFactory?.(context) ?? defaultRuntime(context),
-    );
+    const runtime =
+      body.mcp !== undefined
+        ? this.#mcpRuntime(body.mcp)
+        : normalizeRuntime(
+            this.#options.driverFactory?.(context) ?? defaultRuntime(context),
+          );
     const rec: SessionRecord = {
       id,
       task,
@@ -424,6 +548,45 @@ export class ReefServer {
     this.#sessions.set(id, rec);
     void this.#run(rec, body.persist === true);
     this.#json(res, 201, { id });
+  }
+
+  #mcpRuntime(request: McpSessionRequest): SessionRuntime {
+    const serverId = optionalString(request.serverId) ?? "reef-echo";
+    const requestedTool =
+      optionalString(request.tool) ??
+      (request.expectDenied === true ? "reverse" : "echo");
+    const power = this.#powers.get(serverId);
+    if (power === undefined) {
+      return {
+        driver: new ConfigurationFailureDriver(
+          `MCP power '${serverId}' is not installed`,
+        ),
+      };
+    }
+
+    const tool = this.#powers.fullToolName(power.id, requestedTool);
+    const tools = this.#powers.toolsFor(power);
+    if (!tools.some((candidate) => candidate.name === tool)) {
+      return {
+        driver: new ConfigurationFailureDriver(
+          `MCP power '${power.name}' does not expose tool '${requestedTool}'`,
+        ),
+      };
+    }
+
+    return {
+      driver: new McpDemoDriver({
+        tool,
+        input: request.input ?? { text: "offline N5" },
+        ...(request.expectDenied !== undefined
+          ? { expectDenied: request.expectDenied }
+          : {}),
+      }),
+      authorizer: reefAllowlist({
+        tools: this.#powers.allowedFullToolNames(power),
+      }),
+      executor: new ToolExecutor(tools),
+    };
   }
 
   async #run(rec: SessionRecord, persist: boolean): Promise<void> {
