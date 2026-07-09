@@ -2,7 +2,7 @@
   "name": "@octopus-reef/ide",
   "displayName": "Reef — governed sessions",
   "version": "0.1.0",
-  "description": "The Reef VS Code surface: run a governed agentic session and watch its tamper-evident evidence chain seal and verify, without leaving the editor.",
+  "description": "The Reef editor surface: run a governed agentic session and watch its tamper-evident evidence chain seal and verify, without leaving the editor.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",
   "publisher": "octopus-reef",
@@ -15,7 +15,9 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
       {
@@ -25,7 +27,12 @@
       },
       {
         "command": "reef.verifySession",
-        "title": "Reef: Verify Last Session",
+        "title": "Reef: Verify",
+        "category": "Reef"
+      },
+      {
+        "command": "reef.checkForUpdates",
+        "title": "Reef: Check for Updates",
         "category": "Reef"
       }
     ],
@@ -35,10 +42,37 @@
         "reef.serverUrl": {
           "type": "string",
           "default": "http://127.0.0.1:4300",
-          "description": "URL of the Reef daemon (`reef serve`)."
+          "description": "URL of the Reef daemon (`reef serve`) when not using the bundled daemon."
+        },
+        "reef.useBundledServer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the bundled local Reef daemon automatically on editor launch."
+        },
+        "reef.updateRepository": {
+          "type": "string",
+          "default": "octoryn/octopus-reef-editor",
+          "description": "GitHub owner/repository used by Reef: Check for Updates. The command queries GitHub Releases only when run."
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "reef.verify",
+        "title": "Reef: Verify",
+        "description": "Open Reef, run the offline demo session, and verify the evidence chain.",
+        "steps": [
+          {
+            "id": "reef.verify.session",
+            "title": "Verify a governed session",
+            "description": "Reef starts a bundled local daemon, opens the session panel, and runs a keyless offline demo. Run Reef: Verify to re-check the evidence log.",
+            "completionEvents": [
+              "onCommand:reef.verifySession"
+            ]
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "build": "node esbuild.mjs",

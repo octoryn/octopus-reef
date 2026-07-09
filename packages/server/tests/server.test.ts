@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import http from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ReefServer } from "../src/index.js";
@@ -173,6 +173,39 @@ test("M2: a keyed session verifies with the same secret over the wire", async ()
     const sealed = frames.at(-1);
     assert.equal(sealed?.type, "sealed");
     if (sealed?.type === "sealed") assert.equal(sealed.verify.ok, true);
+  } finally {
+    await server.close();
+  }
+});
+
+test("M3: persisted verify turns red after one evidence-log byte is flipped", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-m3-persist-"));
+  const server = new ReefServer({ persistDir: dir });
+  const port = await server.listen(0);
+  try {
+    const created = await request(port, "POST", "/sessions", {
+      task: "offline keyless demo",
+      persist: true,
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.id as string;
+    await collectSSE(port, `/sessions/${id}/events`);
+
+    const before = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(before.status, 200);
+    assert.equal(before.json.ok, true);
+
+    const logPath = join(dir, id, "session.log.jsonl");
+    const raw = readFileSync(logPath);
+    const offset = raw.indexOf(Buffer.from("offline"));
+    assert.ok(offset >= 0, "test fixture should contain a flippable byte");
+    raw[offset] = raw[offset] === 0x6f ? 0x70 : 0x6f;
+    writeFileSync(logPath, raw);
+
+    const after = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(after.status, 200);
+    assert.equal(after.json.ok, false);
+    assert.match(after.json.log, /broken/i);
   } finally {
     await server.close();
   }

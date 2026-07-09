@@ -39,10 +39,20 @@ const vscode = acquireVsCodeApi();
 const tl = document.getElementById('timeline');
 const pf = document.getElementById('proof');
 const KIND = {'session.created':'session','work.transition':'work',observation:'observe','action.executed':'action','action.denied':'denied',message:'message','session.sealed':'sealed'};
+let lastSnapshot = null;
 function cls(k){return k==='action.executed'||k==='session.sealed'?'exec':k==='action.denied'?'deny':''}
+function renderProof(snapshot, verify) {
+  lastSnapshot = snapshot;
+  const ok = verify.ok;
+  const c = (v)=> (v==='intact'||v==='bound');
+  pf.className = 'proof ' + (ok?'ok':'bad');
+  pf.innerHTML = '<div class="v">'+(ok?'✓ VERIFIED':'✗ UNVERIFIED')+' <span style="color:var(--muted);font-weight:400">'+snapshot.outcome+'</span></div>'+
+    '<div class="checks">work <b class="'+(c(verify.work)?'':'bad')+'">'+verify.work+'</b> log <b class="'+(c(verify.log)?'':'bad')+'">'+verify.log+'</b> binding <b class="'+(c(verify.binding)?'':'bad')+'">'+verify.binding+'</b></div>'+
+    '<div class="chains"><span>'+snapshot.workChainLength+' work links</span><span>'+snapshot.logChainLength+' evidence links</span><span>'+snapshot.actionsExecuted+' executed</span><span>'+snapshot.actionsDenied+' denied</span></div>';
+}
 window.addEventListener('message', (m) => {
   const d = m.data;
-  if (d.kind === 'reset') { tl.innerHTML=''; pf.innerHTML=''; document.getElementById('task').textContent=d.task; }
+  if (d.kind === 'reset') { tl.innerHTML=''; pf.innerHTML=''; lastSnapshot=null; document.getElementById('task').textContent=d.task; }
   else if (d.kind === 'event') {
     const e = d.event;
     const row = document.createElement('div');
@@ -54,12 +64,9 @@ window.addEventListener('message', (m) => {
     row.children[3].textContent = (e.evidenceId||'').slice(0,10);
     tl.appendChild(row);
   } else if (d.kind === 'sealed') {
-    const ok = d.verify.ok;
-    const c = (v)=> (v==='intact'||v==='bound');
-    pf.className = 'proof ' + (ok?'ok':'bad');
-    pf.innerHTML = '<div class="v">'+(ok?'✓ VERIFIED':'✗ UNVERIFIED')+' <span style="color:var(--muted);font-weight:400">'+d.snapshot.outcome+'</span></div>'+
-      '<div class="checks">work <b class="'+(c(d.verify.work)?'':'bad')+'">'+d.verify.work+'</b> log <b class="'+(c(d.verify.log)?'':'bad')+'">'+d.verify.log+'</b> binding <b class="'+(c(d.verify.binding)?'':'bad')+'">'+d.verify.binding+'</b></div>'+
-      '<div class="chains"><span>'+d.snapshot.workChainLength+' work links</span><span>'+d.snapshot.logChainLength+' evidence links</span><span>'+d.snapshot.actionsExecuted+' executed</span><span>'+d.snapshot.actionsDenied+' denied</span></div>';
+    renderProof(d.snapshot, d.verify);
+  } else if (d.kind === 'verified' && lastSnapshot !== null) {
+    renderProof(lastSnapshot, d.verify);
   } else if (d.kind === 'error') {
     pf.className='proof bad'; pf.innerHTML='<div class="v">✗ '+d.message+'</div>';
   }

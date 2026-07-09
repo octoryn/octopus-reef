@@ -28,6 +28,7 @@ import { extname, join, relative, resolve } from "node:path";
 import {
   GovernedSession,
   MockDriver,
+  loadSession,
   persistSession,
   type Driver,
   type ReefEvent,
@@ -317,6 +318,33 @@ export class ReefServer {
   #verify(res: ServerResponse, rec: SessionRecord): void {
     if (rec.status !== "sealed") {
       this.#fail(res, 409, "session has not sealed yet");
+      return;
+    }
+    const persisted =
+      this.#options.persistDir !== undefined
+        ? join(this.#options.persistDir, rec.id)
+        : undefined;
+    if (
+      persisted !== undefined &&
+      existsSync(join(persisted, "session.log.jsonl"))
+    ) {
+      try {
+        loadSession(persisted);
+        this.#json(res, 200, {
+          ok: true,
+          work: "intact",
+          log: "intact",
+          binding: "bound",
+        });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        this.#json(res, 200, {
+          ok: false,
+          work: "unchecked",
+          log: `broken: ${reason}`,
+          binding: "unchecked",
+        });
+      }
       return;
     }
     // Re-verify from scratch — store-untrusting, exactly as an offline auditor would.

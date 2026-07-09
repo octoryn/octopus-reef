@@ -49,17 +49,36 @@ export async function createSession(
   baseUrl: string,
   task: string,
   secret?: string,
+  persist = false,
 ): Promise<string> {
   const res = await fetch(`${baseUrl}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ task, ...(secret ? { secret } : {}) }),
+    body: JSON.stringify({
+      task,
+      ...(secret ? { secret } : {}),
+      ...(persist ? { persist: true } : {}),
+    }),
   });
   if (!res.ok) {
     throw new Error(`daemon returned ${res.status} ${res.statusText}`);
   }
   const body = (await res.json()) as CreateSessionResponse;
   return body.id;
+}
+
+/** Re-verify a sealed session through the daemon. */
+export async function verifySession(
+  baseUrl: string,
+  id: string,
+): Promise<import("@octopus-reef/protocol").VerifyResult> {
+  const res = await fetch(`${baseUrl}/sessions/${id}/verify`, {
+    headers: { accept: "application/json" },
+  });
+  if (!res.ok) {
+    throw new Error(`daemon returned ${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as import("@octopus-reef/protocol").VerifyResult;
 }
 
 /** A single SSE frame (or the pending tail) must fit in this much memory. */
