@@ -44,20 +44,32 @@ export function drainSSE(
   return rest;
 }
 
+export interface CreateSessionOptions {
+  readonly secret?: string;
+  readonly persist?: boolean;
+  readonly workspaceRoot?: string;
+  readonly model?: {
+    readonly provider?: string;
+    readonly apiKey?: string;
+    readonly name?: string;
+  };
+}
+
 /** Start a governed session on the daemon; resolves with its id. */
 export async function createSession(
   baseUrl: string,
   task: string,
-  secret?: string,
-  persist = false,
+  options: CreateSessionOptions = {},
 ): Promise<string> {
   const res = await fetch(`${baseUrl}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       task,
-      ...(secret ? { secret } : {}),
-      ...(persist ? { persist: true } : {}),
+      ...(options.secret ? { secret: options.secret } : {}),
+      ...(options.persist ? { persist: true } : {}),
+      ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}),
+      ...(options.model !== undefined ? { model: options.model } : {}),
     }),
   });
   if (!res.ok) {

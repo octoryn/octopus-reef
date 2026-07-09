@@ -28,13 +28,24 @@ import { extname, join, relative, resolve } from "node:path";
 import {
   GovernedSession,
   MockDriver,
+  SandboxExecutor,
   loadSession,
   persistSession,
+  reefAllowlist,
+  type ActionExecutor,
+  type Authorizer,
   type Driver,
+  type DriverStep,
   type ReefEvent,
   type SessionOutcome,
   type SessionSnapshot,
 } from "@octopus-reef/engine";
+import {
+  AgentWorker,
+  AnthropicProvider,
+  BedrockProvider,
+  type ModelProvider,
+} from "@octopus-reef/agent";
 import type {
   CreateSessionRequest,
   ServerEvent,
@@ -52,6 +63,24 @@ interface SessionRecord {
   snapshot: SessionSnapshot | null;
   verify: VerifyResult | null;
   outcome: SessionOutcome | null;
+  cleanup?: () => void;
+}
+
+export interface DriverFactoryContext {
+  readonly task: string;
+  readonly workspaceRoot?: string;
+  readonly model?: {
+    readonly provider?: string;
+    readonly apiKey?: string;
+    readonly name?: string;
+  };
+}
+
+export interface SessionRuntime {
+  readonly driver: Driver;
+  readonly authorizer?: Authorizer;
+  readonly executor?: ActionExecutor;
+  readonly cleanup?: () => void;
 }
 
 export interface ReefServerOptions {
@@ -62,7 +91,9 @@ export interface ReefServerOptions {
    * so the server runs keyless out of the box (Docker demo, tests). A deployment
    * swaps in a real agent driver here.
    */
-  readonly driverFactory?: (task: string) => Driver;
+  readonly driverFactory?: (
+    context: DriverFactoryContext,
+  ) => Driver | SessionRuntime;
   /**
    * Serve a built single-page app (the web surface) for non-API GET routes, so
    * one container hosts both the governed backend and the UI. Unknown paths fall
@@ -78,6 +109,142 @@ export interface ReefServerOptions {
 const MAX_BODY = 64 * 1024;
 const DEFAULT_MAX_SESSIONS = 500;
 const DEFAULT_MAX_SUBSCRIBERS = 64;
+const DEFAULT_REAL_COMMANDS: Readonly<Record<string, readonly string[] | "*">> =
+  {
+    node: "*",
+    npm: ["test", "run"],
+    git: ["status", "diff", "log", "show", "rev-parse", "ls-files"],
+  };
+
+class ConfigurationFailureDriver implements Driver {
+  readonly name = "configuration";
+  readonly #message: string;
+
+  constructor(message: string) {
+    this.#message = message;
+  }
+
+  async *run(): AsyncIterable<DriverStep> {
+    yield { type: "fail", summary: this.#message };
+  }
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== ""
+    ? value.trim()
+    : undefined;
+}
+
+function sessionContext(
+  task: string,
+  body: CreateSessionRequest,
+): DriverFactoryContext {
+  const modelBody =
+    body.model !== null && typeof body.model === "object"
+      ? (body.model as Record<string, unknown>)
+      : undefined;
+  const model: NonNullable<DriverFactoryContext["model"]> = {
+    ...maybe("provider", optionalString(modelBody?.provider)),
+    ...maybe("apiKey", optionalString(modelBody?.apiKey)),
+    ...maybe("name", optionalString(modelBody?.name)),
+  };
+  return {
+    task,
+    ...maybe("workspaceRoot", optionalString(body.workspaceRoot)),
+    ...(Object.keys(model).length > 0 ? { model } : {}),
+  };
+}
+
+function maybe<T>(
+  key: string,
+  value: T | undefined,
+): Record<string, T> | Record<string, never> {
+  return value === undefined ? {} : { [key]: value };
+}
+
+function normalizeRuntime(value: Driver | SessionRuntime): SessionRuntime {
+  return "driver" in value ? value : { driver: value };
+}
+
+function defaultRuntime(context: DriverFactoryContext): SessionRuntime {
+  const requested = (
+    context.model?.provider ??
+    process.env.REEF_MODEL_PROVIDER ??
+    "auto"
+  ).toLowerCase();
+  const providerName = selectProvider(requested, context.model?.apiKey);
+  if (providerName === "mock") return { driver: new MockDriver() };
+
+  const workspaceRoot =
+    context.workspaceRoot ?? optionalString(process.env.REEF_WORKSPACE_ROOT);
+  if (workspaceRoot === undefined) {
+    return {
+      driver: new ConfigurationFailureDriver(
+        "real model provider configured but no workspace root was provided",
+      ),
+    };
+  }
+
+  const provider = createProvider(providerName, context.model);
+  if (provider === undefined) return { driver: new MockDriver() };
+
+  const executor = new SandboxExecutor(workspaceRoot, { timeoutMs: 25_000 });
+  return {
+    driver: new AgentWorker({ provider, maxTurns: 30 }),
+    authorizer: reefAllowlist({ commands: DEFAULT_REAL_COMMANDS }),
+    executor,
+    cleanup: () => executor.dispose(),
+  };
+}
+
+function selectProvider(requested: string, explicitKey: string | undefined) {
+  if (requested === "mock") return "mock";
+  if (requested === "anthropic" || requested === "claude") {
+    return apiKeyFor("anthropic", explicitKey) === undefined
+      ? "mock"
+      : "anthropic";
+  }
+  if (requested === "bedrock") {
+    return apiKeyFor("bedrock", explicitKey) === undefined ? "mock" : "bedrock";
+  }
+  if (apiKeyFor("anthropic", explicitKey) !== undefined) return "anthropic";
+  if (apiKeyFor("bedrock", explicitKey) !== undefined) return "bedrock";
+  return "mock";
+}
+
+function apiKeyFor(
+  provider: "anthropic" | "bedrock",
+  explicitKey: string | undefined,
+): string | undefined {
+  return (
+    explicitKey ??
+    optionalString(process.env.REEF_MODEL_API_KEY) ??
+    (provider === "anthropic"
+      ? optionalString(process.env.ANTHROPIC_API_KEY)
+      : optionalString(process.env.AWS_BEARER_TOKEN_BEDROCK))
+  );
+}
+
+function createProvider(
+  provider: "anthropic" | "bedrock",
+  model: DriverFactoryContext["model"],
+): ModelProvider | undefined {
+  const apiKey = apiKeyFor(provider, model?.apiKey);
+  if (apiKey === undefined) return undefined;
+  const modelName = model?.name ?? optionalString(process.env.REEF_MODEL_NAME);
+  if (provider === "anthropic") {
+    return new AnthropicProvider({
+      apiKey,
+      ...(modelName !== undefined ? { model: modelName } : {}),
+    });
+  }
+  const region = optionalString(process.env.REEF_MODEL_REGION);
+  return new BedrockProvider({
+    token: apiKey,
+    ...(modelName !== undefined ? { model: modelName } : {}),
+    ...(region !== undefined ? { region } : {}),
+  });
+}
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".html": "text/html; charset=utf-8",
@@ -222,7 +389,10 @@ export class ReefServer {
     }
 
     const id = `sess-${(this.#counter++).toString(36)}-${Date.now().toString(36)}`;
-    const driver = this.#options.driverFactory?.(task) ?? new MockDriver();
+    const context = sessionContext(task, body);
+    const runtime = normalizeRuntime(
+      this.#options.driverFactory?.(context) ?? defaultRuntime(context),
+    );
     const rec: SessionRecord = {
       id,
       task,
@@ -233,11 +403,16 @@ export class ReefServer {
       snapshot: null,
       verify: null,
       outcome: null,
+      ...(runtime.cleanup !== undefined ? { cleanup: runtime.cleanup } : {}),
     };
     rec.session = new GovernedSession({
       id,
       task,
-      driver,
+      driver: runtime.driver,
+      ...(runtime.authorizer !== undefined
+        ? { authorizer: runtime.authorizer }
+        : {}),
+      ...(runtime.executor !== undefined ? { executor: runtime.executor } : {}),
       ...(typeof body.secret === "string" && body.secret.length > 0
         ? { integritySecret: body.secret }
         : {}),
@@ -277,6 +452,7 @@ export class ReefServer {
     }
     for (const res of rec.subscribers) res.end();
     rec.subscribers.clear();
+    rec.cleanup?.();
   }
 
   #subscribe(

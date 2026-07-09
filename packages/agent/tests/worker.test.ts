@@ -25,6 +25,7 @@ import {
 } from "@octopus-reef/engine";
 import {
   AgentWorker,
+  AnthropicProvider,
   BedrockProvider,
   ProviderError,
   type CompletionRequest,
@@ -58,9 +59,11 @@ const use = (
   id: string,
   name: string,
   input: Record<string, unknown>,
+  usage?: CompletionResponse["usage"],
 ): CompletionResponse => ({
   content: [{ type: "tool_use", id, name, input } as ToolUseBlock],
   stopReason: "tool_use",
+  ...(usage !== undefined ? { usage } : {}),
 });
 
 /** A fake executor whose "npm test" passes only once sum.js has been fixed. */
@@ -96,7 +99,13 @@ class FakeExecutor implements ActionExecutor {
 
 test("worker drives read → run(fail) → fix → run(pass) → done, feeding results back", async () => {
   const provider = new ScriptedProvider([
-    use("1", "read_file", { path: "sum.js" }),
+    use("1", "read_file", { path: "sum.js" }, {
+      provider: "anthropic",
+      model: "claude-test",
+      inputTokens: 11,
+      outputTokens: 7,
+      totalTokens: 18,
+    }),
     use("2", "run_command", { command: "npm test" }), // fails first
     use("3", "write_file", {
       path: "sum.js",
@@ -118,6 +127,15 @@ test("worker drives read → run(fail) → fix → run(pass) → done, feeding r
   const { outcome } = await session.run();
   assert.equal(outcome, "completed");
   assert.equal(session.verify().ok, true, "the governed session verifies");
+  const usageEvent = session.events.find((event) =>
+    event.summary.startsWith("model usage:"),
+  );
+  assert.equal(
+    (usageEvent?.data.modelUsage as { totalTokens?: number } | undefined)
+      ?.totalTokens,
+    18,
+    "token usage from the provider response is persisted as evidence",
+  );
   assert.deepEqual(
     executor.actions.map((a) => a.type),
     ["read", "command", "edit", "command"],
@@ -258,6 +276,7 @@ test("BedrockProvider builds an Anthropic-on-Bedrock request and parses tool_use
           },
         ],
         stop_reason: "tool_use",
+        usage: { input_tokens: 3, output_tokens: 5 },
       }),
       { status: 200 },
     );
@@ -279,6 +298,7 @@ test("BedrockProvider builds an Anthropic-on-Bedrock request and parses tool_use
 
   assert.equal(resp.stopReason, "tool_use");
   assert.equal(resp.content[0]?.type, "tool_use");
+  assert.equal(resp.usage?.totalTokens, 8);
   assert.match(
     String(captured?.url),
     /bedrock-runtime\.us-west-2\.amazonaws\.com\/model\//,
@@ -291,6 +311,56 @@ test("BedrockProvider builds an Anthropic-on-Bedrock request and parses tool_use
   };
   assert.equal(body.anthropic_version, "bedrock-2023-05-31");
   assert.deepEqual(body.tools[0]?.input_schema, { type: "object" });
+});
+
+test("AnthropicProvider builds a Messages request and normalizes token usage (injected fetch)", async () => {
+  let captured: { url: string; init: RequestInit } | undefined;
+  const fakeFetch = (async (url: string, init: RequestInit) => {
+    captured = { url, init };
+    return new Response(
+      JSON.stringify({
+        content: [
+          {
+            type: "tool_use",
+            id: "tu",
+            name: "write_file",
+            input: { path: "x", content: "ok" },
+          },
+        ],
+        stop_reason: "tool_use",
+        usage: {
+          input_tokens: 13,
+          output_tokens: 17,
+          cache_creation_input_tokens: 2,
+          cache_read_input_tokens: 3,
+        },
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+
+  const provider = new AnthropicProvider({
+    apiKey: "sk-test",
+    model: "claude-test",
+    fetchImpl: fakeFetch,
+  });
+  const resp = await provider.complete({
+    system: "s",
+    messages: [{ role: "user", content: "hi" }],
+    tools: [
+      { name: "write_file", description: "d", inputSchema: { type: "object" } },
+    ],
+    maxTokens: 100,
+  });
+
+  assert.equal(captured?.url, "https://api.anthropic.com/v1/messages");
+  const headers = captured?.init.headers as Record<string, string>;
+  assert.equal(headers["x-api-key"], "sk-test");
+  assert.equal(headers["anthropic-version"], "2023-06-01");
+  assert.equal(resp.content[0]?.type, "tool_use");
+  assert.equal(resp.usage?.provider, "anthropic");
+  assert.equal(resp.usage?.model, "claude-test");
+  assert.equal(resp.usage?.totalTokens, 35);
 });
 
 test("BedrockProvider retries on 429 then succeeds", async () => {

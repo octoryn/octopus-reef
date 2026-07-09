@@ -41,6 +41,14 @@ export interface CreateSessionRequest {
   readonly secret?: string;
   /** Persist the session to disk on the server as it seals. */
   readonly persist?: boolean;
+  /** Workspace root for real governed edit/test runs. Omitted for the mock demo. */
+  readonly workspaceRoot?: string;
+  /** BYOK model settings. If absent or keyless, the daemon falls back to MockDriver. */
+  readonly model?: {
+    readonly provider?: string;
+    readonly apiKey?: string;
+    readonly name?: string;
+  };
 }
 
 /** `POST /sessions` response. */

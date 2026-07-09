@@ -9,6 +9,8 @@ import http from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AgentWorker, type ModelProvider } from "@octopus-reef/agent";
+import { WorkspaceExecutor, reefAllowlist } from "@octopus-reef/engine";
 import { ReefServer } from "../src/index.js";
 import type { ServerEvent } from "@octopus-reef/protocol";
 
@@ -206,6 +208,87 @@ test("M3: persisted verify turns red after one evidence-log byte is flipped", as
     assert.equal(after.status, 200);
     assert.equal(after.json.ok, false);
     assert.match(after.json.log, /broken/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test("N1: server can run a real governed edit driver when BYOK runtime is configured", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-n1-real-"));
+  const provider: ModelProvider = {
+    name: "scripted-real",
+    complete: (() => {
+      let turn = 0;
+      return () => {
+        turn++;
+        return Promise.resolve(
+          turn === 1
+            ? {
+                content: [
+                  {
+                    type: "tool_use",
+                    id: "w1",
+                    name: "write_file",
+                    input: {
+                      path: "n1.txt",
+                      content: "real edit made by governed N1 driver\n",
+                    },
+                  },
+                ],
+                stopReason: "tool_use",
+                usage: {
+                  provider: "anthropic",
+                  model: "claude-test",
+                  inputTokens: 5,
+                  outputTokens: 7,
+                  totalTokens: 12,
+                },
+              }
+            : {
+                content: [
+                  {
+                    type: "tool_use",
+                    id: "d1",
+                    name: "done",
+                    input: { summary: "edited n1.txt" },
+                  },
+                ],
+                stopReason: "tool_use",
+              },
+        );
+      };
+    })(),
+  };
+  const server = new ReefServer({
+    driverFactory: ({ workspaceRoot }) => ({
+      driver: new AgentWorker({ provider, maxTurns: 4 }),
+      authorizer: reefAllowlist(),
+      executor: new WorkspaceExecutor(workspaceRoot ?? dir),
+    }),
+  });
+  const port = await server.listen(0);
+  try {
+    const created = await request(port, "POST", "/sessions", {
+      task: "write n1.txt",
+      workspaceRoot: dir,
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.id as string;
+    const frames = await collectSSE(port, `/sessions/${id}/events`);
+    const sealed = frames.at(-1);
+    assert.equal(sealed?.type, "sealed");
+    if (sealed?.type === "sealed") assert.equal(sealed.verify.ok, true);
+    assert.match(readFileSync(join(dir, "n1.txt"), "utf8"), /real edit/);
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (frame.event.data.modelUsage as { totalTokens?: number } | undefined)
+            ?.totalTokens === 12,
+      ),
+      "model token usage is persisted into the evidence stream",
+    );
   } finally {
     await server.close();
   }

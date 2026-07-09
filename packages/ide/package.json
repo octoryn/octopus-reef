@@ -36,6 +36,15 @@
         "category": "Reef"
       }
     ],
+    "chatParticipants": [
+      {
+        "id": "octopus-reef.ide.reef",
+        "name": "reef",
+        "fullName": "Reef",
+        "description": "Run a governed Reef build session with tamper-evident evidence.",
+        "sampleRequest": "fix the failing test in this workspace"
+      }
+    ],
     "configuration": {
       "title": "Reef",
       "properties": {
@@ -53,6 +62,27 @@
           "type": "string",
           "default": "octoryn/octopus-reef-editor",
           "description": "GitHub owner/repository used by Reef: Check for Updates. The command queries GitHub Releases only when run."
+        },
+        "reef.model.provider": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "mock",
+            "anthropic",
+            "bedrock"
+          ],
+          "default": "auto",
+          "description": "Model provider for governed sessions. With no BYOK key, auto falls back to the offline MockDriver."
+        },
+        "reef.model.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional BYOK model API key. If empty, Reef reads provider environment variables such as ANTHROPIC_API_KEY."
+        },
+        "reef.model.name": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model name override for the configured provider."
         }
       }
     },

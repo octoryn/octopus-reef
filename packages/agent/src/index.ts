@@ -9,7 +9,9 @@
 export { AgentWorker } from "./worker.js";
 export type { AgentWorkerOptions } from "./worker.js";
 export {
+  AnthropicProvider,
   BedrockProvider,
+  DEFAULT_ANTHROPIC_MODEL,
   ProviderError,
   DEFAULT_BEDROCK_MODEL,
 } from "./provider.js";
@@ -52,5 +54,7 @@ export type {
   ToolUseBlock,
   ToolResultBlock,
   ToolSpec,
+  AnthropicProviderOptions,
   BedrockProviderOptions,
+  ModelUsage,
 } from "./provider.js";

@@ -40,6 +40,37 @@ interface ReefSurface {
   error(message: string): void;
 }
 
+interface StableChatRequest {
+  readonly prompt: string;
+}
+
+interface StableChatResponseStream {
+  progress(value: string): void;
+  markdown(value: string): void;
+}
+
+interface StableChatParticipant extends vscode.Disposable {
+  iconPath?: vscode.IconPath | vscode.ThemeIcon;
+}
+
+interface StableChatApi {
+  createChatParticipant(
+    id: string,
+    handler: (
+      request: StableChatRequest,
+      context: unknown,
+      stream: StableChatResponseStream,
+      token: vscode.CancellationToken,
+    ) => vscode.ProviderResult<unknown>,
+  ): StableChatParticipant;
+}
+
+interface RunTaskResult {
+  readonly sessionId?: string;
+  readonly verify?: VerifyResult;
+  readonly error?: string;
+}
+
 class ReefTextSurface implements ReefSurface, vscode.TextDocumentContentProvider {
   private readonly uri = vscode.Uri.from({
     scheme: "reef-session",
@@ -155,6 +186,32 @@ function updateRepository(): string {
   return repository;
 }
 
+function firstWorkspaceRoot(): string | undefined {
+  const folder = vscode.workspace.workspaceFolders?.find(
+    (candidate) => candidate.uri.scheme === "file",
+  );
+  return folder?.uri.fsPath;
+}
+
+function modelSettings():
+  | {
+      readonly provider?: string;
+      readonly apiKey?: string;
+      readonly name?: string;
+    }
+  | undefined {
+  const config = vscode.workspace.getConfiguration("reef");
+  const provider = config.get<string>("model.provider", "auto").trim();
+  const apiKey = config.get<string>("model.apiKey", "").trim();
+  const name = config.get<string>("model.name", "").trim();
+  const model = {
+    ...(provider !== "" ? { provider } : {}),
+    ...(apiKey !== "" ? { apiKey } : {}),
+    ...(name !== "" ? { name } : {}),
+  };
+  return Object.keys(model).length > 0 ? model : undefined;
+}
+
 async function currentProductVersion(
   context: vscode.ExtensionContext,
 ): Promise<string> {
@@ -255,6 +312,8 @@ async function waitForBundledServer(
 ): Promise<{ url: string; process: ChildProcess }> {
   await mkdir(persistDir, { recursive: true });
   const serverPath = context.asAbsolutePath("server/reef-server.cjs");
+  const workspaceRoot = firstWorkspaceRoot();
+  const model = modelSettings();
   const child = spawn(
     process.execPath,
     [serverPath, "--port", "0", "--host", "127.0.0.1", "--persist", persistDir],
@@ -263,6 +322,16 @@ async function waitForBundledServer(
         ...process.env,
         ELECTRON_RUN_AS_NODE: "1",
         REEF_BUNDLED_DAEMON: "1",
+        ...(workspaceRoot !== undefined
+          ? { REEF_WORKSPACE_ROOT: workspaceRoot }
+          : {}),
+        ...(model?.provider !== undefined
+          ? { REEF_MODEL_PROVIDER: model.provider }
+          : {}),
+        ...(model?.apiKey !== undefined
+          ? { REEF_MODEL_API_KEY: model.apiKey }
+          : {}),
+        ...(model?.name !== undefined ? { REEF_MODEL_NAME: model.name } : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -380,8 +449,10 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   };
 
-  const runTask = async (task: string): Promise<void> => {
+  const runTask = async (task: string): Promise<RunTaskResult> => {
     const base = activeServerUrl;
+    const workspaceRoot = firstWorkspaceRoot();
+    const model = modelSettings();
     const surface = ensureSurface();
     await surface.reveal();
     surface.reset(task);
@@ -390,10 +461,15 @@ export function activate(context: vscode.ExtensionContext): void {
     lastVerify = undefined;
     lastSessionId = undefined;
     lastSessionDir = undefined;
+    let runVerify: VerifyResult | undefined;
     setStatus(status, undefined);
 
     try {
-      const id = await createSession(base, task.trim(), undefined, true);
+      const id = await createSession(base, task.trim(), {
+        persist: true,
+        ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+        ...(model !== undefined ? { model } : {}),
+      });
       lastSessionId = id;
       lastSessionDir = join(persistDir, id);
       await writeState();
@@ -405,6 +481,7 @@ export function activate(context: vscode.ExtensionContext): void {
             surface.event(event.event);
           } else if (event.type === "sealed") {
             lastVerify = event;
+            runVerify = event.verify;
             surface.sealed(event);
             setStatus(status, event.verify);
             void writeState();
@@ -412,6 +489,10 @@ export function activate(context: vscode.ExtensionContext): void {
         },
         abort.signal,
       );
+      return {
+        sessionId: id,
+        ...(runVerify !== undefined ? { verify: runVerify } : {}),
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       surface.error(message);
@@ -422,6 +503,7 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(
         `Reef: could not reach the daemon at ${base} — is \`reef serve\` running? (${message})`,
       );
+      return { error: message };
     }
   };
 
@@ -433,6 +515,45 @@ export function activate(context: vscode.ExtensionContext): void {
     if (task === undefined || task.trim() === "") return;
     await runTask(task);
   });
+
+  const chatApi = (vscode as unknown as { chat?: StableChatApi }).chat;
+  const chatParticipant = chatApi?.createChatParticipant(
+    "octopus-reef.ide.reef",
+    async (request, _context, stream, token) => {
+      const task = request.prompt.trim();
+      if (task === "") {
+        stream.markdown("Give Reef a task to run under governance.");
+        return {};
+      }
+
+      stream.progress("Starting a governed Reef session...");
+      const cancelled = token.onCancellationRequested(() => abort?.abort());
+      try {
+        const result = await runTask(task);
+        if (result.error !== undefined) {
+          stream.markdown(`Reef could not run the session: ${result.error}`);
+          return { metadata: { error: result.error } };
+        }
+
+        if (result.verify !== undefined) {
+          const verdict = result.verify.ok ? "verified" : "unverified";
+          stream.markdown(
+            `Reef governed session \`${result.sessionId ?? "unknown"}\` ${verdict}: work ${result.verify.work}, log ${result.verify.log}, binding ${result.verify.binding}.`,
+          );
+        } else {
+          stream.markdown(
+            `Reef governed session \`${result.sessionId ?? "unknown"}\` completed without a sealed verification result.`,
+          );
+        }
+        return { metadata: { sessionId: result.sessionId } };
+      } finally {
+        cancelled.dispose();
+      }
+    },
+  );
+  if (chatParticipant !== undefined) {
+    chatParticipant.iconPath = new vscode.ThemeIcon("shield");
+  }
 
   const verify = vscode.commands.registerCommand(
     "reef.verifySession",
@@ -499,12 +620,19 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   );
 
-  context.subscriptions.push(status, run, verify, checkForUpdates, {
-    dispose: () => {
-      abort?.abort();
-      daemon?.kill();
+  context.subscriptions.push(
+    status,
+    run,
+    verify,
+    checkForUpdates,
+    ...(chatParticipant !== undefined ? [chatParticipant] : []),
+    {
+      dispose: () => {
+        abort?.abort();
+        daemon?.kill();
+      },
     },
-  });
+  );
 
   void (async () => {
     try {
