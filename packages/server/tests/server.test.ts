@@ -6,7 +6,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import http from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentWorker, type ModelProvider } from "@octopus-reef/agent";
@@ -106,6 +112,42 @@ function collectSSE(port: number, path: string): Promise<ServerEvent[]> {
     });
     req.on("error", reject);
   });
+}
+
+function chromeAvailable(): boolean {
+  if (process.env.CHROME_PATH !== undefined) {
+    return existsSync(process.env.CHROME_PATH);
+  }
+  return [
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+  ].some((candidate) => existsSync(candidate));
+}
+
+async function startLocalPage(html: string): Promise<{
+  readonly url: string;
+  close(): Promise<void>;
+}> {
+  const page = http.createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(html);
+  });
+  await new Promise<void>((resolve, reject) => {
+    page.once("error", reject);
+    page.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = page.address();
+  assert.ok(
+    typeof address === "object" && address !== null,
+    "local test page should bind to a TCP port",
+  );
+  return {
+    url: `http://127.0.0.1:${address.port}/`,
+    close: () =>
+      new Promise((resolve, reject) => {
+        page.close((err) => (err ? reject(err) : resolve()));
+      }),
+  };
 }
 
 test("M2: two clients observe one live session and both verify it", async () => {
@@ -408,6 +450,129 @@ test("N5: installs an MCP power, records a governed tool call, and denies an una
     await server.close();
   }
 });
+
+test(
+  "N11: browser Power records governed CDP reads and denied unallowlisted tool",
+  { skip: chromeAvailable() ? false : "Google Chrome is not available" },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "reef-n11-browser-"));
+    const page = await startLocalPage(`<!doctype html>
+<html>
+  <head><title>Reef Browser Test</title></head>
+  <body>
+    <main id="target">
+      <h1>Reef Browser Test</h1>
+      <p>DOM evidence is local and governed.</p>
+    </main>
+  </body>
+</html>`);
+    const server = new ReefServer({ persistDir: dir });
+    const port = await server.listen(0);
+    try {
+      const created = await request(port, "POST", "/sessions", {
+        task: "N11 governed browser read",
+        persist: true,
+        browser: { url: page.url, selector: "#target" },
+      });
+      assert.equal(created.status, 201);
+      const id = created.json.id as string;
+      const frames = await collectSSE(port, `/sessions/${id}/events`);
+      const tools = frames
+        .filter(
+          (frame) =>
+            frame.type === "event" &&
+            frame.event.kind === "action.executed" &&
+            frame.event.data.actionType === "tool",
+        )
+        .map((frame) =>
+          frame.type === "event"
+            ? (frame.event.data.payload as { tool?: string } | undefined)?.tool
+            : undefined,
+        );
+      assert.deepEqual(tools, [
+        "browser.navigate",
+        "browser.getDom",
+        "browser.getContent",
+        "browser.screenshot",
+      ]);
+      for (const frame of frames) {
+        if (
+          frame.type === "event" &&
+          frame.event.kind === "action.executed" &&
+          frame.event.summary.includes("Browser tool call:")
+        ) {
+          assert.match(frame.event.evidenceId, /^ev_[a-f0-9]{64}$/);
+          assert.equal(frame.event.data.executor, "tool");
+          assert.equal(frame.event.data.ok, true);
+          assert.ok(
+            (
+              frame.event.data.result as {
+                output?: { bytes?: number; sha256?: string };
+              }
+            ).output?.bytes,
+          );
+        }
+      }
+
+      const before = await request(port, "GET", `/sessions/${id}/verify`);
+      assert.equal(before.status, 200);
+      assert.equal(before.json.ok, true);
+
+      const logPath = join(dir, id, "session.log.jsonl");
+      const raw = readFileSync(logPath);
+      const offset = raw.indexOf(Buffer.from("browser.getDom"));
+      assert.ok(
+        offset >= 0,
+        "browser evidence should contain a flippable byte",
+      );
+      raw[offset] = raw[offset] === 0x62 ? 0x63 : 0x62;
+      writeFileSync(logPath, raw);
+
+      const after = await request(port, "GET", `/sessions/${id}/verify`);
+      assert.equal(after.status, 200);
+      assert.equal(after.json.ok, false);
+      assert.match(after.json.log, /broken/i);
+
+      const deniedCreated = await request(port, "POST", "/sessions", {
+        task: "N11 browser deny unallowlisted screenshot",
+        persist: true,
+        browser: {
+          url: page.url,
+          tool: "browser.screenshot",
+          expectDenied: true,
+        },
+      });
+      assert.equal(deniedCreated.status, 201);
+      const deniedId = deniedCreated.json.id as string;
+      const deniedFrames = await collectSSE(
+        port,
+        `/sessions/${deniedId}/events`,
+      );
+      const denied = deniedFrames.find(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "action.denied" &&
+          frame.event.summary.includes("browser.screenshot"),
+      );
+      assert.ok(denied, "unallowlisted browser tool should be denied");
+      if (denied?.type === "event") {
+        assert.equal(denied.event.data.stage, "authorize");
+        assert.equal(denied.event.data.resource, "browser.screenshot");
+        assert.match(denied.event.evidenceId, /^ev_[a-f0-9]{64}$/);
+      }
+      const deniedVerify = await request(
+        port,
+        "GET",
+        `/sessions/${deniedId}/verify`,
+      );
+      assert.equal(deniedVerify.status, 200);
+      assert.equal(deniedVerify.json.ok, true);
+    } finally {
+      await server.close();
+      await page.close();
+    }
+  },
+);
 
 test("C0: edition split reports flavor and community rejects gateway provider", async () => {
   const community = new ReefServer({ edition: "community" });

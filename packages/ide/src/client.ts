@@ -79,6 +79,12 @@ export interface CreateSessionOptions {
     readonly input?: unknown;
     readonly expectDenied?: boolean;
   };
+  readonly browser?: {
+    readonly url?: string;
+    readonly tool?: string;
+    readonly selector?: string;
+    readonly expectDenied?: boolean;
+  };
   readonly spec?: {
     readonly specId?: string;
     readonly itemId?: string;
@@ -115,6 +121,7 @@ export async function createSession(
         : {}),
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
+      ...(options.browser !== undefined ? { browser: options.browser } : {}),
       ...(options.spec !== undefined ? { spec: options.spec } : {}),
       ...(options.steering !== undefined ? { steering: options.steering } : {}),
       ...(options.conversation !== undefined

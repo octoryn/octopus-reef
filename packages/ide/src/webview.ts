@@ -422,6 +422,70 @@ export function powersWebviewHtml(
 </html>`;
 }
 
+export function browserWebviewHtml(
+  cspSource: string,
+  scriptUri: string,
+): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; frame-src http://127.0.0.1:* http://localhost:* https://127.0.0.1:* https://localhost:*; img-src ${cspSource} data:; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource};" />
+<style>
+  :root{--deep:#091315;--panel:#0f1d20;--panel2:#132529;--line:#214044;--ink:#edf6f4;--muted:#86a5a5;--signal:#3de0be;--warn:#ffd166;--danger:#ff6b6b;--mono:ui-monospace,Menlo,monospace}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--deep);color:var(--ink);font-family:var(--mono);font-size:13px;min-height:100vh}
+  .shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr auto;background:var(--deep)}
+  header{display:grid;gap:10px;padding:12px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .brand{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .brand b{color:var(--signal)}
+  form{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center}
+  input{min-width:0;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;padding:8px;outline:none}
+  input:focus{border-color:var(--signal)}
+  button{background:var(--signal);border:0;border-radius:6px;color:#001714;font:inherit;font-weight:700;padding:8px 10px}
+  button.secondary{background:var(--panel2);border:1px solid var(--line);color:var(--ink)}
+  button.danger{background:var(--panel2);border:1px solid rgba(255,107,107,.55);color:var(--danger)}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}
+  .preview{min-height:360px;background:#071012;display:grid;position:relative}
+  iframe{width:100%;height:100%;min-height:360px;border:0;background:white}
+  .empty{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);padding:20px;text-align:center;pointer-events:none}
+  .empty.hidden{display:none}
+  .status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
+  .status.ok{border-color:var(--signal);color:var(--signal)}
+  .status.bad{border-color:var(--danger);color:var(--danger)}
+  .status.warn{border-color:var(--warn);color:var(--warn)}
+  footer{display:grid;gap:8px;padding:12px;border-top:1px solid var(--line);background:var(--panel)}
+  .note{color:var(--muted);font-size:12px;line-height:1.45}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="brand"><div><b>&#x259A; reef</b> browser</div><button id="reload" class="secondary" type="button">Reload</button></div>
+    <form id="nav">
+      <input id="url" value="http://127.0.0.1:5173/" spellcheck="false" />
+      <button type="submit">Open</button>
+      <button id="read" class="secondary" type="button">Governed Read</button>
+    </form>
+    <div class="actions">
+      <button id="deny" class="danger" type="button">Prove Denial</button>
+    </div>
+  </header>
+  <main class="preview">
+    <iframe id="frame" title="Reef Browser preview" sandbox="allow-forms allow-scripts allow-same-origin"></iframe>
+    <div id="empty" class="empty">Open a localhost URL to preview it here.</div>
+  </main>
+  <footer>
+    <div id="status" class="status">Waiting for a local preview URL.</div>
+    <div class="note">Preview rendering is an iframe. Governed DOM/content/screenshot reads use local Chrome CDP and are recorded as evidence links.</div>
+  </footer>
+</div>
+<script src="${scriptUri}"></script>
+</body>
+</html>`;
+}
+
 export function specsWebviewHtml(cspSource: string, scriptUri: string): string {
   return `<!doctype html>
 <html lang="en">

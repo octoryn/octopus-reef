@@ -83,6 +83,17 @@ export interface CreateSessionRequest {
     readonly expectDenied?: boolean;
   };
   /**
+   * N11 offline browser proof path. When present, the daemon uses a
+   * deterministic governed session that drives a local Chrome CDP browser
+   * through `tool` actions. Reads and screenshots are therefore evidence links.
+   */
+  readonly browser?: {
+    readonly url?: string;
+    readonly tool?: string;
+    readonly selector?: string;
+    readonly expectDenied?: boolean;
+  };
+  /**
    * N2 offline Specs proof path. When present, the daemon uses a deterministic
    * governed session that advances the named spec task through octopus-workstate
    * via a governed `tool` action. This does not require an LLM key.

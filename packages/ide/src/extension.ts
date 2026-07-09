@@ -33,6 +33,7 @@ import {
 } from "./client.js";
 import {
   agentFocusWebviewHtml,
+  browserWebviewHtml,
   hooksWebviewHtml,
   powersWebviewHtml,
   specsWebviewHtml,
@@ -91,6 +92,7 @@ const REEF_SPECS_VIEW_ID = "reef.specs";
 const REEF_USAGE_VIEW_ID = "reef.usage";
 const REEF_STEERING_VIEW_ID = "reef.steering";
 const REEF_HOOKS_VIEW_ID = "reef.hooks";
+const REEF_BROWSER_VIEW_ID = "reef.browser";
 
 interface StableChatRequest {
   readonly prompt: string;
@@ -162,6 +164,8 @@ interface WebviewMessage {
   readonly reason?: string;
   readonly activeIds?: readonly string[];
   readonly action?: string;
+  readonly url?: string;
+  readonly selector?: string;
 }
 
 class ReefTextSurface
@@ -518,6 +522,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let agentFocusPanel: vscode.WebviewPanel | undefined;
   let powersView: vscode.WebviewView | undefined;
   let hooksView: vscode.WebviewView | undefined;
+  let browserView: vscode.WebviewView | undefined;
   let specsView: vscode.WebviewView | undefined;
   let steeringView: vscode.WebviewView | undefined;
   let usageView: vscode.WebviewView | undefined;
@@ -580,7 +585,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const webviewSurface = (): ReefSurface => ({
     reveal: () => revealView(REEF_SESSION_VIEW_ID, sessionView),
-    reset: (task) => void sessionWebview()?.postMessage({ kind: "reset", task }),
+    reset: (task) =>
+      void sessionWebview()?.postMessage({ kind: "reset", task }),
     event: (event) =>
       void sessionWebview()?.postMessage({ kind: "event", event }),
     sealed: (event) =>
@@ -735,6 +741,12 @@ export function activate(context: vscode.ExtensionContext): void {
         readonly input?: unknown;
         readonly expectDenied?: boolean;
       };
+      readonly browser?: {
+        readonly url?: string;
+        readonly tool?: string;
+        readonly selector?: string;
+        readonly expectDenied?: boolean;
+      };
       readonly spec?: {
         readonly specId?: string;
         readonly itemId?: string;
@@ -763,6 +775,7 @@ export function activate(context: vscode.ExtensionContext): void {
         ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(extra.mcp !== undefined ? { mcp: extra.mcp } : {}),
+        ...(extra.browser !== undefined ? { browser: extra.browser } : {}),
         ...(extra.spec !== undefined ? { spec: extra.spec } : {}),
       });
       lastSessionId = id;
@@ -1191,6 +1204,44 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   };
 
+  const runBrowserDemo = async (
+    mode: "allowed" | "denied",
+    url: string,
+  ): Promise<void> => {
+    const trimmed = url.trim();
+    if (trimmed === "") {
+      void browserView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: "Enter a local URL before running the browser Power.",
+      });
+      return;
+    }
+    const result = await runTask(
+      mode === "allowed"
+        ? `N11 browser governed read: ${trimmed}`
+        : `N11 browser denial proof: ${trimmed}`,
+      {
+        browser:
+          mode === "allowed"
+            ? { url: trimmed }
+            : {
+                url: trimmed,
+                tool: "browser.screenshot",
+                expectDenied: true,
+              },
+      },
+    );
+    void browserView?.webview.postMessage({
+      kind: "status",
+      tone: result.error === undefined ? "ok" : "bad",
+      message:
+        result.error === undefined
+          ? `Governed browser ${mode} session sealed: ${result.sessionId ?? "unknown"}`
+          : result.error,
+    });
+  };
+
   const refreshPowers = async (): Promise<void> => {
     const powers = await listPowers(activeServerUrl);
     void powersView?.webview.postMessage({ kind: "powers", powers });
@@ -1482,9 +1533,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
-  const handleSpecsMessage = async (
-    message: WebviewMessage,
-  ): Promise<void> => {
+  const handleSpecsMessage = async (message: WebviewMessage): Promise<void> => {
     try {
       if (message.kind === "listSpecs") {
         await refreshSpecs();
@@ -1570,9 +1619,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
-  const handleUsageMessage = async (
-    message: WebviewMessage,
-  ): Promise<void> => {
+  const handleUsageMessage = async (message: WebviewMessage): Promise<void> => {
     try {
       if (message.kind === "getUsage") await refreshUsage();
     } catch (err) {
@@ -1627,16 +1674,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
-  const handleHooksMessage = async (
-    message: WebviewMessage,
-  ): Promise<void> => {
+  const handleHooksMessage = async (message: WebviewMessage): Promise<void> => {
     try {
       if (message.kind === "listHooks") {
         await refreshHooks();
-      } else if (
-        message.kind === "createHook" &&
-        message.input !== undefined
-      ) {
+      } else if (message.kind === "createHook" && message.input !== undefined) {
         await createHook(activeServerUrl, message.input);
         await refreshHooks();
       } else if (
@@ -1664,6 +1706,38 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const handleBrowserMessage = async (
+    message: WebviewMessage,
+  ): Promise<void> => {
+    try {
+      if (
+        message.kind === "browserPreview" &&
+        typeof message.url === "string"
+      ) {
+        void browserView?.webview.postMessage({
+          kind: "status",
+          tone: "ok",
+          message:
+            "Preview loaded locally. Use Governed Read to evidence-log DOM reads.",
+        });
+      } else if (
+        message.kind === "runBrowserDemo" &&
+        typeof message.url === "string"
+      ) {
+        await runBrowserDemo(
+          message.mode === "denied" ? "denied" : "allowed",
+          message.url,
+        );
+      }
+    } catch (err) {
+      void browserView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
   const openPowersView = (): Thenable<void> =>
     revealView(REEF_POWERS_VIEW_ID, powersView);
 
@@ -1678,6 +1752,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const openHooksView = (): Thenable<void> =>
     revealView(REEF_HOOKS_VIEW_ID, hooksView);
+
+  const openBrowserView = (): Thenable<void> =>
+    revealView(REEF_BROWSER_VIEW_ID, browserView);
 
   const registerReefView = (
     viewId: string,
@@ -1804,6 +1881,22 @@ export function activate(context: vscode.ExtensionContext): void {
       }),
   );
 
+  const browserViewProvider = registerReefView(
+    REEF_BROWSER_VIEW_ID,
+    "media/browser.js",
+    browserWebviewHtml,
+    (view) => {
+      browserView = view;
+    },
+    handleBrowserMessage,
+    (message) =>
+      void browserView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message,
+      }),
+  );
+
   const run = vscode.commands.registerCommand("reef.runSession", async () => {
     const task = await vscode.window.showInputBox({
       prompt: "Describe the task for the governed session",
@@ -1911,6 +2004,13 @@ export function activate(context: vscode.ExtensionContext): void {
       });
     }
   });
+
+  const browser = vscode.commands.registerCommand(
+    "reef.openBrowser",
+    async () => {
+      await openBrowserView();
+    },
+  );
 
   const mcpDemo = vscode.commands.registerCommand(
     "reef.runMcpDemo",
@@ -2063,6 +2163,7 @@ export function activate(context: vscode.ExtensionContext): void {
     usage,
     steering,
     hooks,
+    browser,
     mcpDemo,
     mcpDenyDemo,
     sessionViewProvider,
@@ -2071,6 +2172,7 @@ export function activate(context: vscode.ExtensionContext): void {
     usageViewProvider,
     steeringViewProvider,
     hooksViewProvider,
+    browserViewProvider,
     verify,
     checkForUpdates,
     ...commercialDisposables,

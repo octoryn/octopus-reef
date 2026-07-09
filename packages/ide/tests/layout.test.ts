@@ -50,6 +50,7 @@ test("layout: Reef tools are contributed as left activity-bar webview views", ()
     reefViews.map((view: any) => [view.id, view.type]),
     [
       ["reef.powers", "webview"],
+      ["reef.browser", "webview"],
       ["reef.specs", "webview"],
       ["reef.steering", "webview"],
       ["reef.hooks", "webview"],

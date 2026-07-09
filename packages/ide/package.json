@@ -77,6 +77,11 @@
         "category": "Reef"
       },
       {
+        "command": "reef.openBrowser",
+        "title": "Reef: Browser",
+        "category": "Reef"
+      },
+      {
         "command": "reef.runMcpDemo",
         "title": "Reef: Run MCP Demo",
         "category": "Reef"
@@ -136,6 +141,13 @@
           "name": "Powers",
           "icon": "$(plug)",
           "visibility": "visible"
+        },
+        {
+          "type": "webview",
+          "id": "reef.browser",
+          "name": "Browser",
+          "icon": "$(globe)",
+          "visibility": "collapsed"
         },
         {
           "type": "webview",

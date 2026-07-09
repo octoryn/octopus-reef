@@ -78,6 +78,7 @@ import {
   type AddCustomPowerRequest,
   type InstalledPower,
 } from "./mcp.js";
+import { BrowserDemoDriver, BrowserPowerRuntime } from "./browser.js";
 import { HookRegistry } from "./hooks.js";
 import {
   SpecRegistry,
@@ -104,6 +105,13 @@ interface McpSessionRequest {
   readonly serverId?: string;
   readonly tool?: string;
   readonly input?: unknown;
+  readonly expectDenied?: boolean;
+}
+
+interface BrowserSessionRequest {
+  readonly url?: string;
+  readonly tool?: string;
+  readonly selector?: string;
   readonly expectDenied?: boolean;
 }
 
@@ -1144,11 +1152,14 @@ export class ReefServer {
     const runtimeBase =
       body.spec !== undefined
         ? this.#specRuntime(body.spec)
-        : body.mcp !== undefined
-          ? this.#mcpRuntime(body.mcp)
-          : normalizeRuntime(
-              this.#options.driverFactory?.(context) ?? defaultRuntime(context),
-            );
+        : body.browser !== undefined
+          ? this.#browserRuntime(body.browser)
+          : body.mcp !== undefined
+            ? this.#mcpRuntime(body.mcp)
+            : normalizeRuntime(
+                this.#options.driverFactory?.(context) ??
+                  defaultRuntime(context),
+              );
     const steeredRuntime = this.#steeredRuntime(runtimeBase, body.steering);
     const hookedRuntime = this.#hookedRuntime(steeredRuntime, body.hook);
     const runtime = this.#conversationRuntime(hookedRuntime, body.conversation);
@@ -1221,6 +1232,29 @@ export class ReefServer {
         tools: this.#powers.allowedFullToolNames(power),
       }),
       executor: new ToolExecutor(tools),
+    };
+  }
+
+  #browserRuntime(request: BrowserSessionRequest): SessionRuntime {
+    const browser = new BrowserPowerRuntime(request.url);
+    const tool = optionalString(request.tool);
+    const allowed = browser
+      .allowedTools()
+      .filter((name) => request.expectDenied !== true || name !== tool);
+    return {
+      driver: new BrowserDemoDriver({
+        ...(request.url !== undefined ? { url: request.url } : {}),
+        ...(tool !== undefined ? { tool } : {}),
+        ...(request.selector !== undefined
+          ? { selector: request.selector }
+          : {}),
+        ...(request.expectDenied !== undefined
+          ? { expectDenied: request.expectDenied }
+          : {}),
+      }),
+      authorizer: reefAllowlist({ tools: allowed }),
+      executor: new ToolExecutor(browser.tools()),
+      cleanup: () => browser.close(),
     };
   }
 
