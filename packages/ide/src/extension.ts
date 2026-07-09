@@ -2321,6 +2321,8 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (showWelcomeOnStartup) {
         openWelcomePanel();
+        await revealView(REEF_POWERS_VIEW_ID, powersView);
+        await revealView(REEF_SESSION_VIEW_ID, sessionView);
       }
       if (useBundledServer()) {
         const started = await waitForBundledServer(context, persistDir);

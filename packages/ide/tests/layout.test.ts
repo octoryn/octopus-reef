@@ -86,4 +86,8 @@ test("layout: Reef suppresses stock startup welcome and avoids beside editor rev
     "utf8",
   );
   assert.equal(extensionSource.includes("ViewColumn.Beside"), false);
+  assert.match(
+    extensionSource,
+    /if \(showWelcomeOnStartup\) \{\s+openWelcomePanel\(\);\s+await revealView\(REEF_POWERS_VIEW_ID, powersView\);\s+await revealView\(REEF_SESSION_VIEW_ID, sessionView\);/s,
+  );
 });
