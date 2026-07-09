@@ -77,8 +77,8 @@ export function welcomeWebviewHtml(
   .action:focus{outline:2px solid rgba(61,224,190,.75);outline-offset:2px}
   .action.primary{background:#102a2d;border-color:rgba(61,224,190,.7)}
   .icon{width:42px;height:42px;border-radius:8px;display:grid;place-items:center;background:#091719;border:1px solid var(--line);font-family:var(--mono);color:var(--signal);font-weight:800}
-  .title{font-weight:760;font-size:16px}
-  .desc{color:var(--muted);font-size:13px;margin-top:4px}
+  .title{display:block;font-weight:760;font-size:16px}
+  .desc{display:block;color:var(--muted);font-size:13px;margin-top:4px}
   .arrow{color:var(--muted);font-size:20px}
   footer{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 28px;border-top:1px solid var(--line);background:#091719;color:var(--muted);font-family:var(--mono);font-size:12px}
   .link{background:transparent;border:0;color:var(--muted);font:inherit;text-decoration:underline;cursor:pointer;padding:4px}
