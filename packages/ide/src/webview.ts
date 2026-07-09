@@ -29,7 +29,7 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
   main{min-height:0;overflow:auto;padding:22px 20px 18px}
   .empty{min-height:100%;display:grid;place-items:start center;padding:30px 0 28px}
   .empty-inner{width:min(720px,100%);display:grid;justify-items:center;text-align:center}
-  .logo{width:132px;height:132px;margin-bottom:27px}
+  .logo{width:88px;height:88px;margin-bottom:27px}
   .logo svg{width:100%;height:100%;display:block}
   h1{margin:0;font-size:44px;line-height:1.04;font-weight:780;letter-spacing:0}
   h1 span{color:var(--signal)}
@@ -89,7 +89,7 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
   .usage b{display:block;color:var(--signal);font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis}
   .usage span{display:block;margin-top:2px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   @media (max-width:760px){h1{font-size:34px}.turn-body{grid-template-columns:1fr}.composer form{grid-template-columns:auto auto 1fr auto}.model,.toggle{grid-column:1 / -1;width:max-content}.usage{grid-template-columns:1fr 1fr}.evidence{grid-template-columns:28px 56px 1fr}.evidence span:last-child{display:none}}
-  @media (max-height:820px){.empty{padding-top:24px}.logo{width:94px;height:94px;margin-bottom:14px}.subtitle{margin-bottom:18px}.shortcuts{gap:8px}.shortcut{padding:10px 12px}.diffline{margin-top:15px}}
+  @media (max-height:820px){.empty{padding-top:24px}.logo{width:74px;height:74px;margin-bottom:16px}.subtitle{margin-bottom:18px}.shortcuts{gap:8px}.shortcut{padding:10px 12px}.diffline{margin-top:15px}}
 </style>
 </head>
 <body>
@@ -107,13 +107,10 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
     <section id="empty" class="empty">
       <div class="empty-inner">
         <div class="logo" aria-label="Reef octopus logo">
-          <svg viewBox="0 0 140 140" role="img" aria-hidden="true">
-            <defs><linearGradient id="reef-octo" x1="22" x2="118" y1="18" y2="124"><stop stop-color="#33e6c0"/><stop offset="1" stop-color="#7ab7ff"/></linearGradient></defs>
-            <circle cx="70" cy="55" r="34" fill="none" stroke="url(#reef-octo)" stroke-width="7"/>
-            <circle cx="57" cy="51" r="4" fill="#e9fffb"/><circle cx="83" cy="51" r="4" fill="#e9fffb"/>
-            <path d="M54 69c9 8 23 8 32 0" fill="none" stroke="#e9fffb" stroke-width="5" stroke-linecap="round"/>
-            <path d="M38 85c-15 8-20 19-15 30 5 10 19 10 27-1M52 91c-12 15-11 28-1 35 10 7 22 1 23-13M70 94c-2 18 6 29 18 29 13 0 20-11 15-24M88 90c10 15 23 18 32 10 9-9 5-22-11-28" fill="none" stroke="url(#reef-octo)" stroke-width="7" stroke-linecap="round"/>
-            <path d="M35 63c-13 0-21-8-22-18M105 63c13 0 21-8 22-18" fill="none" stroke="url(#reef-octo)" stroke-width="7" stroke-linecap="round"/>
+          <svg viewBox="0 0 96 96" role="img" aria-hidden="true">
+            <defs><linearGradient id="reef-octo" x1="17" x2="81" y1="18" y2="79"><stop stop-color="#10a8ff"/><stop offset=".55" stop-color="#33e6c0"/><stop offset="1" stop-color="#bb35ff"/></linearGradient></defs>
+            <path d="M22 57c-6-23 9-42 26-42s32 19 26 42" fill="none" stroke="url(#reef-octo)" stroke-width="16" stroke-linecap="round"/>
+            <path d="M39 58c0 11-4 18-13 22 7 4 16 2 22-7M57 58c0 11 4 18 13 22-7 4-16 2-22-7M48 60c0 13-4 20-12 25M48 60c0 13 4 20 12 25" fill="none" stroke="url(#reef-octo)" stroke-width="5" stroke-linecap="round"/>
           </svg>
         </div>
         <h1>Let&rsquo;s <span>build.</span></h1>
