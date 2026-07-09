@@ -82,6 +82,21 @@
         "category": "Reef"
       },
       {
+        "command": "reef.openBrowserPreview",
+        "title": "Reef: Browser Preview",
+        "category": "Reef"
+      },
+      {
+        "command": "reef.runBrowserRead",
+        "title": "Reef: Run Browser Read",
+        "category": "Reef"
+      },
+      {
+        "command": "reef.runBrowserDenial",
+        "title": "Reef: Run Browser Denial",
+        "category": "Reef"
+      },
+      {
         "command": "reef.runMcpDemo",
         "title": "Reef: Run MCP Demo",
         "category": "Reef"
@@ -210,6 +225,11 @@
           "type": "string",
           "default": "octoryn/octopus-reef-editor",
           "description": "GitHub owner/repository used by Reef: Check for Updates. The command queries GitHub Releases only when run."
+        },
+        "reef.browser.url": {
+          "type": "string",
+          "default": "http://127.0.0.1:5173/",
+          "description": "Local URL used by Reef browser preview/read commands. Only localhost http/https URLs are accepted."
         },
         "reef.model.provider": {
           "type": "string",

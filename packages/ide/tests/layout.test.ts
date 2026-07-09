@@ -58,3 +58,17 @@ test("layout: Reef tools are contributed as left activity-bar webview views", ()
     ],
   );
 });
+
+test("layout: Reef Browser has command and local URL configuration", () => {
+  const pkg = readJson("package.json");
+  const commands = new Set(
+    (pkg.contributes?.commands ?? []).map((entry: any) => entry.command),
+  );
+  assert.equal(commands.has("reef.openBrowserPreview"), true);
+  assert.equal(commands.has("reef.runBrowserRead"), true);
+  assert.equal(commands.has("reef.runBrowserDenial"), true);
+  assert.equal(
+    pkg.contributes?.configuration?.properties?.["reef.browser.url"]?.default,
+    "http://127.0.0.1:5173/",
+  );
+});

@@ -1242,6 +1242,12 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   };
 
+  const configuredBrowserUrl = (): string =>
+    vscode.workspace
+      .getConfiguration("reef")
+      .get("browser.url", "http://127.0.0.1:5173/")
+      .trim();
+
   const refreshPowers = async (): Promise<void> => {
     const powers = await listPowers(activeServerUrl);
     void powersView?.webview.postMessage({ kind: "powers", powers });
@@ -1756,6 +1762,16 @@ export function activate(context: vscode.ExtensionContext): void {
   const openBrowserView = (): Thenable<void> =>
     revealView(REEF_BROWSER_VIEW_ID, browserView);
 
+  const openBrowserPreview = async (): Promise<void> => {
+    await openBrowserView();
+    const url = configuredBrowserUrl();
+    if (url !== "") {
+      setTimeout(() => {
+        void browserView?.webview.postMessage({ kind: "openUrl", url });
+      }, 250);
+    }
+  };
+
   const registerReefView = (
     viewId: string,
     scriptFile: string,
@@ -2012,6 +2028,27 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   );
 
+  const browserPreview = vscode.commands.registerCommand(
+    "reef.openBrowserPreview",
+    async () => {
+      await openBrowserPreview();
+    },
+  );
+
+  const browserRead = vscode.commands.registerCommand(
+    "reef.runBrowserRead",
+    async () => {
+      await runBrowserDemo("allowed", configuredBrowserUrl());
+    },
+  );
+
+  const browserDenial = vscode.commands.registerCommand(
+    "reef.runBrowserDenial",
+    async () => {
+      await runBrowserDemo("denied", configuredBrowserUrl());
+    },
+  );
+
   const mcpDemo = vscode.commands.registerCommand(
     "reef.runMcpDemo",
     async () => {
@@ -2164,6 +2201,9 @@ export function activate(context: vscode.ExtensionContext): void {
     steering,
     hooks,
     browser,
+    browserPreview,
+    browserRead,
+    browserDenial,
     mcpDemo,
     mcpDenyDemo,
     sessionViewProvider,

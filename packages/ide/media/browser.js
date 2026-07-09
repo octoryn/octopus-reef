@@ -90,5 +90,12 @@ window.addEventListener("message", (message) => {
   const data = message.data || {};
   if (data.kind === "status") {
     setStatus(data.message, data.tone || "");
+  } else if (data.kind === "openUrl" && typeof data.url === "string") {
+    try {
+      urlInput.value = data.url;
+      openPreview(currentUrl());
+    } catch (error) {
+      setStatus(error.message || String(error), "bad");
+    }
   }
 });
