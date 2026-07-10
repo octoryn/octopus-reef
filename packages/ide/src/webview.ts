@@ -129,7 +129,7 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
   .usage div{border:1px solid var(--line);border-radius:8px;background:#0b1118;padding:8px;min-width:0}
   .usage b{display:block;color:var(--signal);font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis}
   .usage span{display:block;margin-top:2px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  @media (max-width:760px){h1{font-size:34px}.turn-body{grid-template-columns:1fr}.composer{padding:10px 12px}.composer-toolbar{gap:7px}.composer-affordances,.composer-controls{gap:5px}.model{max-width:104px}.usage{grid-template-columns:1fr 1fr}.evidence{grid-template-columns:28px 56px 1fr}.evidence span:last-child{display:none}}
+  @media (max-width:760px){h1{font-size:34px}.turn-body{grid-template-columns:1fr}.composer{padding:10px 6px}.composer form{padding:8px}.composer-toolbar{gap:4px}.composer-affordances,.composer-controls{gap:4px}.composer .icon-btn{width:26px;height:28px}.model{max-width:104px;flex:none;padding:3px 5px;font-size:9px}.toggle{gap:4px;padding:3px 5px;font-size:9px}.switch{width:20px;height:12px}.switch::after{width:8px;height:8px}.toggle.on .switch::after{transform:translateX(8px)}.send{width:28px;height:28px;font-size:16px}.usage{grid-template-columns:1fr 1fr}.evidence{grid-template-columns:28px 56px 1fr}.evidence span:last-child{display:none}}
   @media (max-height:820px){.empty{padding-top:24px}.empty-inner{padding-top:48px}.logo{width:74px;height:74px;margin-bottom:16px}.subtitle{margin-bottom:18px}.shortcuts{gap:8px}.shortcut{padding:10px 12px}.diffline{margin-top:15px}}
 </style>
 </head>
@@ -184,7 +184,7 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
             <button id="attach" class="icon-btn" type="button" title="Attach">&#8679;</button>
           </div>
           <div class="composer-controls">
-            <div id="model-chip" class="model">Mock · Offline</div>
+            <div id="model-chip" class="model" title="Mock · Offline">Mock · Offline</div>
             <button id="autopilot" class="toggle" type="button" aria-pressed="false"><span class="switch"></span><span>Autopilot</span></button>
             <button id="chat-submit" class="send" type="submit" title="Send">&rsaquo;</button>
           </div>

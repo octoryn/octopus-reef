@@ -670,7 +670,10 @@ window.addEventListener("message", (message) => {
   if (data.kind === "chatConfig") {
     if (typeof data.conversationId === "string")
       conversationId = data.conversationId;
-    if (data.modelChip?.label) modelChip.textContent = data.modelChip.label;
+    if (data.modelChip?.label) {
+      modelChip.textContent = data.modelChip.label;
+      modelChip.title = data.modelChip.label;
+    }
     affordances = {
       commands: Array.isArray(data.commands)
         ? data.commands
@@ -687,8 +690,10 @@ window.addEventListener("message", (message) => {
     renderUsage(data.usage || zeroUsage());
   } else if (data.kind === "chatTurnStarted") {
     const record = turns.get(data.turnId);
-    if (record && data.modelChip?.label)
+    if (record && data.modelChip?.label) {
       modelChip.textContent = data.modelChip.label;
+      modelChip.title = data.modelChip.label;
+    }
   } else if (data.kind === "chatTurnSession") {
     const record = turns.get(data.turnId);
     if (record) record.sessionId = data.sessionId;

@@ -143,6 +143,7 @@ test("layout: chat composer is a compact card with an autosizing input", () => {
   assert.match(webviewSource, /class="composer-controls"[\s\S]*?id="model-chip"[\s\S]*?id="autopilot"[\s\S]*?id="chat-submit"/);
   assert.match(webviewSource, /\.picker\{[^}]*bottom:calc\(100% \+ 8px\)/);
   assert.match(webviewSource, /textarea\{[^}]*max-height:132px[^}]*overflow-y:hidden/);
+  assert.match(webviewSource, /id="model-chip" class="model" title="Mock · Offline"/);
 
   const sessionScript = readFileSync(
     path.join(ideRoot, "media", "webview.js"),
@@ -153,6 +154,7 @@ test("layout: chat composer is a compact card with an autosizing input", () => {
   assert.match(sessionScript, /input\.addEventListener\("input", \(\) => \{\s+resizeComposerInput\(\);\s+updatePicker\(\);\s+\}\)/);
   assert.match(sessionScript, /input\.value = "";\s+resizeComposerInput\(\);\s+addUserMessage\(task\);/);
   assert.match(sessionScript, /function insertPrompt\(prefix\) \{\s+input\.value = prefix;\s+resizeComposerInput\(\);/);
+  assert.match(sessionScript, /modelChip\.title = data\.modelChip\.label/);
 });
 
 test("layout: left Reef panels use the shared polish and Usage keeps sourced values", () => {
