@@ -35,6 +35,11 @@ import {
   rule,
   verdictLine,
 } from "./render.js";
+import {
+  exportAuditPack,
+  runSayNoDemo,
+  verifyAuditPack,
+} from "./audit-pack.js";
 
 interface Flags {
   readonly _: string[];
@@ -113,6 +118,9 @@ function help(): void {
       `  reef run "<task>" [--out <dir>] [--secret <key>] [--demo-denial] [--json]`,
       `  reef verify <dir> [--secret <key>] [--json]`,
       `  reef replay <dir> [--secret <key>] [--json]`,
+      `  reef audit-pack <session-dir> --out <pack-dir> [--secret <key>] [--json]`,
+      `  reef audit-verify <pack-dir> [--secret <key>] [--json]`,
+      `  reef say-no-demo --out <dir> [--secret <key>] [--json]`,
       `  reef inspect [<dir>] [--json]`,
       `  reef serve [<port>] [--out <dir>]`,
       ``,
@@ -121,6 +129,9 @@ function help(): void {
       `          tamper-evident evidence link over a governed work spine.`,
       `  ${c.signal("verify")}  Load a persisted session and re-verify it store-untrusting.`,
       `  ${c.signal("replay")}  Re-verify AND reconstruct a session's full timeline from the log.`,
+      `  ${c.signal("audit-pack")} Export a self-contained audit bundle: evidence, Worker Ledger, replay proof, control map.`,
+      `  ${c.signal("audit-verify")} Verify an audit bundle store-untrusting; one-byte tamper turns red.`,
+      `  ${c.signal("say-no-demo")} Script a dangerous unreviewed change and prove the gate DENIES it.`,
       `  ${c.signal("inspect")} Static governance lint over a workspace (secrets, agentic-OWASP).`,
       `  ${c.signal("serve")}   Start the daemon (HTTP + SSE) that every surface shares.`,
       ``,
@@ -138,6 +149,119 @@ function help(): void {
       ``,
     ].join("\n") + "\n",
   );
+}
+
+async function auditPackCommand(flags: Flags): Promise<number> {
+  const dir = flags._[1];
+  if (dir === undefined || flags.out === undefined) {
+    process.stderr.write(
+      c.danger(
+        "error: reef audit-pack needs <session-dir> and --out <pack-dir>\n",
+      ),
+    );
+    return 2;
+  }
+  try {
+    const result = await exportAuditPack({
+      sessionDirs: [dir],
+      outDir: flags.out,
+      ...(flags.secret !== undefined ? { integritySecret: flags.secret } : {}),
+    });
+    if (flags.json) {
+      process.stdout.write(
+        JSON.stringify(
+          {
+            outDir: result.outDir,
+            ok: result.verification.ok,
+            reason: result.verification.reason,
+            ledgerHead: result.verification.ledgerHead,
+            sessions: result.manifest.sessions,
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+      return result.verification.ok ? 0 : 1;
+    }
+    process.stdout.write(banner());
+    process.stdout.write(`${rule("audit pack")}\n`);
+    process.stdout.write(
+      `  ${c.muted("pack")} ${c.ink(result.outDir)}\n` +
+        `  ${result.verification.ok ? c.signal("✓ VERIFIED") : c.danger("⨯ FAILED")}  ${c.muted(result.verification.reason)}\n` +
+        `  ${c.muted("ledger")} ${c.ink(result.verification.ledgerHead ?? result.manifest.workerLedger.head)}\n` +
+        `  ${c.muted("sessions")} ${c.ink(String(result.manifest.sessions.length))}\n\n`,
+    );
+    return result.verification.ok ? 0 : 1;
+  } catch (err) {
+    process.stderr.write(
+      c.danger(`error: ${err instanceof Error ? err.message : String(err)}\n`),
+    );
+    return 1;
+  }
+}
+
+function auditVerifyCommand(flags: Flags): number {
+  const dir = flags._[1];
+  if (dir === undefined) {
+    process.stderr.write(
+      c.danger("error: reef audit-verify needs <pack-dir>\n"),
+    );
+    return 2;
+  }
+  const result = verifyAuditPack({
+    packDir: dir,
+    ...(flags.secret !== undefined ? { integritySecret: flags.secret } : {}),
+  });
+  if (flags.json) {
+    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    return result.ok ? 0 : 1;
+  }
+  process.stdout.write(banner());
+  process.stdout.write(`${rule("audit verify")}\n`);
+  process.stdout.write(
+    `  ${result.ok ? c.signal("✓ VERIFIED") : c.danger("⨯ FAILED")}  ${c.muted(result.reason)}\n`,
+  );
+  if (result.ledgerHead !== undefined) {
+    process.stdout.write(
+      `  ${c.muted("ledger")} ${c.ink(result.ledgerHead)}\n`,
+    );
+  }
+  process.stdout.write("\n");
+  return result.ok ? 0 : 1;
+}
+
+async function sayNoDemoCommand(flags: Flags): Promise<number> {
+  if (flags.out === undefined) {
+    process.stderr.write(
+      c.danger("error: reef say-no-demo needs --out <dir>\n"),
+    );
+    return 2;
+  }
+  try {
+    const result = await runSayNoDemo({
+      outDir: flags.out,
+      ...(flags._[1] !== undefined ? { task: flags._[1] } : {}),
+      ...(flags.secret !== undefined ? { integritySecret: flags.secret } : {}),
+    });
+    if (flags.json) {
+      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      return result.sessionVerified && result.packVerified ? 0 : 1;
+    }
+    process.stdout.write(banner());
+    process.stdout.write(`${rule("governance can say NO")}\n`);
+    process.stdout.write(
+      `  ${c.danger("DENIED")}  ${c.ink(result.denied.reason)}\n` +
+        `  ${c.muted("evidence")} ${c.ink(result.denied.evidenceLink)}\n` +
+        `  ${c.muted("session")} ${c.ink(result.sessionDir)}   ${result.sessionVerified ? c.signal("verified") : c.danger("broken")}\n` +
+        `  ${c.muted("audit pack")} ${c.ink(result.packDir)}   ${result.packVerified ? c.signal("verified") : c.danger("broken")}\n\n`,
+    );
+    return result.sessionVerified && result.packVerified ? 0 : 1;
+  } catch (err) {
+    process.stderr.write(
+      c.danger(`error: ${err instanceof Error ? err.message : String(err)}\n`),
+    );
+    return 1;
+  }
 }
 
 async function runCommand(flags: Flags): Promise<number> {
@@ -421,6 +545,12 @@ async function main(): Promise<number> {
       return verifyCommand(flags);
     case "replay":
       return replayCommand(flags);
+    case "audit-pack":
+      return auditPackCommand(flags);
+    case "audit-verify":
+      return auditVerifyCommand(flags);
+    case "say-no-demo":
+      return sayNoDemoCommand(flags);
     case "inspect":
       return inspectCommand(flags);
     case undefined:
