@@ -13,6 +13,7 @@ import {
   randomOpaqueToken,
   verifyAccessToken,
 } from "./auth.js";
+import { createBillingAdapter } from "./billing.js";
 import { CompletionService } from "./completion.js";
 import type { GatewayDb } from "./db.js";
 import { GatewayLedger } from "./ledger.js";
@@ -23,6 +24,7 @@ import type {
   GatewayDecisionInput,
   GatewayDecisionRecord,
   GatewayErrorBody,
+  GatewayQuotaResponse,
   ProvisionAccountRequest,
   ProvisionAccountResponse,
   GatewayVerifyResult,
@@ -49,9 +51,11 @@ export class GatewayControlPlane {
         : {}),
     });
     this.#completion = new CompletionService({
+      config: options.config,
       db: options.db,
       ledger: this.ledger,
       provider: createGatewayModelProvider(options.config),
+      billing: createBillingAdapter(options.config, options.db),
     });
   }
 
@@ -178,6 +182,104 @@ export class GatewayControlPlane {
       body,
     });
   }
+
+  async quota(
+    authHeader: string | undefined,
+  ): Promise<
+    | {
+        readonly ok: true;
+        readonly status: 200;
+        readonly body: GatewayQuotaResponse;
+      }
+    | {
+        readonly ok: false;
+        readonly status: 401 | 403;
+        readonly body: GatewayErrorBody;
+      }
+  > {
+    const token = bearerToken(authHeader);
+    const verified =
+      token === undefined
+        ? ({ ok: false, reason: "missing bearer token" } as const)
+        : verifyAccessToken(token, this.config);
+    const authEvidence = await this.ledger.appendDecision({
+      decision: "auth",
+      method: "jwt",
+      ...(verified.ok
+        ? {
+            tenantId: verified.principal.tenantId,
+            accountId: verified.principal.accountId,
+            actorId: verified.principal.accountId,
+          }
+        : {}),
+      content: {
+        allowed: verified.ok,
+        reason: verified.ok ? "signed JWT verified" : verified.reason,
+      },
+    });
+    if (!verified.ok) {
+      return {
+        ok: false,
+        status: 401,
+        body: { error: "auth denied", evidenceId: authEvidence.evidenceId },
+      };
+    }
+    const principal = verified.principal;
+    const license = await this.db.getActiveLicenseByAccount(principal.accountId);
+    const quota = await this.db.getQuota(principal.accountId);
+    const costUsd = await this.db.sumCostForAccount(principal.accountId);
+    const allowed = license !== undefined && quota !== undefined;
+    const quotaEvidence = await this.ledger.appendDecision({
+      decision: "quota",
+      method: "db-quota-ledger",
+      tenantId: principal.tenantId,
+      accountId: principal.accountId,
+      actorId: principal.accountId,
+      content: jsonValue({
+        allowed,
+        accountId: principal.accountId,
+        planId: license?.planId,
+        limitTokens: quota?.limitTokens,
+        usedTokens: quota?.usedTokens,
+        remainingTokens:
+          quota === undefined
+            ? undefined
+            : Math.max(0, quota.limitTokens - quota.usedTokens),
+        costUsd,
+        source: "gateway-db-quota-ledger",
+        reason: allowed
+          ? "quota read from gateway DB ledger"
+          : "license or quota ledger is missing; failing closed",
+      }),
+    });
+    if (!allowed || quota === undefined || license === undefined) {
+      return {
+        ok: false,
+        status: 403,
+        body: {
+          error: "quota unavailable",
+          evidenceId: quotaEvidence.evidenceId,
+        },
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        accountId: principal.accountId,
+        planId: license.planId,
+        usedTokens: quota.usedTokens,
+        remainingTokens: Math.max(0, quota.limitTokens - quota.usedTokens),
+        limitTokens: quota.limitTokens,
+        costUsd,
+        source: "gateway-db-quota-ledger",
+        evidence: {
+          auth: authEvidence.evidenceId,
+          quota: quotaEvidence.evidenceId,
+        },
+      },
+    };
+  }
 }
 
 export class GatewayHttpServer {
@@ -257,6 +359,10 @@ export class GatewayHttpServer {
       const body = await readJson(req);
       const completed = await this.#control.complete(req.headers.authorization, body);
       return respondJson(res, completed.status, completed.body);
+    }
+    if (req.method === "GET" && url.pathname === "/v1/quota") {
+      const quota = await this.#control.quota(req.headers.authorization);
+      return respondJson(res, quota.status, quota.body);
     }
     return respondJson(res, 404, { error: "not found" });
   }

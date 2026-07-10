@@ -5,6 +5,7 @@ import { MIGRATIONS } from "./migrations.js";
 import type { GatewayDb } from "./db.js";
 import type {
   AccountRecord,
+  BillingRecord,
   GatewayLedgerAnchor,
   LicenseRecord,
   QuotaRecord,
@@ -279,6 +280,37 @@ export class SqliteGatewayDb implements GatewayDb {
   async sumUsageForAccount(accountId: string): Promise<number> {
     const row = this.#db
       .prepare("SELECT SUM(total_tokens) AS total FROM usage_records WHERE account_id = ?")
+      .get(accountId) as SumRow | undefined;
+    return row?.total ?? 0;
+  }
+
+  async sumCostForAccount(accountId: string): Promise<number> {
+    const row = this.#db
+      .prepare("SELECT SUM(cost_usd) AS total FROM usage_records WHERE account_id = ?")
+      .get(accountId) as SumRow | undefined;
+    return row?.total ?? 0;
+  }
+
+  async appendBillingRecord(record: BillingRecord): Promise<void> {
+    this.#db
+      .prepare(
+        "INSERT INTO billing_records (id, account_id, usage_record_id, amount_usd, currency, provider, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        record.id,
+        record.accountId,
+        record.usageRecordId,
+        record.amountUsd,
+        record.currency,
+        record.provider,
+        record.status,
+        record.createdAt,
+      );
+  }
+
+  async sumBillingForAccount(accountId: string): Promise<number> {
+    const row = this.#db
+      .prepare("SELECT SUM(amount_usd) AS total FROM billing_records WHERE account_id = ?")
       .get(accountId) as SumRow | undefined;
     return row?.total ?? 0;
   }

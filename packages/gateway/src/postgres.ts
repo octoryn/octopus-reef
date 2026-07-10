@@ -3,6 +3,7 @@ import { MIGRATIONS } from "./migrations.js";
 import type { GatewayDb } from "./db.js";
 import type {
   AccountRecord,
+  BillingRecord,
   GatewayLedgerAnchor,
   LicenseRecord,
   QuotaRecord,
@@ -265,6 +266,40 @@ export class PostgresGatewayDb implements GatewayDb {
   async sumUsageForAccount(accountId: string): Promise<number> {
     const result = await this.#pool.query<SumRow>(
       "SELECT SUM(total_tokens) AS total FROM usage_records WHERE account_id = $1",
+      [accountId],
+    );
+    const total = result.rows[0]?.total;
+    return total === null || total === undefined ? 0 : Number(total);
+  }
+
+  async sumCostForAccount(accountId: string): Promise<number> {
+    const result = await this.#pool.query<SumRow>(
+      "SELECT SUM(cost_usd) AS total FROM usage_records WHERE account_id = $1",
+      [accountId],
+    );
+    const total = result.rows[0]?.total;
+    return total === null || total === undefined ? 0 : Number(total);
+  }
+
+  async appendBillingRecord(record: BillingRecord): Promise<void> {
+    await this.#pool.query(
+      "INSERT INTO billing_records (id, account_id, usage_record_id, amount_usd, currency, provider, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+      [
+        record.id,
+        record.accountId,
+        record.usageRecordId,
+        record.amountUsd,
+        record.currency,
+        record.provider,
+        record.status,
+        record.createdAt,
+      ],
+    );
+  }
+
+  async sumBillingForAccount(accountId: string): Promise<number> {
+    const result = await this.#pool.query<SumRow>(
+      "SELECT SUM(amount_usd) AS total FROM billing_records WHERE account_id = $1",
       [accountId],
     );
     const total = result.rows[0]?.total;

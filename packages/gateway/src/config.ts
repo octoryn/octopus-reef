@@ -42,6 +42,11 @@ export function loadGatewayConfig(
       3600,
       "REEF_GATEWAY_TOKEN_TTL_SECONDS",
     ),
+    localPricePerThousandTokens: numberFromEnv(
+      env.REEF_GATEWAY_LOCAL_PRICE_PER_1K_TOKENS,
+      0.002,
+      "REEF_GATEWAY_LOCAL_PRICE_PER_1K_TOKENS",
+    ),
     ...(bedrockModel !== undefined ? { bedrockModel } : {}),
     awsRegion: clean(env.AWS_REGION) ?? "us-west-2",
     ...(oidcIssuer !== undefined ? { oidcIssuer } : {}),
@@ -81,6 +86,19 @@ function intFromEnv(
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function numberFromEnv(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative number`);
   }
   return parsed;
 }

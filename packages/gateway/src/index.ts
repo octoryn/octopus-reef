@@ -1,6 +1,12 @@
 export { loadGatewayConfig, dbDriverFor, sqliteLocationFromUrl } from "./config.js";
 export { createGatewayDb } from "./factory.js";
 export {
+  createBillingAdapter,
+  LocalLedgerBillingAdapter,
+  StripeBillingAdapter,
+} from "./billing.js";
+export type { BillingAdapter } from "./billing.js";
+export {
   bearerToken,
   hashPassword,
   hashSecret,
@@ -23,6 +29,7 @@ export type {
   GatewayDecisionInput,
   GatewayDecisionRecord,
   GatewayLedgerAnchor,
+  GatewayQuotaResponse,
   GatewayVerifyResult,
   LicenseRecord,
   ProvisionAccountRequest,

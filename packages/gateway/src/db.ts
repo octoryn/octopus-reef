@@ -1,5 +1,6 @@
 import type {
   AccountRecord,
+  BillingRecord,
   GatewayLedgerAnchor,
   LicenseRecord,
   QuotaRecord,
@@ -25,5 +26,8 @@ export interface GatewayDb {
   debitQuota(accountId: string, tokens: number, updatedAt: string): Promise<void>;
   appendUsageRecord(record: UsageRecord): Promise<void>;
   sumUsageForAccount(accountId: string): Promise<number>;
+  sumCostForAccount(accountId: string): Promise<number>;
+  appendBillingRecord(record: BillingRecord): Promise<void>;
+  sumBillingForAccount(accountId: string): Promise<number>;
   close(): Promise<void>;
 }

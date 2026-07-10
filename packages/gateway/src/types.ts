@@ -15,6 +15,7 @@ export interface GatewayConfig {
   readonly rateLimitRequests: number;
   readonly defaultQuotaTokens: number;
   readonly tokenTtlSeconds: number;
+  readonly localPricePerThousandTokens: number;
   readonly bedrockModel?: string;
   readonly awsRegion: string;
   readonly oidcIssuer?: string;
@@ -78,6 +79,17 @@ export interface UsageRecord {
   readonly totalTokens: number;
   readonly costUsd: number;
   readonly evidenceId: string;
+  readonly createdAt: string;
+}
+
+export interface BillingRecord {
+  readonly id: string;
+  readonly accountId: string;
+  readonly usageRecordId: string;
+  readonly amountUsd: number;
+  readonly currency: "usd";
+  readonly provider: "local-ledger" | "stripe";
+  readonly status: "recorded" | "stubbed";
   readonly createdAt: string;
 }
 
@@ -151,7 +163,22 @@ export interface GatewayCompletionResponse extends CompletionResponse {
   readonly evidence: {
     readonly auth: string;
     readonly entitlement: string;
+    readonly quota: string;
     readonly route: string;
     readonly meter: string;
+  };
+}
+
+export interface GatewayQuotaResponse {
+  readonly accountId: string;
+  readonly planId: string;
+  readonly usedTokens: number;
+  readonly remainingTokens: number;
+  readonly limitTokens: number;
+  readonly costUsd: number;
+  readonly source: "gateway-db-quota-ledger";
+  readonly evidence: {
+    readonly auth: string;
+    readonly quota: string;
   };
 }

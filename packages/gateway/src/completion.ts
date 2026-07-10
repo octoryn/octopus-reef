@@ -6,19 +6,24 @@ import type {
   ModelUsage,
 } from "@octopus-reef/agent";
 import type { JsonValue } from "octopus-evidence";
+import type { BillingAdapter } from "./billing.js";
 import type { GatewayDb } from "./db.js";
 import type { GatewayLedger } from "./ledger.js";
 import type {
   GatewayCompletionRequest,
   GatewayCompletionResponse,
+  GatewayConfig,
   GatewayPrincipal,
   LicenseRecord,
+  QuotaRecord,
 } from "./types.js";
 
 export interface CompletionServiceOptions {
+  readonly config: GatewayConfig;
   readonly db: GatewayDb;
   readonly ledger: GatewayLedger;
   readonly provider: ModelProvider;
+  readonly billing: BillingAdapter;
 }
 
 export type CompletionOutcome =
@@ -34,14 +39,18 @@ export type CompletionOutcome =
     };
 
 export class CompletionService {
+  readonly #config: GatewayConfig;
   readonly #db: GatewayDb;
   readonly #ledger: GatewayLedger;
   readonly #provider: ModelProvider;
+  readonly #billing: BillingAdapter;
 
   constructor(options: CompletionServiceOptions) {
+    this.#config = options.config;
     this.#db = options.db;
     this.#ledger = options.ledger;
     this.#provider = options.provider;
+    this.#billing = options.billing;
   }
 
   async complete(input: {
@@ -107,6 +116,23 @@ export class CompletionService {
         },
       };
     }
+    const quota = await this.#quotaFor(principal.accountId, request.maxTokens);
+    const quotaEvidence = await this.#ledger.appendDecision({
+      decision: "quota",
+      method: "db-quota-ledger",
+      tenantId: principal.tenantId,
+      accountId: principal.accountId,
+      actorId: principal.accountId,
+      content: asJson(quota),
+    });
+    if (!quota.allowed) {
+      return {
+        ok: false,
+        status: 403,
+        body: { error: quota.reason, evidenceId: quotaEvidence.evidenceId },
+      };
+    }
+
     const requestId = randomUUID();
     const routeEvidence = await this.#ledger.appendDecision({
       decision: "route",
@@ -161,18 +187,22 @@ export class CompletionService {
         source: "provider-normalized-usage",
       }),
     });
-    await this.#db.appendUsageRecord({
+    const totalTokens = usage.totalTokens ?? 0;
+    const usageRecord = {
       id: randomUUID(),
       accountId: principal.accountId,
       requestId,
       model: usage.model,
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,
-      totalTokens: usage.totalTokens ?? 0,
-      costUsd: 0,
+      totalTokens,
+      costUsd: costForTokens(totalTokens, this.#config.localPricePerThousandTokens),
       evidenceId: meterEvidence.evidenceId,
       createdAt: new Date().toISOString(),
-    });
+    };
+    await this.#db.appendUsageRecord(usageRecord);
+    await this.#db.debitQuota(principal.accountId, totalTokens, usageRecord.createdAt);
+    await this.#billing.recordUsage(usageRecord);
 
     return {
       ok: true,
@@ -185,6 +215,7 @@ export class CompletionService {
         evidence: {
           auth: authEvidence.evidenceId,
           entitlement: entitlementEvidence.evidenceId,
+          quota: quotaEvidence.evidenceId,
           route: routeEvidence.evidenceId,
           meter: meterEvidence.evidenceId,
         },
@@ -226,6 +257,54 @@ export class CompletionService {
       planId: license.planId,
       entitlements: license.entitlements,
       reason: "license entitlement permits inference",
+    };
+  }
+
+  async #quotaFor(
+    accountId: string,
+    requestedTokens: number,
+  ): Promise<{
+    readonly allowed: boolean;
+    readonly accountId: string;
+    readonly limitTokens?: number;
+    readonly usedTokens?: number;
+    readonly remainingTokens?: number;
+    readonly requestedTokens: number;
+    readonly source: "gateway-db-quota-ledger";
+    readonly reason: string;
+  }> {
+    const quota = await this.#db.getQuota(accountId);
+    if (quota === undefined) {
+      return {
+        allowed: false,
+        accountId,
+        requestedTokens,
+        source: "gateway-db-quota-ledger",
+        reason: "quota ledger is missing; failing closed",
+      };
+    }
+    const remainingTokens = remaining(quota);
+    if (remainingTokens < requestedTokens) {
+      return {
+        allowed: false,
+        accountId,
+        limitTokens: quota.limitTokens,
+        usedTokens: quota.usedTokens,
+        remainingTokens,
+        requestedTokens,
+        source: "gateway-db-quota-ledger",
+        reason: "quota remaining is lower than requested max tokens",
+      };
+    }
+    return {
+      allowed: true,
+      accountId,
+      limitTokens: quota.limitTokens,
+      usedTokens: quota.usedTokens,
+      remainingTokens,
+      requestedTokens,
+      source: "gateway-db-quota-ledger",
+      reason: "quota permits this request",
     };
   }
 }
@@ -342,4 +421,12 @@ function normalizeUsage(
 
 function asJson(value: unknown): JsonValue {
   return JSON.parse(JSON.stringify(value)) as JsonValue;
+}
+
+function remaining(quota: QuotaRecord): number {
+  return Math.max(0, quota.limitTokens - quota.usedTokens);
+}
+
+function costForTokens(tokens: number, pricePerThousand: number): number {
+  return Number(((tokens / 1000) * pricePerThousand).toFixed(8));
 }

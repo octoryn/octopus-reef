@@ -14,6 +14,7 @@ The gateway runs offline by default with SQLite and a deterministic local model.
 | `REEF_GATEWAY_RATE_LIMIT_REQUESTS` | no | `60` | Request allowance per window. |
 | `REEF_GATEWAY_DEFAULT_QUOTA_TOKENS` | no | `10000` | Default account token quota. |
 | `REEF_GATEWAY_TOKEN_TTL_SECONDS` | no | `3600` | JWT lifetime for login/signup tokens. |
+| `REEF_GATEWAY_LOCAL_PRICE_PER_1K_TOKENS` | no | `0.002` | Local billing-ledger price used to compute honest offline cost records. |
 | `REEF_GATEWAY_BEDROCK_MODEL` | no | Reef agent default | Bedrock model id when using the real Bedrock provider. |
 | `AWS_BEARER_TOKEN_BEDROCK` | no | unset | When set, completions route to the real `BedrockProvider`; otherwise the local deterministic model stub is used. |
 | `AWS_REGION` | no | `us-west-2` | Bedrock region. |
