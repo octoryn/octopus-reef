@@ -16,7 +16,7 @@ export {
   verifyAccessToken,
   verifyPassword,
 } from "./auth.js";
-export { CompletionService } from "./completion.js";
+export { CompletionService, priorityDecision } from "./completion.js";
 export type { GatewayDb } from "./db.js";
 export { GatewayLedger } from "./ledger.js";
 export { PostgresGatewayDb } from "./postgres.js";
@@ -31,6 +31,7 @@ export type {
   GatewayDecisionInput,
   GatewayDecisionRecord,
   GatewayLedgerAnchor,
+  GatewayPlanResponse,
   GatewayQuotaResponse,
   GatewayVerifyResult,
   LicenseRecord,

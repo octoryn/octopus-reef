@@ -247,17 +247,44 @@ export interface GatewayCompletionRequest {
   readonly request?: CompletionRequest;
   readonly prompt?: string;
   readonly model?: string;
+  readonly priorityTier?: "standard" | "priority";
 }
 
 export interface GatewayCompletionResponse extends CompletionResponse {
   readonly requestId: string;
   readonly usage: ModelUsage;
+  readonly tier: {
+    readonly tier: "standard" | "priority";
+    readonly queue: "standard" | "priority";
+    readonly model: string;
+    readonly serviceLevel: string;
+    readonly source: "gateway-plan";
+  };
   readonly evidence: {
     readonly auth: string;
     readonly entitlement: string;
     readonly quota: string;
+    readonly tier: string;
     readonly route: string;
     readonly meter: string;
+  };
+}
+
+export interface GatewayPlanResponse {
+  readonly planId: string;
+  readonly selectedTier: "standard" | "priority";
+  readonly source: "gateway-plan";
+  readonly serviceLevel: string;
+  readonly tiers: readonly {
+    readonly id: "standard" | "priority";
+    readonly label: string;
+    readonly queue: "standard" | "priority";
+    readonly model: string;
+    readonly allowed: boolean;
+  }[];
+  readonly evidence: {
+    readonly auth: string;
+    readonly tier: string;
   };
 }
 

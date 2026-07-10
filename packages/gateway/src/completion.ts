@@ -18,6 +18,8 @@ import type {
   QuotaRecord,
 } from "./types.js";
 
+type PriorityTier = "standard" | "priority";
+
 export interface CompletionServiceOptions {
   readonly config: GatewayConfig;
   readonly db: GatewayDb;
@@ -103,9 +105,11 @@ export class CompletionService {
       };
     }
 
+    let parsed: GatewayCompletionRequest;
     let request: CompletionRequest;
     try {
-      request = parseCompletionRequest(input.body);
+      parsed = parseGatewayCompletionRequest(input.body);
+      request = completionRequestFromParsed(parsed);
     } catch (error) {
       return {
         ok: false,
@@ -132,6 +136,26 @@ export class CompletionService {
         body: { error: quota.reason, evidenceId: quotaEvidence.evidenceId },
       };
     }
+    const priority = priorityDecision(
+      parsed.priorityTier ?? "standard",
+      entitlement,
+      parsed.model,
+    );
+    const tierEvidence = await this.#ledger.appendDecision({
+      decision: "tier",
+      method: "plan-policy",
+      tenantId: principal.tenantId,
+      accountId: principal.accountId,
+      actorId: principal.accountId,
+      content: asJson(priority),
+    });
+    if (!priority.allowed) {
+      return {
+        ok: false,
+        status: 403,
+        body: { error: priority.reason, evidenceId: tierEvidence.evidenceId },
+      };
+    }
 
     const requestId = randomUUID();
     const routeEvidence = await this.#ledger.appendDecision({
@@ -144,7 +168,12 @@ export class CompletionService {
         allowed: true,
         requestId,
         provider: this.#provider.name,
-        model: modelFromRequest(input.body) ?? "provider-default",
+        model: priority.model,
+        priority: {
+          tier: priority.tier,
+          queue: priority.queue,
+          serviceLevel: priority.serviceLevel,
+        },
         bedrock: (process.env.AWS_BEARER_TOKEN_BEDROCK ?? "").trim() !== "",
       },
     });
@@ -211,11 +240,19 @@ export class CompletionService {
         content: completion.content,
         stopReason: completion.stopReason,
         usage,
+        tier: {
+          tier: priority.tier,
+          queue: priority.queue,
+          model: priority.model,
+          serviceLevel: priority.serviceLevel,
+          source: "gateway-plan",
+        },
         requestId,
         evidence: {
           auth: authEvidence.evidenceId,
           entitlement: entitlementEvidence.evidenceId,
           quota: quotaEvidence.evidenceId,
+          tier: tierEvidence.evidenceId,
           route: routeEvidence.evidenceId,
           meter: meterEvidence.evidenceId,
         },
@@ -330,8 +367,7 @@ function deniedLicense(
   };
 }
 
-function parseCompletionRequest(body: unknown): CompletionRequest {
-  const input = parseGatewayCompletionRequest(body);
+function completionRequestFromParsed(input: GatewayCompletionRequest): CompletionRequest {
   if (input.request !== undefined) return input.request;
   if (input.prompt !== undefined) {
     return {
@@ -351,12 +387,14 @@ function parseGatewayCompletionRequest(body: unknown): GatewayCompletionRequest 
   const raw = body as Record<string, unknown>;
   const prompt = typeof raw.prompt === "string" && raw.prompt.trim() !== "" ? raw.prompt : undefined;
   const model = typeof raw.model === "string" && raw.model.trim() !== "" ? raw.model : undefined;
+  const priorityTier = raw.priorityTier === "priority" ? "priority" : raw.priorityTier === "standard" ? "standard" : undefined;
   const request =
     raw.request !== undefined ? coerceCompletionRequest(raw.request) : undefined;
   return {
     ...(request !== undefined ? { request } : {}),
     ...(prompt !== undefined ? { prompt } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(priorityTier !== undefined ? { priorityTier } : {}),
   };
 }
 
@@ -375,15 +413,6 @@ function coerceCompletionRequest(value: unknown): CompletionRequest {
     throw new Error("request is not a valid completion request");
   }
   return raw as CompletionRequest;
-}
-
-function modelFromRequest(body: unknown): string | undefined {
-  return body !== null &&
-    typeof body === "object" &&
-    !Array.isArray(body) &&
-    typeof (body as { model?: unknown }).model === "string"
-    ? (body as { model: string }).model
-    : undefined;
 }
 
 function normalizeUsage(
@@ -429,4 +458,60 @@ function remaining(quota: QuotaRecord): number {
 
 function costForTokens(tokens: number, pricePerThousand: number): number {
   return Number(((tokens / 1000) * pricePerThousand).toFixed(8));
+}
+
+export function priorityDecision(
+  requested: PriorityTier,
+  entitlement: {
+    readonly allowed: boolean;
+    readonly planId?: string;
+    readonly entitlements?: readonly string[];
+  },
+  requestedModel: string | undefined,
+): {
+  readonly allowed: boolean;
+  readonly requestedTier: PriorityTier;
+  readonly tier: PriorityTier;
+  readonly queue: PriorityTier;
+  readonly model: string;
+  readonly serviceLevel: string;
+  readonly source: "gateway-plan";
+  readonly reason: string;
+} {
+  const priorityAllowed =
+    entitlement.entitlements?.includes("priority:route") === true ||
+    entitlement.planId?.includes("priority") === true;
+  if (requested === "priority" && !priorityAllowed) {
+    return {
+      allowed: false,
+      requestedTier: requested,
+      tier: "standard",
+      queue: "standard",
+      model: requestedModel ?? "reef-gateway-standard-local",
+      serviceLevel: "Standard plan; priority SLA is not available.",
+      source: "gateway-plan",
+      reason: "standard plan cannot use priority routing",
+    };
+  }
+  const tier = requested === "priority" ? "priority" : "standard";
+  return {
+    allowed: true,
+    requestedTier: requested,
+    tier,
+    queue: tier,
+    model:
+      requestedModel ??
+      (tier === "priority"
+        ? "reef-gateway-priority-local"
+        : "reef-gateway-standard-local"),
+    serviceLevel:
+      tier === "priority"
+        ? "Priority local plan: expedited queue in this gateway; no cloud SLA is asserted offline."
+        : "Standard local plan: standard queue; no cloud SLA is asserted offline.",
+    source: "gateway-plan",
+    reason:
+      tier === "priority"
+        ? "priority plan permits priority routing"
+        : "standard routing selected",
+  };
 }

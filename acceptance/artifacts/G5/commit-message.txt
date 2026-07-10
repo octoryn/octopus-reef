@@ -1,0 +1,14 @@
+G5: add priority tier policy
+
+Add plan-gated priority routing and honest SLA/tier reporting. Completion
+requests can ask for priority, but standard plans fail closed before route
+selection. Priority plans receive priority tier and queue metadata.
+
+Tier choices and tier denials are gateway ledger evidence links, and GET
+/v1/plan reports sourced tier availability with evidence.
+
+Verification:
+- npm run typecheck --workspace @octopus-reef/gateway
+- npm test --workspace @octopus-reef/gateway
+- npx eslint packages/gateway
+- git diff --check

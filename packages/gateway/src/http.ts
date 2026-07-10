@@ -17,7 +17,7 @@ import {
 } from "./auth.js";
 import { signInWithStubOidc } from "@octopus-reef/commercial";
 import { createBillingAdapter } from "./billing.js";
-import { CompletionService } from "./completion.js";
+import { CompletionService, priorityDecision } from "./completion.js";
 import type { GatewayDb } from "./db.js";
 import { GatewayLedger } from "./ledger.js";
 import { createGatewayModelProvider } from "./provider.js";
@@ -27,6 +27,7 @@ import type {
   GatewayDecisionInput,
   GatewayDecisionRecord,
   GatewayErrorBody,
+  GatewayPlanResponse,
   GatewayQuotaResponse,
   LoginRequest,
   LoginResponse,
@@ -731,6 +732,118 @@ export class GatewayControlPlane {
       },
     };
   }
+
+  async plan(
+    authHeader: string | undefined,
+    requestedTier: "standard" | "priority",
+  ): Promise<
+    | {
+        readonly ok: true;
+        readonly status: 200;
+        readonly body: GatewayPlanResponse;
+      }
+    | {
+        readonly ok: false;
+        readonly status: 401 | 403;
+        readonly body: GatewayErrorBody;
+      }
+  > {
+    const token = bearerToken(authHeader);
+    const verified =
+      token === undefined
+        ? ({ ok: false, reason: "missing bearer token" } as const)
+        : verifyAccessToken(token, this.config);
+    const authEvidence = await this.ledger.appendDecision({
+      decision: "auth",
+      method: "jwt",
+      ...(verified.ok
+        ? {
+            tenantId: verified.principal.tenantId,
+            accountId: verified.principal.accountId,
+            actorId: verified.principal.accountId,
+          }
+        : {}),
+      content: {
+        allowed: verified.ok,
+        reason: verified.ok ? "signed JWT verified" : verified.reason,
+      },
+    });
+    if (!verified.ok) {
+      return {
+        ok: false,
+        status: 401,
+        body: { error: "auth denied", evidenceId: authEvidence.evidenceId },
+      };
+    }
+    const license = await this.db.getActiveLicenseByAccount(
+      verified.principal.accountId,
+    );
+    if (license === undefined) {
+      const denied = await this.recordDecision({
+        decision: "tier",
+        method: "plan-policy",
+        tenantId: verified.principal.tenantId,
+        accountId: verified.principal.accountId,
+        actorId: verified.principal.accountId,
+        content: {
+          allowed: false,
+          requestedTier,
+          reason: "active license is missing",
+        },
+      });
+      return {
+        ok: false,
+        status: 403,
+        body: { error: "active license is missing", evidenceId: denied.evidenceId },
+      };
+    }
+    const selected = priorityDecision(requestedTier, {
+      allowed: true,
+      planId: license.planId,
+      entitlements: license.entitlements,
+    }, undefined);
+    const tierEvidence = await this.recordDecision({
+      decision: "tier",
+      method: "plan-policy",
+      tenantId: verified.principal.tenantId,
+      accountId: verified.principal.accountId,
+      actorId: verified.principal.accountId,
+      content: jsonValue(selected),
+    });
+    const priorityAllowed =
+      license.entitlements.includes("priority:route") ||
+      license.planId.includes("priority");
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        planId: license.planId,
+        selectedTier: selected.allowed ? selected.tier : "standard",
+        source: "gateway-plan",
+        serviceLevel: selected.serviceLevel,
+        tiers: [
+          {
+            id: "standard",
+            label: "Standard gateway",
+            queue: "standard",
+            model: "reef-gateway-standard-local",
+            allowed: true,
+          },
+          {
+            id: "priority",
+            label: "Priority gateway",
+            queue: "priority",
+            model: "reef-gateway-priority-local",
+            allowed: priorityAllowed,
+          },
+        ],
+        evidence: {
+          auth: authEvidence.evidenceId,
+          tier: tierEvidence.evidenceId,
+        },
+      },
+    };
+  }
 }
 
 export class GatewayHttpServer {
@@ -834,6 +947,12 @@ export class GatewayHttpServer {
     if (req.method === "GET" && url.pathname === "/v1/quota") {
       const quota = await this.#control.quota(req.headers.authorization);
       return respondJson(res, quota.status, quota.body);
+    }
+    if (req.method === "GET" && url.pathname === "/v1/plan") {
+      const requestedTier =
+        url.searchParams.get("tier") === "priority" ? "priority" : "standard";
+      const plan = await this.#control.plan(req.headers.authorization, requestedTier);
+      return respondJson(res, plan.status, plan.body);
     }
     return respondJson(res, 404, { error: "not found" });
   }
