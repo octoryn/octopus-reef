@@ -1,6 +1,10 @@
 import type {
+  AccountRecord,
   GatewayLedgerAnchor,
+  LicenseRecord,
+  QuotaRecord,
   StoredLedgerRecord,
+  UsageRecord,
 } from "./types.js";
 
 export interface GatewayDb {
@@ -9,5 +13,17 @@ export interface GatewayDb {
   listLedgerRecords(): Promise<readonly StoredLedgerRecord[]>;
   readLedgerAnchor(): Promise<GatewayLedgerAnchor | undefined>;
   writeLedgerAnchor(anchor: GatewayLedgerAnchor): Promise<void>;
+  upsertAccount(account: AccountRecord): Promise<void>;
+  getAccount(accountId: string): Promise<AccountRecord | undefined>;
+  getAccountByEmail(email: string): Promise<AccountRecord | undefined>;
+  upsertLicense(license: LicenseRecord): Promise<void>;
+  getActiveLicenseByAccount(accountId: string): Promise<LicenseRecord | undefined>;
+  getLicenseByTokenHash(tokenHash: string): Promise<LicenseRecord | undefined>;
+  revokeLicense(accountId: string, revokedAt: string): Promise<void>;
+  upsertQuota(quota: QuotaRecord): Promise<void>;
+  getQuota(accountId: string): Promise<QuotaRecord | undefined>;
+  debitQuota(accountId: string, tokens: number, updatedAt: string): Promise<void>;
+  appendUsageRecord(record: UsageRecord): Promise<void>;
+  sumUsageForAccount(accountId: string): Promise<number>;
   close(): Promise<void>;
 }

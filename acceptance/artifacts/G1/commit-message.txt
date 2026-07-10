@@ -1,0 +1,15 @@
+G1: add authenticated completion gateway
+
+Add signed JWT auth, local offline account/license provisioning, entitlement
+checks, model-provider routing, deterministic local completions, Bedrock
+selection when AWS_BEARER_TOKEN_BEDROCK is set, and usage metering.
+
+Each control-plane decision in the completion path records a gateway ledger
+evidence link: auth, entitlement, route, and meter. Invalid tokens and
+unentitled callers fail closed and are evidence-backed.
+
+Verification:
+- npm run typecheck --workspace @octopus-reef/gateway
+- npm test --workspace @octopus-reef/gateway
+- npx eslint packages/gateway
+- git diff --check

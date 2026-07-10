@@ -1,4 +1,5 @@
 import type { ChainLink, Evidence, JsonValue } from "octopus-evidence";
+import type { CompletionRequest, CompletionResponse, ModelUsage } from "@octopus-reef/agent";
 
 export type DbDriver = "sqlite" | "postgres";
 
@@ -35,6 +36,58 @@ export interface StoredLedgerRecord {
   readonly createdAt: string;
 }
 
+export type AccountStatus = "active" | "disabled";
+export type LicenseStatus = "active" | "revoked";
+
+export interface AccountRecord {
+  readonly id: string;
+  readonly email: string;
+  readonly displayName: string;
+  readonly passwordSalt: string;
+  readonly passwordHash: string;
+  readonly status: AccountStatus;
+  readonly teamId?: string;
+  readonly createdAt: string;
+}
+
+export interface LicenseRecord {
+  readonly id: string;
+  readonly accountId: string;
+  readonly tokenHash: string;
+  readonly planId: string;
+  readonly status: LicenseStatus;
+  readonly entitlements: readonly string[];
+  readonly createdAt: string;
+  readonly revokedAt?: string;
+}
+
+export interface QuotaRecord {
+  readonly accountId: string;
+  readonly limitTokens: number;
+  readonly usedTokens: number;
+  readonly updatedAt: string;
+}
+
+export interface UsageRecord {
+  readonly id: string;
+  readonly accountId: string;
+  readonly requestId: string;
+  readonly model: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly totalTokens: number;
+  readonly costUsd: number;
+  readonly evidenceId: string;
+  readonly createdAt: string;
+}
+
+export interface GatewayPrincipal {
+  readonly accountId: string;
+  readonly tenantId: string;
+  readonly email?: string;
+  readonly tokenId: string;
+}
+
 export interface GatewayDecisionInput {
   readonly decision: string;
   readonly tenantId?: string;
@@ -66,4 +119,39 @@ export interface GatewayVerifyResult {
 export interface GatewayErrorBody {
   readonly error: string;
   readonly evidenceId?: string;
+}
+
+export interface ProvisionAccountRequest {
+  readonly email: string;
+  readonly displayName?: string;
+  readonly planId?: string;
+  readonly entitlements?: readonly string[];
+}
+
+export interface ProvisionAccountResponse {
+  readonly accountId: string;
+  readonly email: string;
+  readonly displayName: string;
+  readonly planId: string;
+  readonly entitlements: readonly string[];
+  readonly accessToken: string;
+  readonly licenseToken: string;
+  readonly evidenceId: string;
+}
+
+export interface GatewayCompletionRequest {
+  readonly request?: CompletionRequest;
+  readonly prompt?: string;
+  readonly model?: string;
+}
+
+export interface GatewayCompletionResponse extends CompletionResponse {
+  readonly requestId: string;
+  readonly usage: ModelUsage;
+  readonly evidence: {
+    readonly auth: string;
+    readonly entitlement: string;
+    readonly route: string;
+    readonly meter: string;
+  };
 }

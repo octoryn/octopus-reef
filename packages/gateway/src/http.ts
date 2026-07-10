@@ -4,13 +4,27 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
+import { randomUUID } from "node:crypto";
+import {
+  bearerToken,
+  hashSecret,
+  issueAccessToken,
+  localPasswordMaterial,
+  randomOpaqueToken,
+  verifyAccessToken,
+} from "./auth.js";
+import { CompletionService } from "./completion.js";
 import type { GatewayDb } from "./db.js";
 import { GatewayLedger } from "./ledger.js";
+import { createGatewayModelProvider } from "./provider.js";
 import type {
+  GatewayCompletionResponse,
   GatewayConfig,
   GatewayDecisionInput,
   GatewayDecisionRecord,
   GatewayErrorBody,
+  ProvisionAccountRequest,
+  ProvisionAccountResponse,
   GatewayVerifyResult,
 } from "./types.js";
 
@@ -23,6 +37,7 @@ export class GatewayControlPlane {
   readonly config: GatewayConfig;
   readonly db: GatewayDb;
   readonly ledger: GatewayLedger;
+  readonly #completion: CompletionService;
 
   constructor(options: GatewayControlPlaneOptions) {
     this.config = options.config;
@@ -32,6 +47,11 @@ export class GatewayControlPlane {
       ...(options.config.ledgerSecret !== undefined
         ? { integritySecret: options.config.ledgerSecret }
         : {}),
+    });
+    this.#completion = new CompletionService({
+      db: options.db,
+      ledger: this.ledger,
+      provider: createGatewayModelProvider(options.config),
     });
   }
 
@@ -49,6 +69,114 @@ export class GatewayControlPlane {
 
   verify(): Promise<GatewayVerifyResult> {
     return this.ledger.verify();
+  }
+
+  async provisionAccount(
+    request: ProvisionAccountRequest,
+  ): Promise<ProvisionAccountResponse> {
+    const email = request.email.trim().toLowerCase();
+    if (email === "" || !email.includes("@")) {
+      throw new HttpError(400, "valid email is required");
+    }
+    const existing = await this.db.getAccountByEmail(email);
+    const accountId = existing?.id ?? randomUUID();
+    const displayName = clean(request.displayName) ?? existing?.displayName ?? email;
+    const material =
+      existing === undefined
+        ? localPasswordMaterial(email)
+        : {
+            salt: existing.passwordSalt,
+            hash: existing.passwordHash,
+          };
+    const now = new Date().toISOString();
+    await this.db.upsertAccount({
+      id: accountId,
+      email,
+      displayName,
+      passwordSalt: material.salt,
+      passwordHash: material.hash,
+      status: "active",
+      ...(existing?.teamId !== undefined ? { teamId: existing.teamId } : {}),
+      createdAt: existing?.createdAt ?? now,
+    });
+    const licenseToken = randomOpaqueToken("reef_license");
+    const entitlements =
+      request.entitlements === undefined
+        ? ["inference:complete"]
+        : request.entitlements;
+    const planId = clean(request.planId) ?? "reef-commercial-local";
+    await this.db.upsertLicense({
+      id: randomUUID(),
+      accountId,
+      tokenHash: hashSecret(licenseToken),
+      planId,
+      status: "active",
+      entitlements,
+      createdAt: now,
+    });
+    await this.db.upsertQuota({
+      accountId,
+      limitTokens: this.config.defaultQuotaTokens,
+      usedTokens: await this.db.sumUsageForAccount(accountId),
+      updatedAt: now,
+    });
+    const evidence = await this.recordDecision({
+      decision: "license.provision",
+      method: "admin",
+      tenantId: accountId,
+      accountId,
+      actorId: "admin",
+      content: jsonValue({
+        allowed: true,
+        accountId,
+        email,
+        planId,
+        entitlements,
+      }),
+    });
+    return {
+      accountId,
+      email,
+      displayName,
+      planId,
+      entitlements,
+      accessToken: issueAccessToken(this.config, {
+        accountId,
+        tenantId: accountId,
+        email,
+      }),
+      licenseToken,
+      evidenceId: evidence.evidenceId,
+    };
+  }
+
+  complete(
+    authHeader: string | undefined,
+    body: unknown,
+  ): Promise<
+    | {
+        readonly ok: true;
+        readonly status: 200;
+        readonly body: GatewayCompletionResponse;
+      }
+    | {
+        readonly ok: false;
+        readonly status: 400 | 401 | 403 | 502;
+        readonly body: GatewayErrorBody;
+      }
+  > {
+    const token = bearerToken(authHeader);
+    const principal =
+      token === undefined
+        ? ({ ok: false, reason: "missing bearer token" } as const)
+        : verifyAccessToken(token, this.config);
+    return this.#completion.complete({
+      principal:
+        principal.ok === true
+          ? { ok: true, value: principal.principal }
+          : { ok: false, reason: principal.reason },
+      body,
+    });
   }
 }
 
@@ -115,6 +243,21 @@ export class GatewayHttpServer {
       const record = await this.#control.recordDecision(decision);
       return respondJson(res, 201, record);
     }
+    if (req.method === "POST" && url.pathname === "/v1/admin/accounts") {
+      const denied = this.#requireAdmin(req);
+      if (denied !== undefined) return respondJson(res, 403, denied);
+      const body = parseProvisionAccount(await readJson(req));
+      const provisioned = await this.#control.provisionAccount(body);
+      return respondJson(res, 201, provisioned);
+    }
+    if (
+      req.method === "POST" &&
+      (url.pathname === "/v1/complete" || url.pathname === "/v1/completions")
+    ) {
+      const body = await readJson(req);
+      const completed = await this.#control.complete(req.headers.authorization, body);
+      return respondJson(res, completed.status, completed.body);
+    }
     return respondJson(res, 404, { error: "not found" });
   }
 
@@ -127,6 +270,26 @@ export class GatewayHttpServer {
       ? undefined
       : { error: "admin token denied" };
   }
+}
+
+function parseProvisionAccount(value: unknown): ProvisionAccountRequest {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "JSON object body is required");
+  }
+  const body = value as Record<string, unknown>;
+  const email = clean(body.email);
+  if (email === undefined) throw new HttpError(400, "email is required");
+  const displayName = clean(body.displayName);
+  const planId = clean(body.planId);
+  const entitlements = Array.isArray(body.entitlements)
+    ? body.entitlements.filter((value): value is string => typeof value === "string")
+    : undefined;
+  return {
+    email,
+    ...(displayName !== undefined ? { displayName } : {}),
+    ...(planId !== undefined ? { planId } : {}),
+    ...(entitlements !== undefined ? { entitlements } : {}),
+  };
 }
 
 function parseDecision(value: unknown): GatewayDecisionInput {
