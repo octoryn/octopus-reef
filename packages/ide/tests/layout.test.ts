@@ -250,6 +250,12 @@ test("layout: left Reef panels use the shared polish and Usage keeps sourced val
   assert.match(webviewSource, /class="usage-summary"/);
   assert.match(webviewSource, /id="total-tokens"/);
   assert.match(webviewSource, /Session and provider detail/);
+  assert.match(webviewSource, /Honest Economics/);
+  assert.match(webviewSource, /BYOK: no markup/);
+  assert.match(webviewSource, /Usage is provider\/API-sourced and labeled by source/);
+  assert.match(webviewSource, /No fake credit meter/);
+  assert.match(webviewSource, /opaque credit meters/);
+  assert.doesNotMatch(webviewSource, /<strong[^>]*>0\/50/);
 
   const usageScript = readFileSync(
     path.join(ideRoot, "media", "usage.js"),
@@ -261,10 +267,19 @@ test("layout: left Reef panels use the shared polish and Usage keeps sourced val
   );
   assert.match(
     usageScript,
-    /Provider-normalized cost from persisted usage evidence/,
+    /Provider\/API-sourced cost from persisted usage evidence/,
   );
   assert.match(
     usageScript,
     /Cost is not available from the configured provider/,
   );
+  assert.match(usageScript, /Reef does not fabricate a credit meter/);
+
+  const accountScript = readFileSync(
+    path.join(ideRoot, "media", "account.js"),
+    "utf8",
+  );
+  assert.match(accountScript, /BYOK: no markup/);
+  assert.match(accountScript, /provider\/API-sourced/);
+  assert.match(accountScript, /no fake credit meter/);
 });

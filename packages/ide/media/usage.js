@@ -8,6 +8,8 @@ const providersEl = document.getElementById("providers");
 const remainingEl = document.getElementById("remaining");
 const statusEl = document.getElementById("status");
 const refreshBtn = document.getElementById("refresh");
+const noFakeMeter =
+  "Reef does not fabricate a credit meter; missing provider data stays not available.";
 
 function setStatus(message, tone = "") {
   statusEl.className = `status ${tone}`;
@@ -49,8 +51,8 @@ function renderTotals(totals) {
   totalCostEl.textContent = formatCost(totals.costUsd);
   costSourceEl.textContent =
     typeof totals.costUsd === "number"
-      ? "Provider-normalized cost from persisted usage evidence"
-      : "Cost is not available from the configured provider";
+      ? "Provider/API-sourced cost from persisted usage evidence"
+      : `Cost is not available from the configured provider. ${noFakeMeter}`;
 }
 
 function renderSessions(sessions) {
@@ -96,7 +98,7 @@ function renderProviders(data) {
 function renderRemaining(remaining) {
   remainingEl.innerHTML =
     remaining.length === 0
-      ? '<div class="meta">No provider remaining sources.</div>'
+      ? `<div class="meta">No provider remaining sources. ${escapeHtml(noFakeMeter)}</div>`
       : remaining
           .map((entry) => {
             const cls =

@@ -639,6 +639,9 @@ export function usageWebviewHtml(cspSource: string, scriptUri: string): string {
   .usage-totals{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .usage-metric{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:14px;display:grid;gap:4px}
   .usage-metric span,.usage-metric small{color:var(--muted);font-size:12px;line-height:1.4}.usage-metric strong{color:var(--signal);font-size:22px;line-height:1.2}
+  .economics{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:14px;display:grid;gap:10px}
+  .economics p{margin:0;color:var(--muted);line-height:1.45}.economics b{color:var(--signal)}
+  .economics ul{margin:0;padding-left:18px;color:var(--muted);display:grid;gap:6px}.economics li{line-height:1.45}
   .remaining-summary{border-top:1px solid var(--line);padding-top:14px;display:grid;gap:9px}
   .usage-breakdown{border-top:1px solid var(--line);padding-top:14px}.usage-breakdown summary{cursor:pointer;color:var(--ink);font-size:12px;font-weight:700}.usage-breakdown[open] summary{margin-bottom:12px}
   .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:14px}
@@ -660,8 +663,19 @@ export function usageWebviewHtml(cspSource: string, scriptUri: string): string {
   <section class="usage-summary">
     <div class="usage-totals">
       <div class="usage-metric"><span>Used tokens</span><strong id="total-tokens">0</strong><small id="total-calls">0 provider calls from session evidence</small></div>
-      <div class="usage-metric"><span>Cost</span><strong id="total-cost">$0.000000</strong><small id="cost-source">Provider-normalized cost where available</small></div>
+      <div class="usage-metric"><span>Cost</span><strong id="total-cost">not available</strong><small id="cost-source">Provider-normalized cost where available</small></div>
     </div>
+    <section class="economics" aria-label="Honest economics">
+      <div>
+        <h2>Honest Economics</h2>
+        <p><b>BYOK: no markup.</b> Your key, your provider bill, your data, local-first.</p>
+      </div>
+      <ul>
+        <li>Usage is provider/API-sourced and labeled by source.</li>
+        <li>Pending keys and missing provider data stay labeled pending or not available.</li>
+        <li>No fake credit meter, no opaque credits, no invented 0/50 balance.</li>
+      </ul>
+    </section>
     <div class="remaining-summary">
       <h2>Remaining</h2>
       <div id="remaining" class="list"></div>
@@ -754,6 +768,8 @@ export function accountWebviewHtml(
   h2{font-size:12px;letter-spacing:0;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
   .grid{display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:12px}
   .card{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;display:grid;gap:9px;min-width:0}
+  .honest-economics{border-color:rgba(61,224,190,.35)}
+  .honest-economics p{margin:0;color:var(--muted);line-height:1.45}.honest-economics b{color:var(--signal)}
   .kv{display:grid;grid-template-columns:112px 1fr;gap:8px;align-items:start}
   .key{color:var(--muted)}.value{color:var(--ink);overflow-wrap:anywhere}
   .totals{display:grid;grid-template-columns:repeat(4,minmax(90px,1fr));gap:8px}
@@ -811,6 +827,13 @@ export function accountWebviewHtml(
     <h2>Usage</h2>
     <div id="usage" class="totals"></div>
     <div id="usage-source" class="value">N6 session evidence aggregation</div>
+  </section>
+  <section class="card honest-economics" aria-label="Honest economics">
+    <h2>Honest Economics</h2>
+    <p><b>BYOK: no markup.</b> Reef shows provider/API-sourced usage with its source label, leaves unknown values as pending-key or not available, and never fabricates a 0/50 credit meter.</p>
+    <div class="kv"><div class="key">Model bill</div><div class="value">Your key, your provider, no Reef markup.</div></div>
+    <div class="kv"><div class="key">Data posture</div><div class="value">Your data, local-first evidence, store-untrusting verification.</div></div>
+    <div class="kv"><div class="key">Contrast</div><div class="value">An explicit alternative to opaque credit meters.</div></div>
   </section>
   <section id="audit-section" class="card">
     <h2>Team Audit</h2>

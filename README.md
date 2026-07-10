@@ -35,6 +35,25 @@ ships the substrate underneath:
 | A session you trust | A session you can independently verify (and replay-ready) |
 | A fleet of agents you trust | A **Worker Ledger** proving what the fleet did (plan → route → result → acceptance) |
 
+## The wedge: auditability plus honest economics
+
+Reef's product wedge is the trust layer incumbents still mostly render as UI:
+
+- **Audit Pack**: `reef audit-pack` exports the evidence chain, Worker Ledger,
+  replay proof, and SOC 2 Type II / ISO-42001 / EU AI Act control map for a
+  governed run. `reef audit-verify` re-checks the bundle store-untrusting; a
+  one-byte edit to any listed artifact turns verification red.
+- **Governance that can say NO**: denied actions fail closed before execution,
+  and the denial is itself an evidence link. The `reef say-no-demo` command
+  scripts the unreviewed-dangerous-change path offline.
+- **Fleet accountability**: the Manager surface runs multiple governed sessions
+  in parallel and binds them into a Worker Ledger, so "who did what" verifies at
+  both the session and fleet level.
+- **Honest economics**: BYOK means no Reef markup on model usage. Usage is
+  provider/API-sourced and labeled by source; pending keys and missing provider
+  data stay `pending-key` or `not available`. Reef never fabricates a `0/50`
+  credit meter or hides model spend behind opaque credits.
+
 ## Quickstart
 
 The whole workspace — governed backend **and** web UI — in one command:
@@ -57,11 +76,15 @@ node packages/cli/dist/cli.js verify ./.reef/demo
 # Re-verify AND reconstruct the full timeline, byte-for-byte, from the log
 node packages/cli/dist/cli.js replay ./.reef/demo
 
+# Export and verify an audit bundle for the run
+node packages/cli/dist/cli.js audit-pack ./.reef/demo --out ./.reef/demo-audit
+node packages/cli/dist/cli.js audit-verify ./.reef/demo-audit
+
 # Serve the daemon (HTTP + SSE) that the web/IDE surfaces share
 node packages/cli/dist/cli.js serve 4300
 
 # See the gate deny a dangerous action
-node packages/cli/dist/cli.js run "clean up the machine" --demo-denial
+node packages/cli/dist/cli.js say-no-demo --out ./.reef/say-no
 ```
 
 Every run emits a live event stream, then a proof block:
@@ -146,7 +169,8 @@ Reef is driver- and surface-agnostic; the governance lives in one engine
 | **Docker** one-click | `Dockerfile` · `docker-compose.yml` | ✅ |
 | Mobile | — | on hold |
 
-See [docs/CONDUCTOR.md](docs/CONDUCTOR.md) for the conductor,
+See [docs/POSITIONING.md](docs/POSITIONING.md) for the audit wedge and honest
+economics framing, [docs/CONDUCTOR.md](docs/CONDUCTOR.md) for the conductor,
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the stack composes, and
 [docs/DELIVERY-PLAN.md](docs/DELIVERY-PLAN.md) for the full roadmap.
 

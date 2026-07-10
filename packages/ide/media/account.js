@@ -37,6 +37,8 @@ const els = {
 };
 
 let current = undefined;
+const honestEconomicsNote =
+  "BYOK: no markup. Usage is provider/API-sourced, labeled by source, and never a fake credit meter.";
 
 function setStatus(message, tone = "") {
   els.status.className = `status ${tone}`;
@@ -106,7 +108,7 @@ function renderUsage(usage) {
     tile("Cost", formatCost(totals.costUsd));
   text(
     els.usageSource,
-    `N6 session evidence aggregation · generated ${usage?.generatedAt || "unknown"}`,
+    `N6 session evidence aggregation · ${honestEconomicsNote} · generated ${usage?.generatedAt || "unknown"}`,
   );
 }
 
@@ -130,9 +132,9 @@ function renderQuota(data) {
       ? `${formatTokens(quota.remainingTokens)} of ${formatTokens(
           quota.limitTokens,
         )} tokens`
-      : quota.message || "not available",
+      : quota.message || "not available; no fake credit meter",
   );
-  text(els.quotaSource, quota.source || "not available");
+  text(els.quotaSource, quota.source || "not available; provider source missing");
   els.upgrade.hidden =
     data.edition !== "commercial" || !data.plan?.upgradeAvailable;
 }
