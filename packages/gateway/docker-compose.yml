@@ -1,0 +1,34 @@
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: packages/gateway/Dockerfile
+    environment:
+      REEF_GATEWAY_HOST: 0.0.0.0
+      REEF_GATEWAY_PORT: "8787"
+      REEF_GATEWAY_DB_URL: postgres://reef:reef-local@postgres:5432/reef_gateway
+      REEF_GATEWAY_LEDGER_SECRET: ${REEF_GATEWAY_LEDGER_SECRET:?set REEF_GATEWAY_LEDGER_SECRET}
+      REEF_GATEWAY_JWT_SECRET: ${REEF_GATEWAY_JWT_SECRET:?set REEF_GATEWAY_JWT_SECRET}
+      REEF_GATEWAY_ADMIN_TOKEN: ${REEF_GATEWAY_ADMIN_TOKEN:?set REEF_GATEWAY_ADMIN_TOKEN}
+      AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:-}
+      AWS_REGION: ${AWS_REGION:-us-west-2}
+    ports:
+      - "8787:8787"
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: reef_gateway
+      POSTGRES_USER: reef
+      POSTGRES_PASSWORD: reef-local
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reef -d reef_gateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - reef_gateway_pg:/var/lib/postgresql/data
+volumes:
+  reef_gateway_pg:

@@ -1,0 +1,13 @@
+
+> @octopus-reef/gateway@0.1.0 test
+> node --import tsx --test tests/*.test.ts
+
+✔ G0: gateway ledger verifies store-untrusting and turns red after one-byte tamper (32.006833ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 191.480166
