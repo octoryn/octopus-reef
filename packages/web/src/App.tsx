@@ -13,6 +13,8 @@ import type {
 import {
   createSession,
   subscribeEvents,
+  tamperSession,
+  verifySession,
   type ServerEvent,
   type Subscription,
 } from "./api.js";
@@ -39,6 +41,8 @@ export function App(): JSX.Element {
   const [events, setEvents] = useState<ReefEvent[]>([]);
   const [snapshot, setSnapshot] = useState<SessionSnapshot | null>(null);
   const [verify, setVerify] = useState<VerifyResult | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const sub = useRef<Subscription | null>(null);
 
@@ -57,10 +61,13 @@ export function App(): JSX.Element {
     setEvents([]);
     setSnapshot(null);
     setVerify(null);
+    setSessionId(null);
+    setNotice(null);
     setError(null);
     setPhase("running");
     try {
-      const id = await createSession(BASE, task.trim());
+      const id = await createSession(BASE, task.trim(), { persist: true });
+      setSessionId(id);
       sub.current = subscribeEvents(
         BASE,
         id,
@@ -76,6 +83,28 @@ export function App(): JSX.Element {
       setPhase("error");
     }
   }, [task, onFrame]);
+
+  const verifyNow = useCallback(async () => {
+    if (sessionId === null) return;
+    try {
+      const next = await verifySession(BASE, sessionId);
+      setVerify(next);
+      setNotice(next.ok ? "verify green" : "verify red");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [sessionId]);
+
+  const tamperNow = useCallback(async () => {
+    if (sessionId === null) return;
+    try {
+      const result = await tamperSession(BASE, sessionId);
+      setVerify(result.verify);
+      setNotice(`tampered ${result.artifact} at byte ${result.offset}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [sessionId]);
 
   const proven = verify?.ok === true;
 
@@ -112,6 +141,7 @@ export function App(): JSX.Element {
       </section>
 
       {error !== null && <div className="banner error">⨯ {error}</div>}
+      {notice !== null && <div className="banner note">{notice}</div>}
 
       <section className="stream" aria-live="polite">
         {events.length === 0 && phase === "idle" && (
@@ -128,7 +158,14 @@ export function App(): JSX.Element {
       </section>
 
       {snapshot !== null && verify !== null && (
-        <ProofBlock snapshot={snapshot} verify={verify} proven={proven} />
+        <ProofBlock
+          snapshot={snapshot}
+          verify={verify}
+          proven={proven}
+          sessionId={sessionId}
+          onVerify={() => void verifyNow()}
+          onTamper={() => void tamperNow()}
+        />
       )}
     </main>
   );
@@ -155,10 +192,16 @@ function ProofBlock({
   snapshot,
   verify,
   proven,
+  sessionId,
+  onVerify,
+  onTamper,
 }: {
   snapshot: SessionSnapshot;
   verify: VerifyResult;
   proven: boolean;
+  sessionId: string | null;
+  onVerify: () => void;
+  onTamper: () => void;
 }): JSX.Element {
   const checks = useMemo(
     () => [
@@ -183,10 +226,19 @@ function ProofBlock({
         ))}
       </dl>
       <div className="chains">
+        <span>{sessionId ?? snapshot.id}</span>
         <span>{snapshot.workChainLength} work links</span>
         <span>{snapshot.logChainLength} evidence links</span>
         <span>{snapshot.actionsExecuted} executed</span>
         <span>{snapshot.actionsDenied} denied</span>
+      </div>
+      <div className="proof-actions">
+        <button type="button" className="secondary" onClick={onVerify}>
+          verify
+        </button>
+        <button type="button" className="danger" onClick={onTamper}>
+          tamper
+        </button>
       </div>
       <code className="head" title="evidence-log head">
         {snapshot.logHead.slice(0, 24)}…

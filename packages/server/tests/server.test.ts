@@ -280,6 +280,37 @@ test("M3: persisted verify turns red after one evidence-log byte is flipped", as
   }
 });
 
+test("C: persisted session tamper endpoint turns web verification red", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-c-web-tamper-"));
+  const server = new ReefServer({ persistDir: dir });
+  const port = await server.listen(0);
+  try {
+    const created = await request(port, "POST", "/sessions", {
+      task: "C web tamper demo",
+      persist: true,
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.id as string;
+    await collectSSE(port, `/sessions/${id}/events`);
+
+    const before = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(before.status, 200);
+    assert.equal(before.json.ok, true);
+
+    const tampered = await request(port, "POST", `/sessions/${id}/tamper`);
+    assert.equal(tampered.status, 200);
+    assert.equal(tampered.json.tampered, true);
+    assert.equal(tampered.json.artifact, "session.log.jsonl");
+    assert.equal(tampered.json.verify.ok, false);
+
+    const after = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(after.status, 200);
+    assert.equal(after.json.ok, false);
+  } finally {
+    await server.close();
+  }
+});
+
 test("B: Manager spawns two governed sessions and verifies the fleet Worker Ledger", async () => {
   const dir = mkdtempSync(join(tmpdir(), "reef-b-manager-"));
   const server = new ReefServer({ persistDir: dir });

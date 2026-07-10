@@ -211,6 +211,13 @@ export interface SessionView {
   readonly events: number;
 }
 
+export interface TamperSessionResponse {
+  readonly tampered: true;
+  readonly artifact: "session.log.jsonl";
+  readonly offset: number;
+  readonly verify: VerifyResult;
+}
+
 export type ManagerFleetStatus = "running" | "sealed";
 
 export interface CreateManagerFleetRequest {

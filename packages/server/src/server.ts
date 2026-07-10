@@ -1434,6 +1434,9 @@ export class ReefServer {
       if (method === "GET" && parts.length === 3 && parts[2] === "verify") {
         return this.#verify(res, rec);
       }
+      if (method === "POST" && parts.length === 3 && parts[2] === "tamper") {
+        return this.#tamperSession(res, rec);
+      }
     }
     // Non-API GETs fall through to the static SPA, when one is configured.
     if (method === "GET" && this.#options.staticDir !== undefined) {
@@ -2239,6 +2242,36 @@ export class ReefServer {
       return;
     }
     this.#json(res, 200, this.#verifySessionRecord(rec));
+  }
+
+  #tamperSession(res: ServerResponse, rec: SessionRecord): void {
+    if (rec.status !== "sealed") {
+      this.#fail(res, 409, "session has not sealed yet");
+      return;
+    }
+    if (this.#options.persistDir === undefined) {
+      this.#fail(res, 409, "session tamper demo requires persisted sessions");
+      return;
+    }
+    const logPath = join(this.#options.persistDir, rec.id, "session.log.jsonl");
+    if (!existsSync(logPath)) {
+      this.#fail(res, 404, "persisted session log not found");
+      return;
+    }
+    const raw = readFileSync(logPath);
+    const offset = raw.findIndex((byte) => byte !== 0x0a && byte !== 0x0d);
+    if (offset < 0) {
+      this.#fail(res, 500, "persisted session log was empty");
+      return;
+    }
+    raw[offset] = raw[offset] === 0x61 ? 0x62 : 0x61;
+    writeFileSync(logPath, raw);
+    this.#json(res, 200, {
+      tampered: true,
+      artifact: "session.log.jsonl",
+      offset,
+      verify: this.#verifySessionRecord(rec),
+    });
   }
 
   #verifySessionRecord(rec: SessionRecord): VerifyResult {
