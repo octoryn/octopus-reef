@@ -103,30 +103,33 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
   .approval{display:flex;align-items:center;gap:8px;color:var(--muted)}
   .approval-card{width:min(680px,100%);justify-self:end;border:1px solid rgba(255,209,102,.42);border-radius:8px;background:#19150a;padding:12px 14px;display:grid;gap:10px;color:#f3df9f}
   .approval-card button{width:max-content;border-radius:7px;background:var(--warn);color:#1b1300;font-weight:800;padding:7px 11px}
-  .composer{border-top:1px solid var(--line);background:#0a0f16;padding:14px 18px}
+  .composer{border-top:1px solid var(--line);background:#0a0f16;padding:12px 18px}
   .composer-shell{width:min(920px,100%);margin:0 auto;position:relative}
-  .composer form{width:min(920px,100%);margin:0 auto;display:grid;grid-template-columns:auto auto 1fr auto auto auto;gap:9px;align-items:center;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:9px}
-  .picker{position:absolute;left:0;right:0;bottom:64px;z-index:10;border:1px solid rgba(51,230,192,.34);border-radius:8px;background:#0b1118;box-shadow:0 18px 40px rgba(0,0,0,.45);padding:6px;display:grid;gap:4px;max-height:260px;overflow:auto}
+  .composer form{width:100%;margin:0;display:grid;gap:8px;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:10px}
+  .picker{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:10;border:1px solid rgba(51,230,192,.34);border-radius:8px;background:#0b1118;box-shadow:0 18px 40px rgba(0,0,0,.45);padding:6px;display:grid;gap:4px;max-height:260px;overflow:auto}
   .picker button{width:100%;display:grid;grid-template-columns:108px 1fr auto;gap:10px;align-items:center;text-align:left;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--ink);padding:8px 9px}
   .picker button:hover,.picker button.active{background:#111923;border-color:var(--line2)}
   .picker .token{font-family:var(--mono);color:var(--signal);font-size:12px}
   .picker .label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:760}
   .picker .meta{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  textarea{min-width:0;width:100%;height:40px;max-height:130px;resize:none;background:transparent;border:0;color:var(--ink);outline:none;padding:10px 4px;line-height:1.35}
+  textarea{min-width:0;width:100%;height:42px;min-height:42px;max-height:132px;resize:none;overflow-y:hidden;background:transparent;border:0;color:var(--ink);outline:none;padding:8px 4px;line-height:1.4}
   textarea::placeholder{color:#65717e}
-  .model{border:1px solid var(--line);border-radius:999px;color:#c4d0da;background:#101720;padding:7px 10px;font-family:var(--mono);font-size:11px;white-space:nowrap}
-  .toggle{display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;background:#101720;color:var(--muted);padding:5px 8px;font-family:var(--mono);font-size:11px}
-  .switch{width:28px;height:16px;border-radius:999px;background:#26303b;position:relative}
-  .switch::after{content:"";position:absolute;width:12px;height:12px;border-radius:50%;left:2px;top:2px;background:#8793a0;transition:transform .15s,background .15s}
+  .composer-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+  .composer-affordances,.composer-controls{display:flex;align-items:center;gap:7px;min-width:0}
+  .composer .icon-btn{width:30px;height:30px;border-radius:7px}
+  .model{min-width:0;max-width:150px;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--line);border-radius:999px;color:#c4d0da;background:#101720;padding:5px 8px;font-family:var(--mono);font-size:10px;white-space:nowrap}
+  .toggle{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;background:#101720;color:var(--muted);padding:4px 7px;font-family:var(--mono);font-size:10px;white-space:nowrap}
+  .switch{width:24px;height:14px;border-radius:999px;background:#26303b;position:relative;flex:none}
+  .switch::after{content:"";position:absolute;width:10px;height:10px;border-radius:50%;left:2px;top:2px;background:#8793a0;transition:transform .15s,background .15s}
   .toggle.on{color:var(--signal);border-color:rgba(51,230,192,.45)}
-  .toggle.on .switch::after{transform:translateX(12px);background:var(--signal)}
-  .send{width:38px;height:38px;border-radius:10px;background:var(--signal);color:#021411;font-size:19px;font-weight:900;display:grid;place-items:center}
+  .toggle.on .switch::after{transform:translateX(10px);background:var(--signal)}
+  .send{width:30px;height:30px;flex:none;border-radius:7px;background:var(--signal);color:#021411;font-size:17px;font-weight:900;display:grid;place-items:center}
   .send:disabled{background:#23313a;color:#71808d}
   .usage{width:min(920px,100%);margin:9px auto 0;display:grid;grid-template-columns:110px 120px minmax(220px,1fr) minmax(260px,1fr);gap:8px;color:var(--muted)}
   .usage div{border:1px solid var(--line);border-radius:8px;background:#0b1118;padding:8px;min-width:0}
   .usage b{display:block;color:var(--signal);font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis}
   .usage span{display:block;margin-top:2px;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  @media (max-width:760px){h1{font-size:34px}.turn-body{grid-template-columns:1fr}.composer form{grid-template-columns:auto auto 1fr auto}.model,.toggle{grid-column:1 / -1;width:max-content}.usage{grid-template-columns:1fr 1fr}.evidence{grid-template-columns:28px 56px 1fr}.evidence span:last-child{display:none}}
+  @media (max-width:760px){h1{font-size:34px}.turn-body{grid-template-columns:1fr}.composer{padding:10px 12px}.composer-toolbar{gap:7px}.composer-affordances,.composer-controls{gap:5px}.model{max-width:104px}.usage{grid-template-columns:1fr 1fr}.evidence{grid-template-columns:28px 56px 1fr}.evidence span:last-child{display:none}}
   @media (max-height:820px){.empty{padding-top:24px}.empty-inner{padding-top:48px}.logo{width:74px;height:74px;margin-bottom:16px}.subtitle{margin-bottom:18px}.shortcuts{gap:8px}.shortcut{padding:10px 12px}.diffline{margin-top:15px}}
 </style>
 </head>
@@ -173,13 +176,19 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
   <footer class="composer">
     <div class="composer-shell">
       <div id="affordance-picker" class="picker hidden"></div>
-      <form id="chat">
-        <button id="hash" class="icon-btn" type="button" title="Reference task">#</button>
-        <button id="attach" class="icon-btn" type="button" title="Attach">&#8679;</button>
+      <form id="chat" class="composer-card">
         <textarea id="chat-input" spellcheck="false" placeholder="Ask a question or describe a task..."></textarea>
-        <div id="model-chip" class="model">Mock · Offline</div>
-        <button id="autopilot" class="toggle" type="button" aria-pressed="false"><span class="switch"></span><span>Autopilot</span></button>
-        <button id="chat-submit" class="send" type="submit" title="Send">&rsaquo;</button>
+        <div class="composer-toolbar">
+          <div class="composer-affordances">
+            <button id="hash" class="icon-btn" type="button" title="Reference task">#</button>
+            <button id="attach" class="icon-btn" type="button" title="Attach">&#8679;</button>
+          </div>
+          <div class="composer-controls">
+            <div id="model-chip" class="model">Mock · Offline</div>
+            <button id="autopilot" class="toggle" type="button" aria-pressed="false"><span class="switch"></span><span>Autopilot</span></button>
+            <button id="chat-submit" class="send" type="submit" title="Send">&rsaquo;</button>
+          </div>
+        </div>
       </form>
     </div>
     <div id="usage" class="usage">

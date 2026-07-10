@@ -122,6 +122,7 @@ function setEmpty() {
   nextTurn = 1;
   legacyTurnId = "";
   input.value = "";
+  resizeComposerInput();
   setBusy(false);
 }
 
@@ -438,8 +439,16 @@ function updateAutopilot() {
   autopilotButton.setAttribute("aria-pressed", String(autopilot));
 }
 
+function resizeComposerInput() {
+  const maxHeight = 132;
+  input.style.height = "auto";
+  input.style.height = `${Math.min(input.scrollHeight, maxHeight)}px`;
+  input.style.overflowY = input.scrollHeight > maxHeight ? "auto" : "hidden";
+}
+
 function insertPrompt(prefix) {
   input.value = prefix;
+  resizeComposerInput();
   input.focus();
   updatePicker();
 }
@@ -545,6 +554,7 @@ function choosePickerItem(index) {
   const after = input.value.slice(activePicker.end);
   const needsSpace = after.length === 0 || !after.startsWith(" ");
   input.value = `${before}${token}${needsSpace ? " " : ""}${after}`;
+  resizeComposerInput();
   const caret = before.length + token.length + (needsSpace ? 1 : 0);
   input.setSelectionRange(caret, caret);
   input.focus();
@@ -563,6 +573,7 @@ form.addEventListener("submit", (event) => {
   const task = input.value.trim();
   if (!task) return;
   input.value = "";
+  resizeComposerInput();
   addUserMessage(task);
   if (autopilot) {
     const turnId = `turn-${Date.now().toString(36)}-${nextTurn}`;
@@ -604,7 +615,10 @@ input.addEventListener("keydown", (event) => {
   }
 });
 
-input.addEventListener("input", () => updatePicker());
+input.addEventListener("input", () => {
+  resizeComposerInput();
+  updatePicker();
+});
 input.addEventListener("click", () => updatePicker());
 
 autopilotButton.addEventListener("click", () => {
@@ -736,5 +750,6 @@ window.addEventListener("message", (message) => {
 });
 
 updateAutopilot();
+resizeComposerInput();
 renderUsage(zeroUsage());
 vscode.postMessage({ kind: "chatReady" });

@@ -132,6 +132,29 @@ test("layout: docked session header controls are handled by the extension host",
   assert.match(sessionScript, /kind: "showSessionMenu"/);
 });
 
+test("layout: chat composer is a compact card with an autosizing input", () => {
+  const webviewSource = readFileSync(
+    path.join(ideRoot, "src", "webview.ts"),
+    "utf8",
+  );
+  assert.match(webviewSource, /<form id="chat" class="composer-card">/);
+  assert.match(webviewSource, /<textarea id="chat-input"[\s\S]*?<div class="composer-toolbar">/);
+  assert.match(webviewSource, /class="composer-affordances"[\s\S]*?id="hash"[\s\S]*?id="attach"/);
+  assert.match(webviewSource, /class="composer-controls"[\s\S]*?id="model-chip"[\s\S]*?id="autopilot"[\s\S]*?id="chat-submit"/);
+  assert.match(webviewSource, /\.picker\{[^}]*bottom:calc\(100% \+ 8px\)/);
+  assert.match(webviewSource, /textarea\{[^}]*max-height:132px[^}]*overflow-y:hidden/);
+
+  const sessionScript = readFileSync(
+    path.join(ideRoot, "media", "webview.js"),
+    "utf8",
+  );
+  assert.match(sessionScript, /function resizeComposerInput\(\)/);
+  assert.match(sessionScript, /input\.style\.height = `\$\{Math\.min\(input\.scrollHeight, maxHeight\)\}px`/);
+  assert.match(sessionScript, /input\.addEventListener\("input", \(\) => \{\s+resizeComposerInput\(\);\s+updatePicker\(\);\s+\}\)/);
+  assert.match(sessionScript, /input\.value = "";\s+resizeComposerInput\(\);\s+addUserMessage\(task\);/);
+  assert.match(sessionScript, /function insertPrompt\(prefix\) \{\s+input\.value = prefix;\s+resizeComposerInput\(\);/);
+});
+
 test("layout: left Reef panels use the shared polish and Usage keeps sourced values", () => {
   const webviewSource = readFileSync(
     path.join(ideRoot, "src", "webview.ts"),
