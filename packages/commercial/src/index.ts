@@ -37,11 +37,37 @@ export interface GatewayQuotaDecision {
   readonly reason: string;
 }
 
+export type PriorityModelTier = "standard" | "priority";
+
+export interface GatewayPriorityTierDecision {
+  readonly tier: PriorityModelTier;
+  readonly queue: "standard" | "priority";
+  readonly model: string;
+  readonly source: "commercial-priority-config";
+  readonly message: string;
+}
+
+export interface StubGatewayPlanTier {
+  readonly id: PriorityModelTier;
+  readonly label: string;
+  readonly queue: "standard" | "priority";
+  readonly model: string;
+}
+
+export interface StubGatewayPriorityPlan {
+  readonly planId: string;
+  readonly selectedTier: PriorityModelTier;
+  readonly source: string;
+  readonly serviceLevel: string;
+  readonly tiers: readonly StubGatewayPlanTier[];
+}
+
 export interface GatewayRouteDecision {
   readonly provider: "gateway";
   readonly gatewayUrl: string;
   readonly route: string;
   readonly model: string;
+  readonly priority: GatewayPriorityTierDecision;
   readonly licenseSha256: string;
 }
 
@@ -49,6 +75,7 @@ export interface GatewayProviderOptions {
   readonly gatewayUrl: string;
   readonly licenseToken: string;
   readonly model?: string;
+  readonly priorityTier?: PriorityModelTier;
   readonly fetchImpl?: typeof fetch;
 }
 
@@ -57,12 +84,14 @@ export class GatewayProvider {
   readonly #gatewayUrl: string;
   readonly #licenseToken: string;
   readonly #model: string;
+  readonly #priorityTier: PriorityModelTier;
   readonly #fetch: typeof fetch;
 
   constructor(options: GatewayProviderOptions) {
     this.#gatewayUrl = trimTrailingSlash(options.gatewayUrl);
     this.#licenseToken = options.licenseToken;
-    this.#model = options.model ?? "reef-gateway-stub";
+    this.#priorityTier = priorityModelTier(options.priorityTier);
+    this.#model = options.model ?? priorityTierModel(this.#priorityTier);
     this.#fetch = options.fetchImpl ?? fetch;
   }
 
@@ -78,6 +107,7 @@ export class GatewayProvider {
       },
       body: JSON.stringify({
         model: this.#model,
+        priorityTier: this.#priorityTier,
         request,
       }),
     });
@@ -179,15 +209,75 @@ export function gatewayQuotaDecision(options: {
 export function gatewayRouteDecision(options: {
   readonly gatewayUrl: string;
   readonly model?: string;
+  readonly priorityTier?: PriorityModelTier;
   readonly licenseToken: string;
 }): GatewayRouteDecision {
+  const priority = gatewayPriorityTierDecision({
+    ...(options.priorityTier !== undefined
+      ? { priorityTier: options.priorityTier }
+      : {}),
+    ...(options.model !== undefined ? { model: options.model } : {}),
+  });
   return {
     provider: "gateway",
     gatewayUrl: trimTrailingSlash(options.gatewayUrl),
     route: "/v1/completions",
-    model: options.model ?? "reef-gateway-stub",
+    model: priority.model,
+    priority,
     licenseSha256: sha256(options.licenseToken),
   };
+}
+
+/** Normalizes the only two commercial routing tiers accepted by the local stub. */
+export function priorityModelTier(value: unknown): PriorityModelTier {
+  return value === "priority" ? "priority" : "standard";
+}
+
+export function priorityTierModel(tier: PriorityModelTier): string {
+  return tier === "priority"
+    ? "reef-gateway-priority-stub"
+    : "reef-gateway-stub";
+}
+
+export function gatewayPriorityTierDecision(options: {
+  readonly priorityTier?: PriorityModelTier;
+  readonly model?: string;
+}): GatewayPriorityTierDecision {
+  const tier = priorityModelTier(options.priorityTier);
+  return {
+    tier,
+    queue: tier === "priority" ? "priority" : "standard",
+    model: options.model ?? priorityTierModel(tier),
+    source: "commercial-priority-config",
+    message:
+      tier === "priority"
+        ? "Priority routing was selected from the commercial local configuration."
+        : "Standard routing was selected from the commercial local configuration.",
+  };
+}
+
+/** Reads plan/tier text from the local stub instead of inventing an SLA in UI. */
+export async function readStubGatewayPriorityPlan(options: {
+  readonly gatewayUrl: string;
+  readonly licenseToken: string;
+  readonly priorityTier?: PriorityModelTier;
+  readonly fetchImpl?: typeof fetch;
+}): Promise<StubGatewayPriorityPlan> {
+  const tier = priorityModelTier(options.priorityTier);
+  const url = new URL("/v1/plan", trimTrailingSlash(options.gatewayUrl));
+  url.searchParams.set("tier", tier);
+  const res = await (options.fetchImpl ?? fetch)(url, {
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${options.licenseToken}`,
+    },
+  });
+  if (!res.ok) {
+    throw new ProviderError(
+      `priority plan source returned ${res.status} ${res.statusText}`,
+    );
+  }
+  return parseStubGatewayPriorityPlan(await res.json());
 }
 
 export function commercialSurfaceStatus(
@@ -284,6 +374,53 @@ function sha256(value: string): string {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function parseStubGatewayPriorityPlan(value: unknown): StubGatewayPriorityPlan {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ProviderError("priority plan source returned an invalid response");
+  }
+  const candidate = value as Record<string, unknown>;
+  const planId = cleanString(candidate.planId);
+  const source = cleanString(candidate.source);
+  const serviceLevel = cleanString(candidate.serviceLevel);
+  const tiers = Array.isArray(candidate.tiers)
+    ? candidate.tiers.flatMap((entry) => parseStubGatewayPlanTier(entry))
+    : [];
+  if (
+    planId === undefined ||
+    source === undefined ||
+    serviceLevel === undefined ||
+    tiers.length !== 2
+  ) {
+    throw new ProviderError("priority plan source omitted required tier metadata");
+  }
+  return {
+    planId,
+    selectedTier: priorityModelTier(candidate.selectedTier),
+    source,
+    serviceLevel,
+    tiers,
+  };
+}
+
+function parseStubGatewayPlanTier(value: unknown): StubGatewayPlanTier[] {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+  const candidate = value as Record<string, unknown>;
+  const id = priorityModelTier(candidate.id);
+  const label = cleanString(candidate.label);
+  const model = cleanString(candidate.model);
+  const queue = candidate.queue === "priority" ? "priority" : "standard";
+  if (label === undefined || model === undefined || candidate.id !== id) return [];
+  return [{ id, label, queue, model }];
+}
+
+function cleanString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== ""
+    ? value.trim()
+    : undefined;
 }
 
 function escapeHtml(value: string): string {

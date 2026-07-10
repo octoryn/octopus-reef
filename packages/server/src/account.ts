@@ -4,7 +4,10 @@ import { dirname, join } from "node:path";
 import {
   gatewayEntitlementDecision,
   inProcessStubIdentity,
+  priorityModelTier,
+  readStubGatewayPriorityPlan,
   signInWithStubOidc,
+  type PriorityModelTier,
   type StubOidcIdentity,
 } from "@octopus-reef/commercial";
 import type { Driver, DriverContext, DriverStep } from "@octopus-reef/engine";
@@ -32,6 +35,7 @@ export interface AccountSnapshotRequest {
   readonly source?: string;
   readonly gatewayUrl?: string;
   readonly ssoUrl?: string;
+  readonly priorityTier?: PriorityModelTier;
 }
 
 export class AccountStore {
@@ -182,6 +186,11 @@ export class AccountPlanDriver implements Driver {
       data: { planQuota: plan.plan.quota, plan: plan.plan.name },
     };
     yield {
+      type: "observe",
+      summary: `priority model tier: ${plan.priority.selectedTier}`,
+      data: { priorityTierDecision: plan.priority },
+    };
+    yield {
       type: "done",
       summary: `account plan snapshot sealed for ${plan.edition}`,
     };
@@ -214,6 +223,12 @@ export async function accountPlan(options: {
             : {}),
         })
       : communityQuota();
+  const priority = await priorityPlan({
+    edition: options.edition,
+    ...(options.account !== undefined ? { account: options.account } : {}),
+    ...(options.request !== undefined ? { request: options.request } : {}),
+    ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
+  });
   return {
     generatedAt: (options.now ?? (() => new Date().toISOString()))(),
     edition: options.edition,
@@ -239,6 +254,7 @@ export async function accountPlan(options: {
       upgradeAvailable: options.edition === "commercial",
       quota,
     },
+    priority,
   };
 }
 
@@ -393,6 +409,77 @@ function communityQuota(): AccountQuotaView {
     message:
       "Community uses your own BYOK provider usage. Reef plan credits are not shown.",
   };
+}
+
+async function priorityPlan(options: {
+  readonly edition: ReefEdition;
+  readonly account?: StoredAccount;
+  readonly request?: AccountSnapshotRequest;
+  readonly fetchImpl?: typeof fetch;
+}): Promise<AccountPlanResponse["priority"]> {
+  const selectedTier = priorityModelTier(options.request?.priorityTier);
+  if (options.edition === "community") {
+    return {
+      gated: true,
+      available: false,
+      selectedTier,
+      source: "community-edition",
+      serviceLevel: "Community does not include commercial priority routing.",
+      message: "Priority model selection is commercial-only.",
+      tiers: [],
+    };
+  }
+  if (options.account === undefined) {
+    return {
+      gated: true,
+      available: false,
+      selectedTier,
+      source: "local-stub-account",
+      serviceLevel: "Sign in to read the local commercial plan source.",
+      message: "Sign in to the local Octopus stub account before selecting a tier.",
+      tiers: [],
+    };
+  }
+  const gatewayUrl =
+    clean(options.request?.gatewayUrl) ?? clean(process.env.REEF_GATEWAY_URL);
+  if (gatewayUrl === undefined) {
+    return {
+      gated: true,
+      available: false,
+      selectedTier,
+      source: "REEF_GATEWAY_URL",
+      serviceLevel: "No plan source is configured, so Reef does not claim an SLA.",
+      message: "Configure the local stub gateway to read priority tiers.",
+      tiers: [],
+    };
+  }
+  try {
+    const plan = await readStubGatewayPriorityPlan({
+      gatewayUrl,
+      licenseToken: options.account.licenseToken,
+      priorityTier: selectedTier,
+      ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
+    });
+    return {
+      gated: false,
+      available: true,
+      selectedTier: plan.selectedTier,
+      source: plan.source,
+      serviceLevel: plan.serviceLevel,
+      message: "Tier and service-level text were read from the local stub gateway.",
+      tiers: plan.tiers,
+    };
+  } catch (err) {
+    return {
+      gated: true,
+      available: false,
+      selectedTier,
+      source: "local-stub-gateway /v1/plan",
+      serviceLevel: "The local plan source was unavailable; Reef does not claim an SLA.",
+      message: err instanceof Error ? err.message : String(err),
+      tiers: [],
+    };
+  }
 }
 
 async function commercialQuota(options: {

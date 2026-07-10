@@ -185,6 +185,7 @@ export interface CreateSessionRequest {
     readonly source?: string;
     readonly gatewayUrl?: string;
     readonly ssoUrl?: string;
+    readonly priorityTier?: "standard" | "priority";
   };
 }
 
@@ -468,6 +469,25 @@ export interface AccountQuotaView {
   readonly resetAt?: string;
 }
 
+export type PriorityModelTier = "standard" | "priority";
+
+export interface AccountPriorityTierView {
+  readonly id: PriorityModelTier;
+  readonly label: string;
+  readonly queue: "standard" | "priority";
+  readonly model: string;
+}
+
+export interface AccountPriorityView {
+  readonly gated: boolean;
+  readonly available: boolean;
+  readonly selectedTier: PriorityModelTier;
+  readonly source: string;
+  readonly serviceLevel: string;
+  readonly message: string;
+  readonly tiers: readonly AccountPriorityTierView[];
+}
+
 export interface AccountPlanResponse {
   readonly generatedAt: string;
   readonly edition: ReefEdition;
@@ -483,6 +503,8 @@ export interface AccountPlanResponse {
     readonly upgradeAvailable: boolean;
     readonly quota: AccountQuotaView;
   };
+  /** Commercial priority routing and its explicitly sourced local-stub plan text. */
+  readonly priority: AccountPriorityView;
   /** The governed session created by a local stub-SSO sign-in, when applicable. */
   readonly evidenceSessionId?: string;
 }

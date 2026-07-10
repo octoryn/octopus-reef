@@ -23,6 +23,12 @@ const els = {
   teamSource: document.getElementById("team-source"),
   auditSource: document.getElementById("audit-source"),
   auditList: document.getElementById("audit-list"),
+  prioritySection: document.getElementById("priority-section"),
+  priorityPill: document.getElementById("priority-pill"),
+  priorityTier: document.getElementById("priority-tier"),
+  priorityRoute: document.getElementById("priority-route"),
+  prioritySla: document.getElementById("priority-sla"),
+  prioritySource: document.getElementById("priority-source"),
   status: document.getElementById("status"),
   signin: document.getElementById("signin"),
   signout: document.getElementById("signout"),
@@ -185,6 +191,40 @@ function renderAudit(audit) {
     .join("");
 }
 
+function renderPriority(data) {
+  const commercial = data.edition === "commercial";
+  els.prioritySection.hidden = !commercial;
+  if (!commercial) return;
+  const priority = data.priority || {};
+  const selectedTier = priority.selectedTier === "priority" ? "priority" : "standard";
+  const tiers = Array.isArray(priority.tiers) ? priority.tiers : [];
+  const selected = tiers.find((tier) => tier.id === selectedTier);
+  els.priorityTier.innerHTML = tiers
+    .map(
+      (tier) =>
+        `<option value="${escapeHtml(tier.id)}">${escapeHtml(tier.label)} · ${escapeHtml(tier.queue)} queue</option>`,
+    )
+    .join("");
+  if (tiers.length === 0) {
+    els.priorityTier.innerHTML = `<option value="${selectedTier}">${escapeHtml(selectedTier)} · gated</option>`;
+  }
+  els.priorityTier.value = selectedTier;
+  els.priorityTier.disabled = priority.gated || !priority.available;
+  setPill(
+    els.priorityPill,
+    priority.available ? selectedTier : "gated",
+    priority.available ? "ok" : "warn",
+  );
+  text(
+    els.priorityRoute,
+    selected
+      ? `${selected.model} · ${selected.queue} queue`
+      : priority.message || "not available",
+  );
+  text(els.prioritySla, priority.serviceLevel || "not available");
+  text(els.prioritySource, priority.source || "not available");
+}
+
 function render(data) {
   current = data;
   setPill(
@@ -221,6 +261,7 @@ function render(data) {
   renderUsage(data.usage);
   renderQuota(data);
   renderTeam(data);
+  renderPriority(data);
   setStatus(`Account refreshed ${data.generatedAt || ""}`, "ok");
 }
 
@@ -242,6 +283,14 @@ els.signin.addEventListener("click", () => {
 els.signout.addEventListener("click", () => {
   setStatus("Signing out...", "warn");
   vscode.postMessage({ kind: "signOutAccount" });
+});
+
+els.priorityTier.addEventListener("change", () => {
+  const tier = els.priorityTier.value;
+  if (tier === "standard" || tier === "priority") {
+    setStatus("Saving priority tier...", "warn");
+    vscode.postMessage({ kind: "setPriorityTier", tier });
+  }
 });
 
 els.copy.addEventListener("click", () => {

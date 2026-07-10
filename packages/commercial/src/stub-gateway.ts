@@ -1,6 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { BedrockProvider, type CompletionRequest } from "@octopus-reef/agent";
-import { TEST_GATEWAY_LICENSE_TOKEN } from "./index.js";
+import {
+  TEST_GATEWAY_LICENSE_TOKEN,
+  priorityModelTier,
+  priorityTierModel,
+  type PriorityModelTier,
+} from "./index.js";
 
 export interface StubGatewayOptions {
   readonly licenseToken?: string;
@@ -9,6 +14,7 @@ export interface StubGatewayOptions {
   readonly region?: string;
   readonly quotaLimitTokens?: number;
   readonly initialUsedTokens?: number;
+  readonly priorityTier?: PriorityModelTier;
 }
 
 export interface StubGateway {
@@ -79,6 +85,34 @@ async function handle(
       source: "local-stub-gateway /v1/quota token ledger",
     });
   }
+  if (req.method === "GET" && url.pathname === "/v1/plan") {
+    if (!authorized(req, options.licenseToken)) {
+      return json(res, 403, { error: "invalid Reef test license" });
+    }
+    const selectedTier = priorityModelTier(
+      url.searchParams.get("tier") ?? options.priorityTier,
+    );
+    return json(res, 200, {
+      planId: "reef-commercial-priority-stub",
+      selectedTier,
+      source: "local-stub-gateway /v1/plan",
+      serviceLevel: "Offline local stub plan; no production SLA is asserted.",
+      tiers: [
+        {
+          id: "standard",
+          label: "Standard gateway",
+          queue: "standard",
+          model: priorityTierModel("standard"),
+        },
+        {
+          id: "priority",
+          label: "Priority gateway",
+          queue: "priority",
+          model: priorityTierModel("priority"),
+        },
+      ],
+    });
+  }
   if (req.method !== "POST" || url.pathname !== "/v1/completions") {
     return json(res, 404, { error: "not found" });
   }
@@ -87,12 +121,14 @@ async function handle(
   }
   const body = (await readJson(req)) as {
     readonly model?: unknown;
+    readonly priorityTier?: unknown;
     readonly request?: unknown;
   };
   const request = body.request as CompletionRequest | undefined;
   if (request === undefined || typeof request !== "object") {
     return json(res, 400, { error: "request is required" });
   }
+  const priorityTier = priorityModelTier(body.priorityTier ?? options.priorityTier);
 
   const bedrockToken = options.bedrockToken ?? process.env.AWS_BEARER_TOKEN_BEDROCK;
   if (bedrockToken !== undefined && bedrockToken.trim() !== "") {
@@ -118,7 +154,10 @@ async function handle(
     stopReason: "tool_use",
     usage: {
       provider: "reef-gateway",
-      model: typeof body.model === "string" ? body.model : "reef-gateway-stub",
+      model:
+        typeof body.model === "string"
+          ? body.model
+          : priorityTierModel(priorityTier),
       inputTokens: 17,
       outputTokens: 19,
       totalTokens: 36,

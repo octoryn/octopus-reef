@@ -77,6 +77,7 @@ export interface CreateSessionOptions {
     readonly name?: string;
     readonly licenseToken?: string;
     readonly gatewayUrl?: string;
+    readonly priorityTier?: "standard" | "priority";
   };
   readonly mcp?: {
     readonly serverId?: string;
@@ -321,6 +322,7 @@ export interface AccountQuery {
   readonly source?: string;
   readonly gatewayUrl?: string;
   readonly ssoUrl?: string;
+  readonly priorityTier?: "standard" | "priority";
 }
 
 function accountUrl(

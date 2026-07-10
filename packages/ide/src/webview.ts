@@ -703,9 +703,9 @@ export function accountWebviewHtml(
   .tile .key{font-size:11px}.tile .value{font-size:16px;margin-top:4px;color:var(--signal)}
   .pill{border:1px solid var(--line);border-radius:999px;padding:3px 8px;color:var(--muted);white-space:nowrap;width:max-content}
   .pill.ok{color:var(--signal);border-color:rgba(61,224,190,.55)}.pill.warn{color:var(--warn);border-color:rgba(255,209,102,.55)}.pill.bad{color:var(--danger);border-color:rgba(255,107,107,.55)}
-  button{background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;font-weight:700;padding:7px 10px}
+  button,select{background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;font-weight:700;padding:7px 10px}
   button.primary{background:var(--signal);border-color:var(--signal);color:#001714}
-  button:disabled{opacity:.55}
+  button:disabled,select:disabled{opacity:.55}
   .status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
   .status.ok{border-color:var(--signal);color:var(--signal)}.status.bad{border-color:var(--danger);color:var(--danger)}.status.warn{border-color:var(--warn);color:var(--warn)}
   .audit-list{display:grid;gap:8px}.audit-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:start;border:1px solid var(--line);border-radius:6px;background:#0b1719;padding:9px}.audit-row b{display:block;color:var(--ink)}.audit-row .meta{color:var(--muted);font-size:11px;margin-top:3px;overflow-wrap:anywhere}
@@ -758,6 +758,14 @@ export function accountWebviewHtml(
     <h2>Team Audit</h2>
     <div id="audit-source" class="value">loading</div>
     <div id="audit-list" class="audit-list"></div>
+  </section>
+  <section id="priority-section" class="card">
+    <h2>Priority Model</h2>
+    <div id="priority-pill" class="pill">loading</div>
+    <div class="kv"><div class="key">Tier</div><select id="priority-tier" aria-label="Priority model tier"></select></div>
+    <div class="kv"><div class="key">Route</div><div id="priority-route" class="value">loading</div></div>
+    <div class="kv"><div class="key">Service Level</div><div id="priority-sla" class="value">loading</div></div>
+    <div class="kv"><div class="key">Source</div><div id="priority-source" class="value">loading</div></div>
   </section>
   <section class="card">
     <h2>Plan Quota</h2>

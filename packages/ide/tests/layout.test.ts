@@ -111,6 +111,30 @@ test("layout: commercial Account & Plan includes its gated team SSO and evidence
   );
 });
 
+test("layout: commercial Account & Plan exposes a gated priority model selector", () => {
+  const webviewSource = readFileSync(
+    path.join(ideRoot, "src", "webview.ts"),
+    "utf8",
+  );
+  assert.match(webviewSource, /id="priority-section"/);
+  assert.match(webviewSource, /Priority Model/);
+  assert.match(webviewSource, /id="priority-tier"/);
+
+  const accountScript = readFileSync(
+    path.join(ideRoot, "media", "account.js"),
+    "utf8",
+  );
+  assert.match(accountScript, /kind: "setPriorityTier"/);
+  assert.match(accountScript, /priority\.gated \|\| !priority\.available/);
+
+  const pkg = readJson("package.json");
+  assert.deepEqual(
+    pkg.contributes?.configuration?.properties?.["reef.priority.modelTier"]
+      ?.enum,
+    ["standard", "priority"],
+  );
+});
+
 test("layout: Reef suppresses stock startup welcome and avoids beside editor reveals", () => {
   const pkg = readJson("package.json");
   assert.equal(

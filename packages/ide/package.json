@@ -285,6 +285,15 @@
           "type": "string",
           "default": "",
           "description": "Optional model name override for the configured provider."
+        },
+        "reef.priority.modelTier": {
+          "type": "string",
+          "enum": [
+            "standard",
+            "priority"
+          ],
+          "default": "standard",
+          "description": "Commercial gateway routing tier. Priority is recorded in governed gateway evidence."
         }
       }
     },

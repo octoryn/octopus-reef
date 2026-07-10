@@ -80,6 +80,7 @@ import {
 type SessionEvent = Extract<ServerEvent, { type: "event" }>["event"];
 type SealedEvent = Extract<ServerEvent, { type: "sealed" }>;
 type VerifyResult = SealedEvent["verify"];
+type PriorityModelTier = "standard" | "priority";
 
 interface GitHubRelease {
   tag_name?: string;
@@ -180,6 +181,7 @@ interface WebviewMessage {
   readonly url?: string;
   readonly selector?: string;
   readonly note?: string;
+  readonly tier?: string;
   readonly bbox?: {
     readonly x?: number;
     readonly y?: number;
@@ -323,23 +325,41 @@ function firstWorkspaceRoot(): string | undefined {
   return folder?.uri.fsPath;
 }
 
+function priorityModelTierSetting(): PriorityModelTier {
+  return vscode.workspace
+    .getConfiguration("reef")
+    .get<string>("priority.modelTier", "standard")
+    .trim() === "priority"
+    ? "priority"
+    : "standard";
+}
+
+function isCommercialEdition(): boolean {
+  return (reefEdition as string) === "commercial";
+}
+
 function modelSettings():
   | {
       readonly provider?: string;
       readonly apiKey?: string;
       readonly name?: string;
+      readonly licenseToken?: string;
+      readonly gatewayUrl?: string;
+      readonly priorityTier?: PriorityModelTier;
     }
   | undefined {
   const config = vscode.workspace.getConfiguration("reef");
   const provider = config.get<string>("model.provider", "auto").trim();
   const apiKey = config.get<string>("model.apiKey", "").trim();
   const name = config.get<string>("model.name", "").trim();
+  const priorityTier = priorityModelTierSetting();
   const licenseToken = config.get<string>("gateway.licenseToken", "").trim();
   const gatewayUrl = config.get<string>("gateway.url", "").trim();
   const model = {
     ...(provider !== "" ? { provider } : {}),
     ...(apiKey !== "" ? { apiKey } : {}),
     ...(name !== "" ? { name } : {}),
+    priorityTier,
     ...(licenseToken !== "" ? { licenseToken } : {}),
     ...(gatewayUrl !== "" ? { gatewayUrl } : {}),
   };
@@ -353,6 +373,7 @@ function configuredAccountQuery(): AccountQuery {
   const name = config.get<string>("model.name", "").trim();
   const gatewayUrl = config.get<string>("gateway.url", "").trim();
   const ssoUrl = config.get<string>("account.ssoUrl", "").trim();
+  const priorityTier = priorityModelTierSetting();
   const hasAnthropic =
     apiKey !== "" || (process.env.ANTHROPIC_API_KEY ?? "").trim() !== "";
   const hasBedrock =
@@ -365,6 +386,7 @@ function configuredAccountQuery(): AccountQuery {
       provider: "gateway",
       model: name !== "" ? name : "reef-gateway-stub",
       source: "Reef settings: hosted gateway",
+      priorityTier,
       ...(gatewayUrl !== "" ? { gatewayUrl } : {}),
       ...(ssoUrl !== "" ? { ssoUrl } : {}),
     };
@@ -374,6 +396,7 @@ function configuredAccountQuery(): AccountQuery {
       provider: "anthropic",
       model: name !== "" ? name : "Claude Sonnet 4.5",
       source: "Reef settings: BYOK Anthropic",
+      priorityTier,
       ...(ssoUrl !== "" ? { ssoUrl } : {}),
     };
   }
@@ -382,6 +405,7 @@ function configuredAccountQuery(): AccountQuery {
       provider: "bedrock",
       model: name !== "" ? name : "Claude Sonnet 4.5",
       source: "Reef settings: BYOK Bedrock",
+      priorityTier,
       ...(ssoUrl !== "" ? { ssoUrl } : {}),
     };
   }
@@ -389,6 +413,7 @@ function configuredAccountQuery(): AccountQuery {
     provider: "mock",
     model: "offline-mock",
     source: "Reef offline MockDriver",
+    priorityTier,
     ...(ssoUrl !== "" ? { ssoUrl } : {}),
   };
 }
@@ -541,6 +566,9 @@ async function waitForBundledServer(
           ? { REEF_MODEL_API_KEY: model.apiKey }
           : {}),
         ...(model?.name !== undefined ? { REEF_MODEL_NAME: model.name } : {}),
+        ...(model?.priorityTier !== undefined
+          ? { REEF_PRIORITY_MODEL_TIER: model.priorityTier }
+          : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -1871,6 +1899,26 @@ export function activate(context: vscode.ExtensionContext): void {
           kind: "status",
           tone: "ok",
           message: "Signed out of the local Octopus stub account.",
+        });
+      } else if (message.kind === "setPriorityTier") {
+        if (!isCommercialEdition()) {
+          throw new Error("Priority model selection is commercial-only.");
+        }
+        if (message.tier !== "standard" && message.tier !== "priority") {
+          throw new Error("Priority tier must be standard or priority.");
+        }
+        await vscode.workspace
+          .getConfiguration("reef")
+          .update(
+            "priority.modelTier",
+            message.tier,
+            vscode.ConfigurationTarget.Global,
+          );
+        await refreshAccount();
+        void accountView?.webview.postMessage({
+          kind: "status",
+          tone: "ok",
+          message: `Priority tier saved for the next gateway run: ${message.tier}.`,
         });
       } else if (
         message.kind === "copyAccountId" &&

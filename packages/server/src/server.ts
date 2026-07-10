@@ -53,11 +53,13 @@ import {
 import {
   GatewayProvider,
   gatewayEntitlementDecision,
+  priorityModelTier,
   gatewayQuotaDecision,
   gatewayRouteDecision,
   type GatewayEntitlementDecision,
   type GatewayQuotaDecision,
   type GatewayRouteDecision,
+  type PriorityModelTier,
 } from "@octopus-reef/commercial";
 import type { JsonValue } from "octopus-evidence";
 import type {
@@ -175,6 +177,7 @@ interface AccountSessionRequest {
   readonly source?: string;
   readonly gatewayUrl?: string;
   readonly ssoUrl?: string;
+  readonly priorityTier?: PriorityModelTier;
 }
 
 class McpDemoDriver implements Driver {
@@ -568,6 +571,11 @@ class GatewayGovernanceDriver implements Driver {
     if (this.#route !== undefined) {
       yield {
         type: "observe",
+        summary: `priority model tier selected: ${this.#route.priority.tier}`,
+        data: { priorityTierDecision: this.#route.priority, task: ctx.task },
+      };
+      yield {
+        type: "observe",
         summary: `gateway route selected: ${this.#route.route}`,
         data: { gatewayRoute: this.#route, task: ctx.task },
       };
@@ -589,6 +597,7 @@ export interface DriverFactoryContext {
     readonly name?: string;
     readonly licenseToken?: string;
     readonly gatewayUrl?: string;
+    readonly priorityTier?: PriorityModelTier;
   };
   readonly edition: ReefEdition;
 }
@@ -726,6 +735,13 @@ function sessionContext(
     ...maybe("name", optionalString(modelBody?.name)),
     ...maybe("licenseToken", optionalString(modelBody?.licenseToken)),
     ...maybe("gatewayUrl", optionalString(modelBody?.gatewayUrl)),
+    ...(optionalString(modelBody?.priorityTier) !== undefined
+      ? {
+          priorityTier: priorityModelTier(
+            optionalString(modelBody?.priorityTier),
+          ),
+        }
+      : {}),
   };
   return {
     task,
@@ -742,6 +758,13 @@ function accountQuery(url: URL): AccountSnapshotRequest {
     ...maybe("source", optionalString(url.searchParams.get("source"))),
     ...maybe("gatewayUrl", optionalString(url.searchParams.get("gatewayUrl"))),
     ...maybe("ssoUrl", optionalString(url.searchParams.get("ssoUrl"))),
+    ...(optionalString(url.searchParams.get("priorityTier")) !== undefined
+      ? {
+          priorityTier: priorityModelTier(
+            optionalString(url.searchParams.get("priorityTier")),
+          ),
+        }
+      : {}),
   };
 }
 
@@ -891,14 +914,18 @@ function gatewayRuntime(context: DriverFactoryContext): SessionRuntime {
     };
   }
 
+  const priorityTier = priorityModelTier(context.model?.priorityTier);
+
   const route = gatewayRouteDecision({
     gatewayUrl,
     licenseToken,
+    priorityTier,
     ...(context.model?.name !== undefined ? { model: context.model.name } : {}),
   });
   const provider = new GatewayProvider({
     gatewayUrl,
     licenseToken,
+    priorityTier,
     ...(context.model?.name !== undefined ? { model: context.model.name } : {}),
   });
   return {

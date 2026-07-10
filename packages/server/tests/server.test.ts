@@ -1508,6 +1508,95 @@ test("C4: local OIDC team membership and audit sessions are evidence-backed", as
   }
 });
 
+test("C5: commercial priority routing and plan text are evidence-backed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-c5-priority-"));
+  const gateway = await startStubGateway();
+  const commercial = new ReefServer({ persistDir: dir, edition: "commercial" });
+  const port = await commercial.listen(0);
+  const accountPath = `/account?provider=gateway&gatewayUrl=${encodeURIComponent(gateway.url)}&priorityTier=priority`;
+  try {
+    const login = await request(
+      port,
+      "POST",
+      accountPath.replace("/account", "/account/login"),
+      { userId: "octopus-c5-user", displayName: "Octopus C5 User" },
+    );
+    assert.equal(login.status, 200);
+    assert.equal(login.json.priority.available, true);
+    assert.equal(login.json.priority.gated, false);
+    assert.equal(login.json.priority.selectedTier, "priority");
+    assert.equal(login.json.priority.source, "local-stub-gateway /v1/plan");
+    assert.match(login.json.priority.serviceLevel, /no production SLA/i);
+
+    const created = await request(port, "POST", "/sessions", {
+      task: "C5 priority gateway run",
+      persist: true,
+      model: {
+        provider: "gateway",
+        gatewayUrl: gateway.url,
+        licenseToken: TEST_GATEWAY_LICENSE_TOKEN,
+        priorityTier: "priority",
+      },
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.id as string;
+    const frames = await collectSSE(port, `/sessions/${id}/events`);
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (
+            frame.event.data.priorityTierDecision as
+              | { tier?: string; queue?: string; model?: string }
+              | undefined
+          )?.tier === "priority" &&
+          (
+            frame.event.data.priorityTierDecision as
+              | { tier?: string; queue?: string; model?: string }
+              | undefined
+          )?.queue === "priority",
+      ),
+      "priority routing should be a governed evidence link",
+    );
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (
+            frame.event.data.gatewayRoute as
+              | { priority?: { tier?: string }; model?: string }
+              | undefined
+          )?.priority?.tier === "priority",
+      ),
+      "gateway route should retain the selected priority tier",
+    );
+    const verified = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(verified.status, 200);
+    assert.equal(verified.json.ok, true);
+  } finally {
+    await commercial.close();
+    await gateway.close();
+  }
+
+  const community = new ReefServer({ edition: "community" });
+  const communityPort = await community.listen(0);
+  try {
+    const account = await request(
+      communityPort,
+      "GET",
+      "/account?priorityTier=priority",
+    );
+    assert.equal(account.status, 200);
+    assert.equal(account.json.priority.gated, true);
+    assert.equal(account.json.priority.available, false);
+    assert.equal(account.json.priority.source, "community-edition");
+  } finally {
+    await community.close();
+  }
+});
+
 test("C2: Account plan quota and usage come from aggregation and stub gateway ledger", async () => {
   const dir = mkdtempSync(join(tmpdir(), "reef-c2-plan-"));
   const gateway = await startStubGateway({
