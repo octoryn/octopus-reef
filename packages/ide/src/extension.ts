@@ -778,6 +778,23 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   };
 
+  const startNewChatSession = async (): Promise<void> => {
+    abort?.abort();
+    chatConversationId = `reef-chat-${Date.now().toString(36)}`;
+    chatTurns.clear();
+    lastVerify = undefined;
+    lastSessionId = undefined;
+    lastSessionDir = undefined;
+    await writeState();
+    await writeChatState();
+    void sessionWebview()?.postMessage({
+      kind: "chatSessionReset",
+      conversationId: chatConversationId,
+    });
+    await postChatConfig();
+    setStatus(status, undefined, "Reef ready for a new chat session");
+  };
+
   const postChatError = (message: string, turnId?: string): void => {
     void sessionWebview()?.postMessage({
       kind: "chatError",
@@ -1631,6 +1648,14 @@ export function activate(context: vscode.ExtensionContext): void {
     if (message.kind === "openAgentFocus") {
       openAgentFocusPanel();
       await moveAgentFocus("focus");
+      return;
+    }
+    if (message.kind === "newSession") {
+      await startNewChatSession();
+      return;
+    }
+    if (message.kind === "showSessionMenu") {
+      void sessionWebview()?.postMessage({ kind: "sessionMenu", open: true });
       return;
     }
     if (

@@ -9,8 +9,11 @@ const submit = document.getElementById("chat-submit");
 const autopilotButton = document.getElementById("autopilot");
 const modelChip = document.getElementById("model-chip");
 const usageBox = document.getElementById("usage");
-const newSession = document.getElementById("new-session");
+const newSessionTab = document.getElementById("new-session-tab");
+const newSessionPlus = document.getElementById("new-session-plus");
 const agentFocus = document.getElementById("agent-focus");
+const headerMore = document.getElementById("header-more");
+const headerMenu = document.getElementById("header-menu");
 const picker = document.getElementById("affordance-picker");
 
 const KIND = {
@@ -120,6 +123,21 @@ function setEmpty() {
   legacyTurnId = "";
   input.value = "";
   setBusy(false);
+}
+
+function resetConversation(nextConversationId) {
+  conversationId = nextConversationId || `reef-chat-${Date.now().toString(36)}`;
+  setEmpty();
+}
+
+function requestNewSession(source) {
+  resetConversation();
+  vscode.postMessage({ kind: "newSession", source });
+}
+
+function setHeaderMenu(open) {
+  headerMenu.classList.toggle("hidden", !open);
+  headerMore.setAttribute("aria-expanded", String(open));
 }
 
 function appendText(parent, tag, className, text) {
@@ -598,10 +616,23 @@ agentFocus.addEventListener("click", () => {
   vscode.postMessage({ kind: "openAgentFocus" });
 });
 
-newSession.addEventListener("click", () => {
-  conversationId = `reef-chat-${Date.now().toString(36)}`;
-  setEmpty();
-  vscode.postMessage({ kind: "refreshChatUsage" });
+newSessionTab.addEventListener("click", () => requestNewSession("tab"));
+newSessionPlus.addEventListener("click", () => requestNewSession("plus"));
+
+headerMore.addEventListener("click", () => {
+  vscode.postMessage({ kind: "showSessionMenu" });
+});
+
+headerMenu.addEventListener("click", (event) => {
+  const action = event.target.closest("[data-menu-action]")?.dataset.menuAction;
+  if (action === "new-session") requestNewSession("menu");
+  else if (action === "agent-focus") vscode.postMessage({ kind: "openAgentFocus" });
+  else if (action === "refresh-usage") vscode.postMessage({ kind: "refreshChatUsage" });
+  setHeaderMenu(false);
+});
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".tab-actions")) setHeaderMenu(false);
 });
 
 document.querySelectorAll("[data-shortcut]").forEach((button) => {
@@ -634,6 +665,10 @@ window.addEventListener("message", (message) => {
       tasks: Array.isArray(data.tasks) ? data.tasks : [],
     };
     renderUsage(data.usage || zeroUsage());
+  } else if (data.kind === "chatSessionReset") {
+    resetConversation(data.conversationId);
+  } else if (data.kind === "sessionMenu") {
+    setHeaderMenu(data.open === true);
   } else if (data.kind === "chatUsage") {
     renderUsage(data.usage || zeroUsage());
   } else if (data.kind === "chatTurnStarted") {

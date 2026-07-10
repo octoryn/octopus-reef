@@ -3,6 +3,31 @@
  * host owns the daemon connection and posts `ServerEvent`s in; the script renders
  * the live evidence timeline and proof block.
  */
+const reefPanelPolish = `
+  :root{--deep:#0a0e15;--panel:#0d1219;--panel2:#121922;--line:rgba(255,255,255,.07);--ink:#eef7f5;--muted:#8a97a5;--signal:#33e6c0}
+  body.reef-panel{background:var(--deep);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;letter-spacing:0}
+  body.reef-panel header.reef-panel-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 18px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+  body.reef-panel .panel-heading{display:grid;gap:4px;min-width:0}
+  body.reef-panel .reef-kicker{color:var(--signal);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:800;text-transform:uppercase}
+  body.reef-panel .panel-heading h1{margin:0;color:var(--ink);font-size:20px;line-height:1.2;font-weight:760}
+  body.reef-panel .panel-heading p{margin:0;color:var(--muted);font-size:12px;line-height:1.45;max-width:480px}
+  body.reef-panel .panel-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+  body.reef-panel main{padding:18px;gap:18px}
+  body.reef-panel h2{margin:0 0 9px;color:var(--muted);font-size:11px;font-weight:800;letter-spacing:0;text-transform:uppercase}
+  body.reef-panel .item,body.reef-panel .hook,body.reef-panel .task,body.reef-panel .card,body.reef-panel .row,body.reef-panel form{border-color:var(--line);background:var(--panel);box-shadow:none}
+  body.reef-panel .item,body.reef-panel .hook,body.reef-panel .task,body.reef-panel .card,body.reef-panel .row{padding:14px}
+  body.reef-panel form{padding:14px;gap:10px}
+  body.reef-panel input,body.reef-panel textarea,body.reef-panel select{background:var(--panel2);border-color:var(--line);padding:9px}
+  body.reef-panel button{min-height:32px;border-radius:7px}
+  body.reef-panel button.secondary{background:var(--panel2);border-color:var(--line);color:var(--ink)}
+  body.reef-panel .panel-primary,body.reef-panel button.primary{background:var(--signal);border-color:var(--signal);color:#021411}
+  body.reef-panel .status{border-color:var(--line);background:#0b1118;padding:10px 12px}
+  body.reef-panel .status.ok{border-color:var(--signal)}
+  body.reef-panel .list{gap:10px}
+  body.reef-panel .meta,body.reef-panel .key{line-height:1.45}
+  @media (max-width:720px){body.reef-panel header.reef-panel-header{padding:18px 16px;flex-direction:column}body.reef-panel .panel-actions{justify-content:flex-start}body.reef-panel .grid{grid-template-columns:1fr}}
+`;
+
 export function webviewHtml(cspSource: string, scriptUri: string): string {
   return `<!doctype html>
 <html lang="en">
@@ -25,10 +50,13 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
   .tab-dot{width:8px;height:8px;border-radius:50%;background:var(--signal);box-shadow:0 0 16px rgba(51,230,192,.65)}
   .icon-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--line);display:grid;place-items:center;background:var(--panel);color:var(--muted);font-weight:800}
   .icon-btn:hover{border-color:var(--line2);color:var(--ink)}
-  .tab-actions{display:flex;align-items:center;gap:8px}
+  .tab-actions{position:relative;display:flex;align-items:center;gap:8px}
   .focus-btn{height:32px;border-radius:8px;border:1px solid rgba(51,230,192,.36);display:flex;align-items:center;gap:8px;background:#0b171b;color:var(--ink);padding:0 10px;font-weight:800}
   .focus-btn .focus-icon{width:18px;height:18px;border-radius:6px;background:var(--signal);color:#021411;display:grid;place-items:center;font-family:var(--mono);font-size:10px}
   .focus-btn:hover{border-color:rgba(51,230,192,.7);background:#102227}
+  .header-menu{position:absolute;right:0;top:40px;z-index:20;width:196px;display:grid;gap:3px;border:1px solid var(--line2);border-radius:8px;background:#0b1118;box-shadow:0 18px 40px rgba(0,0,0,.45);padding:6px}
+  .header-menu button{border:1px solid transparent;border-radius:7px;background:transparent;color:var(--ink);padding:8px 9px;text-align:left;font-size:12px;font-weight:700}
+  .header-menu button:hover{border-color:var(--line2);background:#111923}
   main{min-height:0;overflow:auto;padding:22px 20px 18px}
   .empty{min-height:100%;display:grid;place-items:start center;padding:30px 0 28px}
   .empty-inner{width:min(720px,100%);display:grid;justify-items:center;text-align:center;padding-top:64px}
@@ -106,12 +134,17 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
 <div class="app">
   <header class="tabs">
     <div class="tab-left">
-      <div class="tab"><span class="tab-dot"></span><span>New Session</span></div>
-      <button class="icon-btn" id="new-session" type="button" title="New Session">+</button>
+      <button class="tab" id="new-session-tab" type="button" title="Start a new session"><span class="tab-dot"></span><span>New Session</span></button>
+      <button class="icon-btn" id="new-session-plus" type="button" title="New Session">+</button>
     </div>
     <div class="tab-actions">
       <button class="focus-btn" id="agent-focus" type="button" title="Open Agent Focus"><span class="focus-icon">AF</span><span>Agent Focus</span></button>
-      <button class="icon-btn" type="button" title="More">...</button>
+      <button class="icon-btn" id="header-more" type="button" title="More session actions" aria-haspopup="menu" aria-expanded="false">...</button>
+      <div class="header-menu hidden" id="header-menu" role="menu">
+        <button type="button" data-menu-action="new-session" role="menuitem">New Session</button>
+        <button type="button" data-menu-action="agent-focus" role="menuitem">Open Agent Focus</button>
+        <button type="button" data-menu-action="refresh-usage" role="menuitem">Refresh usage</button>
+      </div>
     </div>
   </header>
   <main id="main">
@@ -402,10 +435,11 @@ export function powersWebviewHtml(
   .status.bad{border-color:var(--danger);color:var(--danger)}
   .status.warn{border-color:var(--warn);color:var(--warn)}
   @media (max-width:860px){.grid{grid-template-columns:1fr}}
+  ${reefPanelPolish}
 </style>
 </head>
-<body>
-<header><div><b>&#x259A; reef</b> powers</div><button id="refresh" class="secondary" type="button">Refresh</button></header>
+<body class="reef-panel">
+<header class="reef-panel-header"><div class="panel-heading"><div class="reef-kicker">Reef</div><h1>Powers</h1><p>Governed MCP servers and the tools Reef is allowed to call.</p></div><div class="panel-actions"><button id="refresh" class="secondary" type="button">Refresh</button></div></header>
 <main>
   <section class="grid">
     <div><h2>Installed</h2><div id="installed" class="list"></div></div>
@@ -475,21 +509,28 @@ export function browserWebviewHtml(
   .status.warn{border-color:var(--warn);color:var(--warn)}
   footer{display:grid;gap:8px;padding:12px;border-top:1px solid var(--line);background:var(--panel)}
   .note{color:var(--muted);font-size:12px;line-height:1.45}
+  ${reefPanelPolish}
+  body.reef-panel header.reef-browser-header{display:grid;gap:14px}
+  .browser-controls{display:grid;gap:8px}
+  body.reef-panel .preview{padding:0;gap:0}
 </style>
 </head>
-<body>
+<body class="reef-panel">
 <div class="shell">
-  <header>
-    <div class="brand"><div><b>&#x259A; reef</b> browser</div><button id="reload" class="secondary" type="button">Reload</button></div>
-    <form id="nav">
-      <input id="url" value="http://127.0.0.1:5173/" spellcheck="false" />
-      <button type="submit">Open</button>
-      <button id="read" class="secondary" type="button">Governed Read</button>
-    </form>
-    <div class="actions">
-      <input id="annotationNote" placeholder="Annotation note" value="Inspect this element" />
-      <button id="annotate" class="secondary" type="button">Annotate</button>
-      <button id="deny" class="danger" type="button">Prove Denial</button>
+  <header class="reef-panel-header reef-browser-header">
+    <div class="panel-heading"><div class="reef-kicker">Reef</div><h1>Browser</h1><p>Preview local work and govern every DOM read or annotation.</p></div>
+    <div class="browser-controls">
+      <div class="brand"><div class="meta">Local previews only</div><button id="reload" class="secondary" type="button">Reload</button></div>
+      <form id="nav">
+        <input id="url" value="http://127.0.0.1:5173/" spellcheck="false" />
+        <button type="submit">Open</button>
+        <button id="read" class="secondary" type="button">Governed Read</button>
+      </form>
+      <div class="actions">
+        <input id="annotationNote" placeholder="Annotation note" value="Inspect this element" />
+        <button id="annotate" class="secondary" type="button">Annotate</button>
+        <button id="deny" class="danger" type="button">Prove Denial</button>
+      </div>
     </div>
   </header>
   <main class="preview">
@@ -543,10 +584,11 @@ export function specsWebviewHtml(cspSource: string, scriptUri: string): string {
   .status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
   .status.ok{border-color:var(--signal);color:var(--signal)}.status.bad{border-color:var(--danger);color:var(--danger)}.status.warn{border-color:var(--warn);color:var(--warn)}
   @media (max-width:880px){main{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}}
+  ${reefPanelPolish}
 </style>
 </head>
-<body>
-<header><div><b>&#x259A; reef</b> specs</div><div class="actions"><button id="refresh" class="secondary" type="button">Refresh</button><button id="verify" class="secondary" type="button">Verify</button></div></header>
+<body class="reef-panel">
+<header class="reef-panel-header"><div class="panel-heading"><div class="reef-kicker">Reef</div><h1>Specs</h1><p>Workstate tasks, legal transitions, and their sealed provenance.</p></div><div class="panel-actions"><button id="refresh" class="secondary" type="button">Refresh</button><button id="verify" class="secondary" type="button">Verify</button></div></header>
 <main>
   <aside>
     <h2>Specs</h2>
@@ -584,9 +626,12 @@ export function usageWebviewHtml(cspSource: string, scriptUri: string): string {
   header b{color:var(--signal)}
   main{padding:16px;display:grid;gap:16px}
   h2{font-size:12px;letter-spacing:0;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
-  .totals{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px}
-  .tile{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;min-height:66px}
-  .label{color:var(--muted);font-size:12px}.value{font-size:19px;color:var(--ink);margin-top:6px}
+  .usage-summary{display:grid;gap:12px}
+  .usage-totals{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .usage-metric{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:14px;display:grid;gap:4px}
+  .usage-metric span,.usage-metric small{color:var(--muted);font-size:12px;line-height:1.4}.usage-metric strong{color:var(--signal);font-size:22px;line-height:1.2}
+  .remaining-summary{border-top:1px solid var(--line);padding-top:14px;display:grid;gap:9px}
+  .usage-breakdown{border-top:1px solid var(--line);padding-top:14px}.usage-breakdown summary{cursor:pointer;color:var(--ink);font-size:12px;font-weight:700}.usage-breakdown[open] summary{margin-bottom:12px}
   .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:14px}
   .list{display:grid;gap:8px}.row{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:10px;display:grid;gap:6px}
   .top{display:flex;justify-content:space-between;gap:10px}.name{font-weight:700}.meta{color:var(--muted);font-size:12px}
@@ -596,24 +641,24 @@ export function usageWebviewHtml(cspSource: string, scriptUri: string): string {
   button{background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;font-weight:700;padding:7px 10px}
   .status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
   .status.ok{border-color:var(--signal);color:var(--signal)}.status.bad{border-color:var(--danger);color:var(--danger)}.status.warn{border-color:var(--warn);color:var(--warn)}
-  @media (max-width:880px){.grid,.totals{grid-template-columns:1fr}}
+  @media (max-width:880px){.grid,.usage-totals{grid-template-columns:1fr}}
+  ${reefPanelPolish}
 </style>
 </head>
-<body>
-<header><div><b>&#x259A; reef</b> usage</div><button id="refresh" type="button">Refresh</button></header>
+<body class="reef-panel">
+<header class="reef-panel-header"><div class="panel-heading"><div class="reef-kicker">Reef</div><h1>Usage</h1><p>Provider-reported usage sealed into Reef session evidence.</p></div><div class="panel-actions"><button id="refresh" class="panel-primary" type="button">Refresh</button></div></header>
 <main>
-  <section>
-    <h2>Used</h2>
-    <div id="totals" class="totals"></div>
+  <section class="usage-summary">
+    <div class="usage-totals">
+      <div class="usage-metric"><span>Used tokens</span><strong id="total-tokens">0</strong><small id="total-calls">0 provider calls from session evidence</small></div>
+      <div class="usage-metric"><span>Cost</span><strong id="total-cost">$0.000000</strong><small id="cost-source">Provider-normalized cost where available</small></div>
+    </div>
+    <div class="remaining-summary">
+      <h2>Remaining</h2>
+      <div id="remaining" class="list"></div>
+    </div>
   </section>
-  <section class="grid">
-    <div><h2>Sessions</h2><div id="sessions" class="list"></div></div>
-    <div><h2>Providers</h2><div id="providers" class="list"></div></div>
-  </section>
-  <section>
-    <h2>Remaining</h2>
-    <div id="remaining" class="list"></div>
-  </section>
+  <details class="usage-breakdown"><summary>Session and provider detail</summary><section class="grid"><div><h2>Sessions</h2><div id="sessions" class="list"></div></div><div><h2>Providers</h2><div id="providers" class="list"></div></div></section></details>
   <div id="status" class="status">Waiting for usage.</div>
 </main>
 <script src="${scriptUri}"></script>
@@ -655,12 +700,13 @@ export function accountWebviewHtml(
   .status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
   .status.ok{border-color:var(--signal);color:var(--signal)}.status.bad{border-color:var(--danger);color:var(--danger)}.status.warn{border-color:var(--warn);color:var(--warn)}
   @media (max-width:760px){.grid,.totals{grid-template-columns:1fr}.kv{grid-template-columns:1fr}}
+  ${reefPanelPolish}
 </style>
 </head>
-<body>
-<header>
-  <div><b>&#x259A; reef</b> account &amp; plan</div>
-  <div class="toolbar">
+<body class="reef-panel">
+<header class="reef-panel-header">
+  <div class="panel-heading"><div class="reef-kicker">Reef</div><h1>Account &amp; Plan</h1><p>Identity, entitlement, and usage with their local evidence sources.</p></div>
+  <div class="panel-actions">
     <button id="refresh" type="button">Refresh</button>
     <button id="evidence" type="button">Record Evidence</button>
   </div>
@@ -739,10 +785,11 @@ export function steeringWebviewHtml(
   .actions{display:flex;gap:8px;flex-wrap:wrap}.status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
   .status.ok{border-color:var(--signal);color:var(--signal)}.status.bad{border-color:var(--danger);color:var(--danger)}.status.warn{border-color:var(--warn);color:var(--warn)}
   @media (max-width:880px){main{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}}
+  ${reefPanelPolish}
 </style>
 </head>
-<body>
-<header><div><b>&#x259A; reef</b> steering</div><div class="actions"><button id="refresh" class="secondary" type="button">Refresh</button><button id="run" type="button">Run Mock Session</button></div></header>
+<body class="reef-panel">
+<header class="reef-panel-header"><div class="panel-heading"><div class="reef-kicker">Reef</div><h1>Steering</h1><p>Guidance pinned to each governed session that it shapes.</p></div><div class="panel-actions"><button id="refresh" class="secondary" type="button">Refresh</button><button id="run" type="button">Run Mock Session</button></div></header>
 <main>
   <aside>
     <h2>Available</h2>
@@ -796,10 +843,11 @@ export function hooksWebviewHtml(cspSource: string, scriptUri: string): string {
   .status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
   .status.ok{border-color:var(--signal);color:var(--signal)}.status.bad{border-color:var(--danger);color:var(--danger)}.status.warn{border-color:var(--warn);color:var(--warn)}
   @media (max-width:880px){main{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}}
+  ${reefPanelPolish}
 </style>
 </head>
-<body>
-<header><div><b>&#x259A; reef</b> hooks</div><button id="refresh" class="secondary" type="button">Refresh</button></header>
+<body class="reef-panel">
+<header class="reef-panel-header"><div class="panel-heading"><div class="reef-kicker">Reef</div><h1>Hooks</h1><p>Reusable triggers that create their own governed evidence chains.</p></div><div class="panel-actions"><button id="refresh" class="secondary" type="button">Refresh</button></div></header>
 <main>
   <aside>
     <h2>Define Hook</h2>

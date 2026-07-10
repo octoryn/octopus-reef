@@ -1,5 +1,8 @@
 const vscode = acquireVsCodeApi();
-const totalsEl = document.getElementById("totals");
+const totalTokensEl = document.getElementById("total-tokens");
+const totalCallsEl = document.getElementById("total-calls");
+const totalCostEl = document.getElementById("total-cost");
+const costSourceEl = document.getElementById("cost-source");
 const sessionsEl = document.getElementById("sessions");
 const providersEl = document.getElementById("providers");
 const remainingEl = document.getElementById("remaining");
@@ -39,16 +42,15 @@ function short(id) {
   return String(id || "").slice(0, 12);
 }
 
-function tile(label, value) {
-  return `<div class="tile"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div></div>`;
-}
-
 function renderTotals(totals) {
-  totalsEl.innerHTML =
-    tile("Calls", formatTokens(totals.calls)) +
-    tile("Input", formatTokens(totals.inputTokens)) +
-    tile("Output", formatTokens(totals.outputTokens)) +
-    tile("Cost", formatCost(totals.costUsd));
+  const totalTokens = Number(totals.inputTokens || 0) + Number(totals.outputTokens || 0);
+  totalTokensEl.textContent = formatTokens(totalTokens);
+  totalCallsEl.textContent = `${formatTokens(totals.calls)} provider call${Number(totals.calls || 0) === 1 ? "" : "s"} from session evidence`;
+  totalCostEl.textContent = formatCost(totals.costUsd);
+  costSourceEl.textContent =
+    typeof totals.costUsd === "number"
+      ? "Provider-normalized cost from persisted usage evidence"
+      : "Cost is not available from the configured provider";
 }
 
 function renderSessions(sessions) {

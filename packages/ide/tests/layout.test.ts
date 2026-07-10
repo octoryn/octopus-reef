@@ -107,3 +107,56 @@ test("layout: Reef suppresses stock startup welcome and avoids beside editor rev
     /if \(showWelcomeOnStartup\) \{\s+openWelcomePanel\(\);\s+await revealView\(REEF_POWERS_VIEW_ID, powersView\);\s+await revealView\(REEF_SESSION_VIEW_ID, sessionView\);/s,
   );
 });
+
+test("layout: docked session header controls are handled by the extension host", () => {
+  const extensionSource = readFileSync(
+    path.join(ideRoot, "src", "extension.ts"),
+    "utf8",
+  );
+  const start = extensionSource.indexOf("const handleSessionMessage");
+  const end = extensionSource.indexOf("const handlePowersMessage");
+  const handler = extensionSource.slice(start, end);
+  assert.match(handler, /message\.kind === "openAgentFocus"/);
+  assert.match(handler, /message\.kind === "newSession"/);
+  assert.match(handler, /await startNewChatSession\(\)/);
+  assert.match(handler, /message\.kind === "showSessionMenu"/);
+  assert.match(handler, /kind: "sessionMenu", open: true/);
+
+  const sessionScript = readFileSync(
+    path.join(ideRoot, "media", "webview.js"),
+    "utf8",
+  );
+  assert.match(sessionScript, /new-session-tab/);
+  assert.match(sessionScript, /new-session-plus/);
+  assert.match(sessionScript, /kind: "newSession"/);
+  assert.match(sessionScript, /kind: "showSessionMenu"/);
+});
+
+test("layout: left Reef panels use the shared polish and Usage keeps sourced values", () => {
+  const webviewSource = readFileSync(
+    path.join(ideRoot, "src", "webview.ts"),
+    "utf8",
+  );
+  for (const title of [
+    "Powers",
+    "Browser",
+    "Specs",
+    "Account &amp; Plan",
+    "Steering",
+    "Hooks",
+    "Usage",
+  ]) {
+    assert.match(webviewSource, new RegExp(`<h1>${title}</h1>`));
+  }
+  assert.match(webviewSource, /class="usage-summary"/);
+  assert.match(webviewSource, /id="total-tokens"/);
+  assert.match(webviewSource, /Session and provider detail/);
+
+  const usageScript = readFileSync(
+    path.join(ideRoot, "media", "usage.js"),
+    "utf8",
+  );
+  assert.match(usageScript, /Number\(totals\.inputTokens \|\| 0\) \+ Number\(totals\.outputTokens \|\| 0\)/);
+  assert.match(usageScript, /Provider-normalized cost from persisted usage evidence/);
+  assert.match(usageScript, /Cost is not available from the configured provider/);
+});
