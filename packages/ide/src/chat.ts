@@ -1,4 +1,9 @@
-import type { VerifyResult } from "@octopus-reef/protocol";
+import type {
+  ChatCommandResolution,
+  ChatRouteResolution,
+  ChatTaskReference,
+  VerifyResult,
+} from "@octopus-reef/protocol";
 
 export interface ChatModelSettings {
   readonly provider?: string;
@@ -23,6 +28,9 @@ export interface ChatConversationInput {
   readonly turn: number;
   readonly parentSessionId?: string;
   readonly autopilot: boolean;
+  readonly command?: ChatCommandResolution;
+  readonly taskRef?: ChatTaskReference;
+  readonly route?: ChatRouteResolution;
 }
 
 export interface ChatConversationContext {
@@ -31,6 +39,9 @@ export interface ChatConversationContext {
   readonly autopilot: boolean;
   readonly approvalMode: "auto" | "ask";
   readonly parentSessionId?: string;
+  readonly command?: ChatCommandResolution;
+  readonly taskRef?: ChatTaskReference;
+  readonly route?: ChatRouteResolution;
 }
 
 export type ChatVerifyTone = "ok" | "bad" | "pending";
@@ -100,8 +111,11 @@ export function chatConversationContext(
   };
   return input.parentSessionId !== undefined &&
     input.parentSessionId.trim() !== ""
-    ? { ...base, parentSessionId: input.parentSessionId.trim() }
-    : base;
+    ? appendAffordances(
+        { ...base, parentSessionId: input.parentSessionId.trim() },
+        input,
+      )
+    : appendAffordances(base, input);
 }
 
 export function chatApprovalLabel(autopilot: boolean): string {
@@ -119,6 +133,18 @@ export function chatVerifyTone(
 
 function mockChip(): ChatModelChip {
   return { label: "Mock · Offline", provider: "mock", keyed: false };
+}
+
+function appendAffordances(
+  base: Omit<ChatConversationContext, "command" | "taskRef" | "route">,
+  input: ChatConversationInput,
+): ChatConversationContext {
+  return {
+    ...base,
+    ...(input.command !== undefined ? { command: input.command } : {}),
+    ...(input.taskRef !== undefined ? { taskRef: input.taskRef } : {}),
+    ...(input.route !== undefined ? { route: input.route } : {}),
+  };
 }
 
 function trim(value: string | undefined): string | undefined {

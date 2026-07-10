@@ -64,6 +64,9 @@ import type {
   AccountLoginRequest,
   AccountPlanResponse,
   AddCustomSteeringRequest,
+  ChatCommandResolution,
+  ChatRouteResolution,
+  ChatTaskReference,
   CreateHookRequest,
   CreateSessionRequest,
   EditionResponse,
@@ -159,6 +162,9 @@ interface ConversationSessionRequest {
   readonly parentSessionId?: string;
   readonly autopilot?: boolean;
   readonly approvalMode?: "auto" | "ask";
+  readonly command?: ChatCommandResolution;
+  readonly taskRef?: ChatTaskReference;
+  readonly route?: ChatRouteResolution;
 }
 
 interface AccountSessionRequest {
@@ -382,6 +388,9 @@ class ConversationDriver implements Driver {
     readonly parentSessionId: string | null;
     readonly autopilot: boolean;
     readonly approvalMode: "auto" | "ask";
+    readonly command?: ChatCommandResolution;
+    readonly taskRef?: ChatTaskReference;
+    readonly route?: ChatRouteResolution;
   };
 
   constructor(inner: Driver, request: ConversationSessionRequest) {
@@ -399,11 +408,53 @@ class ConversationDriver implements Driver {
       autopilot,
       approvalMode:
         request.approvalMode === "ask" && !autopilot ? "ask" : "auto",
+      ...(request.command !== undefined ? { command: request.command } : {}),
+      ...(request.taskRef !== undefined ? { taskRef: request.taskRef } : {}),
+      ...(request.route !== undefined ? { route: request.route } : {}),
     };
     this.name = `${inner.name}+conversation`;
   }
 
   async *run(ctx: DriverContext): AsyncIterable<DriverStep> {
+    if (this.#conversation.route !== undefined) {
+      yield {
+        type: "observe",
+        summary: `chat route resolved: ${this.#conversation.route.token} -> ${this.#conversation.route.worker}`,
+        data: {
+          chatRoute: {
+            ...this.#conversation.route,
+            conversationId: this.#conversation.id,
+            turn: this.#conversation.turn,
+          },
+        },
+      };
+    }
+    if (this.#conversation.taskRef !== undefined) {
+      yield {
+        type: "observe",
+        summary: `chat task pinned: ${this.#conversation.taskRef.itemId}`,
+        data: {
+          chatTaskRef: {
+            ...this.#conversation.taskRef,
+            conversationId: this.#conversation.id,
+            turn: this.#conversation.turn,
+          },
+        },
+      };
+    }
+    if (this.#conversation.command !== undefined) {
+      yield {
+        type: "observe",
+        summary: `chat command resolved: ${this.#conversation.command.token}`,
+        data: {
+          chatCommand: {
+            ...this.#conversation.command,
+            conversationId: this.#conversation.id,
+            turn: this.#conversation.turn,
+          },
+        },
+      };
+    }
     const decision =
       this.#conversation.approvalMode === "auto"
         ? "autopilot auto-approved the turn"
@@ -544,6 +595,28 @@ const DEFAULT_REAL_COMMANDS: Readonly<Record<string, readonly string[] | "*">> =
     npm: ["test", "run"],
     git: ["status", "diff", "log", "show", "rev-parse", "ls-files"],
   };
+const CHAT_COMMAND_IDS = new Set([
+  "spec",
+  "plan",
+  "bug-fix",
+  "replay",
+  "verify",
+  "new-session",
+]);
+const CHAT_ROUTES = new Map<
+  string,
+  {
+    readonly worker: ChatRouteResolution["worker"];
+    readonly cli?: ChatRouteResolution["cli"];
+  }
+>([
+  ["auto", { worker: "auto" }],
+  ["@code", { worker: "codeWorker" }],
+  ["@tool", { worker: "toolWorker" }],
+  ["@cli:claude", { worker: "cliWorker", cli: "claude" }],
+  ["@cli:codex", { worker: "cliWorker", cli: "codex" }],
+  ["@cli:gemini", { worker: "cliWorker", cli: "gemini" }],
+]);
 
 class ConfigurationFailureDriver implements Driver {
   readonly name = "configuration";
@@ -1229,15 +1302,15 @@ export class ReefServer {
       body.account !== undefined
         ? this.#accountRuntime(body.account)
         : body.spec !== undefined
-        ? this.#specRuntime(body.spec)
-        : body.browser !== undefined
-          ? this.#browserRuntime(body.browser)
-          : body.mcp !== undefined
-            ? this.#mcpRuntime(body.mcp)
-            : normalizeRuntime(
-                this.#options.driverFactory?.(context) ??
-                  defaultRuntime(context),
-              );
+          ? this.#specRuntime(body.spec)
+          : body.browser !== undefined
+            ? this.#browserRuntime(body.browser)
+            : body.mcp !== undefined
+              ? this.#mcpRuntime(body.mcp)
+              : normalizeRuntime(
+                  this.#options.driverFactory?.(context) ??
+                    defaultRuntime(context),
+                );
     const steeredRuntime = this.#steeredRuntime(runtimeBase, body.steering);
     const hookedRuntime = this.#hookedRuntime(steeredRuntime, body.hook);
     const runtime = this.#conversationRuntime(hookedRuntime, body.conversation);
@@ -1436,14 +1509,117 @@ export class ReefServer {
     };
   }
 
+  #validatedConversation(
+    request: ConversationSessionRequest,
+  ): ConversationSessionRequest | string {
+    const normalized: {
+      id?: string;
+      turn?: number;
+      parentSessionId?: string;
+      autopilot?: boolean;
+      approvalMode?: "auto" | "ask";
+      command?: ChatCommandResolution;
+      taskRef?: ChatTaskReference;
+      route?: ChatRouteResolution;
+    } = {
+      ...(request.id !== undefined ? { id: request.id } : {}),
+      ...(request.turn !== undefined ? { turn: request.turn } : {}),
+      ...(request.parentSessionId !== undefined
+        ? { parentSessionId: request.parentSessionId }
+        : {}),
+      ...(request.autopilot !== undefined
+        ? { autopilot: request.autopilot }
+        : {}),
+      ...(request.approvalMode !== undefined
+        ? { approvalMode: request.approvalMode }
+        : {}),
+    };
+
+    if (request.command !== undefined) {
+      const id = optionalString(request.command.id);
+      const token = optionalString(request.command.token);
+      const label = optionalString(request.command.label);
+      if (id === undefined || !CHAT_COMMAND_IDS.has(id)) {
+        return `unknown Reef chat command '${id ?? ""}'`;
+      }
+      if (token !== `/${id}` || label === undefined) {
+        return `invalid Reef chat command metadata for '${id}'`;
+      }
+      normalized.command = {
+        id: id as ChatCommandResolution["id"],
+        token,
+        label,
+      };
+    }
+
+    if (request.route !== undefined) {
+      const token = optionalString(request.route.token);
+      const route = token === undefined ? undefined : CHAT_ROUTES.get(token);
+      const label = optionalString(request.route.label);
+      if (token === undefined || route === undefined) {
+        return `unknown Reef role-agent route '${token ?? ""}'`;
+      }
+      if (
+        request.route.worker !== route.worker ||
+        (route.cli !== undefined && request.route.cli !== route.cli) ||
+        (route.cli === undefined && request.route.cli !== undefined) ||
+        label === undefined
+      ) {
+        return `invalid Reef role-agent route metadata for '${token}'`;
+      }
+      normalized.route = {
+        token,
+        worker: route.worker,
+        label,
+        ...(route.cli !== undefined ? { cli: route.cli } : {}),
+      };
+    }
+
+    if (request.taskRef !== undefined) {
+      const specId = optionalString(request.taskRef.specId);
+      const itemId = optionalString(request.taskRef.itemId);
+      if (specId === undefined || itemId === undefined) {
+        return "Reef task reference requires specId and itemId";
+      }
+      let spec;
+      try {
+        spec = this.#specs.get(specId);
+      } catch {
+        return `unknown Reef spec task '${itemId}'`;
+      }
+      const task = spec.tasks.find((candidate) => candidate.id === itemId);
+      if (task === undefined || task.state === "done") {
+        return `unknown or closed Reef spec task '${itemId}'`;
+      }
+      normalized.taskRef = {
+        specId,
+        itemId,
+        title: task.title,
+        state: task.state,
+        ...(task.history.at(-1)?.evidenceId !== undefined
+          ? { evidenceId: task.history.at(-1)!.evidenceId }
+          : {}),
+      };
+    }
+
+    return normalized;
+  }
+
   #conversationRuntime(
     runtime: SessionRuntime,
     request: ConversationSessionRequest | undefined,
   ): SessionRuntime {
     if (request === undefined) return runtime;
+    const validated = this.#validatedConversation(request);
+    if (typeof validated === "string") {
+      return {
+        ...runtime,
+        driver: new ConfigurationFailureDriver(validated),
+      };
+    }
     return {
       ...runtime,
-      driver: new ConversationDriver(runtime.driver, request),
+      driver: new ConversationDriver(runtime.driver, validated),
     };
   }
 

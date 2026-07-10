@@ -1087,6 +1087,120 @@ test("N8: chat turns record conversation approval evidence and tamper per turn",
   }
 });
 
+test("N12: chat affordances are evidence links and reject unknown tokens", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-n12-chat-"));
+  const server = new ReefServer({ persistDir: dir });
+  const port = await server.listen(0);
+  try {
+    const createdSpec = await request(port, "POST", "/specs", {
+      title: "N12 affordance spec",
+      tasks: ["Wire chat affordances"],
+    });
+    assert.equal(createdSpec.status, 201);
+    const spec = createdSpec.json.spec;
+    const task = spec.tasks[0];
+
+    const created = await request(port, "POST", "/sessions", {
+      task: "/plan @code #" + task.id + " implement N12",
+      persist: true,
+      conversation: {
+        id: "conv-n12",
+        turn: 1,
+        autopilot: true,
+        approvalMode: "auto",
+        command: { id: "plan", token: "/plan", label: "Plan" },
+        route: { token: "@code", worker: "codeWorker", label: "Code Worker" },
+        taskRef: {
+          specId: spec.id,
+          itemId: task.id,
+          title: task.title,
+          state: task.state,
+        },
+      },
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.id as string;
+    const frames = await collectSSE(port, `/sessions/${id}/events`);
+
+    const routeEvidence = frames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "observation" &&
+        (
+          frame.event.data.chatRoute as
+            { token?: string; worker?: string } | undefined
+        )?.worker === "codeWorker",
+    );
+    const taskEvidence = frames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "observation" &&
+        (
+          frame.event.data.chatTaskRef as
+            { specId?: string; itemId?: string } | undefined
+        )?.itemId === task.id,
+    );
+    const commandEvidence = frames.find(
+      (frame) =>
+        frame.type === "event" &&
+        frame.event.kind === "observation" &&
+        (
+          frame.event.data.chatCommand as
+            { token?: string; id?: string } | undefined
+        )?.id === "plan",
+    );
+    assert.ok(routeEvidence, "@code route should be an evidence link");
+    assert.ok(taskEvidence, "# task pin should be an evidence link");
+    assert.ok(commandEvidence, "/plan command should be an evidence link");
+    for (const frame of [routeEvidence, taskEvidence, commandEvidence]) {
+      if (frame?.type === "event") {
+        assert.match(frame.event.evidenceId, /^ev_[a-f0-9]{64}$/);
+      }
+    }
+
+    const before = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(before.status, 200);
+    assert.equal(before.json.ok, true);
+
+    const logPath = join(dir, id, "session.log.jsonl");
+    const raw = readFileSync(logPath);
+    const offset = raw.indexOf(Buffer.from("@code"));
+    assert.ok(offset >= 0, "route evidence should contain flippable text");
+    raw[offset] = raw[offset] === 0x40 ? 0x41 : 0x40;
+    writeFileSync(logPath, raw);
+
+    const after = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(after.status, 200);
+    assert.equal(after.json.ok, false);
+    assert.match(after.json.log, /broken/i);
+
+    const bad = await request(port, "POST", "/sessions", {
+      task: "@unknown should not be ignored",
+      conversation: {
+        id: "conv-n12",
+        turn: 2,
+        route: {
+          token: "@unknown",
+          worker: "codeWorker",
+          label: "Unknown Worker",
+        },
+      },
+    });
+    assert.equal(bad.status, 201);
+    const badFrames = await collectSSE(
+      port,
+      `/sessions/${bad.json.id as string}/events`,
+    );
+    const badSealed = badFrames.at(-1);
+    assert.equal(badSealed?.type, "sealed");
+    if (badSealed?.type === "sealed") {
+      assert.equal(badSealed.snapshot.outcome, "failed");
+    }
+  } finally {
+    await server.close();
+  }
+});
+
 test("N6: usage endpoint aggregates persisted provider usage and labelled cost", async () => {
   const dir = mkdtempSync(join(tmpdir(), "reef-n6-usage-"));
   const provider: ModelProvider = {
@@ -1210,10 +1324,15 @@ test("C3: Account panel state distinguishes community BYOK and commercial stub a
     assert.equal(beforeLogin.json.entitlement.allowed, false);
     assert.equal(beforeLogin.json.plan.quota.status, "missing-account");
 
-    const login = await request(port, "POST", `${query.replace("/account", "/account/login")}`, {
-      userId: "octopus-c3-user",
-      displayName: "Octopus C3 User",
-    });
+    const login = await request(
+      port,
+      "POST",
+      `${query.replace("/account", "/account/login")}`,
+      {
+        userId: "octopus-c3-user",
+        displayName: "Octopus C3 User",
+      },
+    );
     assert.equal(login.status, 200);
     assert.equal(login.json.account.signedIn, true);
     assert.equal(login.json.account.userId, "octopus-c3-user");
@@ -1237,8 +1356,10 @@ test("C3: Account panel state distinguishes community BYOK and commercial stub a
         (frame) =>
           frame.type === "event" &&
           frame.event.kind === "observation" &&
-          (frame.event.data.accountIdentity as { provider?: string } | undefined)
-            ?.provider === "gateway",
+          (
+            frame.event.data.accountIdentity as
+              { provider?: string } | undefined
+          )?.provider === "gateway",
       ),
       "account identity should be an evidence link",
     );
@@ -1281,7 +1402,11 @@ test("C3: Account panel state distinguishes community BYOK and commercial stub a
     assert.equal(after.json.ok, false);
     assert.match(after.json.log, /broken/i);
 
-    const logout = await request(port, "POST", query.replace("/account", "/account/logout"));
+    const logout = await request(
+      port,
+      "POST",
+      query.replace("/account", "/account/logout"),
+    );
     assert.equal(logout.status, 200);
     assert.equal(logout.json.account.signedIn, false);
     assert.equal(logout.json.entitlement.allowed, false);
@@ -1338,7 +1463,11 @@ test("C2: Account plan quota and usage come from aggregation and stub gateway le
     assert.equal(usageRun.status, 201);
     await collectSSE(port, `/sessions/${usageRun.json.id}/events`);
 
-    const login = await request(port, "POST", accountPath.replace("/account", "/account/login"));
+    const login = await request(
+      port,
+      "POST",
+      accountPath.replace("/account", "/account/login"),
+    );
     assert.equal(login.status, 200);
 
     const panel = await request(port, "GET", accountPath);
@@ -1373,7 +1502,8 @@ test("C2: Account plan quota and usage come from aggregation and stub gateway le
           frame.event.kind === "observation" &&
           (
             frame.event.data.accountUsage as
-              { totals?: { totalTokens?: number; costUsd?: number } } | undefined
+              | { totals?: { totalTokens?: number; costUsd?: number } }
+              | undefined
           )?.totals?.totalTokens === 579,
       ),
       "usage totals should be sourced from N6 aggregation",

@@ -39,7 +39,9 @@
       {
         "command": "reef.openAgentFocus",
         "title": "Reef: Agent Focus",
-        "category": "Reef"
+        "shortTitle": "Agent Focus",
+        "category": "Reef",
+        "icon": "$(target)"
       },
       {
         "command": "reef.verifyAgentFocus",
@@ -209,6 +211,15 @@
           "name": "Usage",
           "icon": "$(pulse)",
           "visibility": "collapsed"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "reef.openAgentFocus",
+          "when": "view == reef.session",
+          "group": "navigation@1"
         }
       ]
     },

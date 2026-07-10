@@ -26,6 +26,9 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
   .icon-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--line);display:grid;place-items:center;background:var(--panel);color:var(--muted);font-weight:800}
   .icon-btn:hover{border-color:var(--line2);color:var(--ink)}
   .tab-actions{display:flex;align-items:center;gap:8px}
+  .focus-btn{height:32px;border-radius:8px;border:1px solid rgba(51,230,192,.36);display:flex;align-items:center;gap:8px;background:#0b171b;color:var(--ink);padding:0 10px;font-weight:800}
+  .focus-btn .focus-icon{width:18px;height:18px;border-radius:6px;background:var(--signal);color:#021411;display:grid;place-items:center;font-family:var(--mono);font-size:10px}
+  .focus-btn:hover{border-color:rgba(51,230,192,.7);background:#102227}
   main{min-height:0;overflow:auto;padding:22px 20px 18px}
   .empty{min-height:100%;display:grid;place-items:start center;padding:30px 0 28px}
   .empty-inner{width:min(720px,100%);display:grid;justify-items:center;text-align:center;padding-top:64px}
@@ -73,7 +76,14 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
   .approval-card{width:min(680px,100%);justify-self:end;border:1px solid rgba(255,209,102,.42);border-radius:8px;background:#19150a;padding:12px 14px;display:grid;gap:10px;color:#f3df9f}
   .approval-card button{width:max-content;border-radius:7px;background:var(--warn);color:#1b1300;font-weight:800;padding:7px 11px}
   .composer{border-top:1px solid var(--line);background:#0a0f16;padding:14px 18px}
+  .composer-shell{width:min(920px,100%);margin:0 auto;position:relative}
   .composer form{width:min(920px,100%);margin:0 auto;display:grid;grid-template-columns:auto auto 1fr auto auto auto;gap:9px;align-items:center;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:9px}
+  .picker{position:absolute;left:0;right:0;bottom:64px;z-index:10;border:1px solid rgba(51,230,192,.34);border-radius:8px;background:#0b1118;box-shadow:0 18px 40px rgba(0,0,0,.45);padding:6px;display:grid;gap:4px;max-height:260px;overflow:auto}
+  .picker button{width:100%;display:grid;grid-template-columns:108px 1fr auto;gap:10px;align-items:center;text-align:left;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--ink);padding:8px 9px}
+  .picker button:hover,.picker button.active{background:#111923;border-color:var(--line2)}
+  .picker .token{font-family:var(--mono);color:var(--signal);font-size:12px}
+  .picker .label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:760}
+  .picker .meta{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   textarea{min-width:0;width:100%;height:40px;max-height:130px;resize:none;background:transparent;border:0;color:var(--ink);outline:none;padding:10px 4px;line-height:1.35}
   textarea::placeholder{color:#65717e}
   .model{border:1px solid var(--line);border-radius:999px;color:#c4d0da;background:#101720;padding:7px 10px;font-family:var(--mono);font-size:11px;white-space:nowrap}
@@ -100,6 +110,7 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
       <button class="icon-btn" id="new-session" type="button" title="New Session">+</button>
     </div>
     <div class="tab-actions">
+      <button class="focus-btn" id="agent-focus" type="button" title="Open Agent Focus"><span class="focus-icon">AF</span><span>Agent Focus</span></button>
       <button class="icon-btn" type="button" title="More">...</button>
     </div>
   </header>
@@ -127,14 +138,17 @@ export function webviewHtml(cspSource: string, scriptUri: string): string {
     <section id="conversation" class="conversation hidden" aria-live="polite"></section>
   </main>
   <footer class="composer">
-    <form id="chat">
-      <button id="hash" class="icon-btn" type="button" title="Reference">#</button>
-      <button id="attach" class="icon-btn" type="button" title="Attach">&#8679;</button>
-      <textarea id="chat-input" spellcheck="false" placeholder="Ask a question or describe a task..."></textarea>
-      <div id="model-chip" class="model">Mock · Offline</div>
-      <button id="autopilot" class="toggle" type="button" aria-pressed="false"><span class="switch"></span><span>Autopilot</span></button>
-      <button id="chat-submit" class="send" type="submit" title="Send">&rsaquo;</button>
-    </form>
+    <div class="composer-shell">
+      <div id="affordance-picker" class="picker hidden"></div>
+      <form id="chat">
+        <button id="hash" class="icon-btn" type="button" title="Reference task">#</button>
+        <button id="attach" class="icon-btn" type="button" title="Attach">&#8679;</button>
+        <textarea id="chat-input" spellcheck="false" placeholder="Ask a question or describe a task..."></textarea>
+        <div id="model-chip" class="model">Mock · Offline</div>
+        <button id="autopilot" class="toggle" type="button" aria-pressed="false"><span class="switch"></span><span>Autopilot</span></button>
+        <button id="chat-submit" class="send" type="submit" title="Send">&rsaquo;</button>
+      </form>
+    </div>
     <div id="usage" class="usage">
       <div><b>0</b><span>tokens used</span></div>
       <div><b>$0.000000</b><span>cost</span></div>

@@ -54,6 +54,35 @@ export interface VerifyResult {
   readonly binding: string;
 }
 
+export type ChatCommandId =
+  "spec" | "plan" | "bug-fix" | "replay" | "verify" | "new-session";
+
+export type ChatRouteWorker =
+  "auto" | "codeWorker" | "toolWorker" | "cliWorker";
+
+export type ChatCliWorker = "claude" | "codex" | "gemini";
+
+export interface ChatCommandResolution {
+  readonly id: ChatCommandId;
+  readonly token: string;
+  readonly label: string;
+}
+
+export interface ChatTaskReference {
+  readonly specId: string;
+  readonly itemId: string;
+  readonly title: string;
+  readonly state: WorkState;
+  readonly evidenceId?: string;
+}
+
+export interface ChatRouteResolution {
+  readonly token: string;
+  readonly worker: ChatRouteWorker;
+  readonly label: string;
+  readonly cli?: ChatCliWorker;
+}
+
 /** `POST /sessions` — start a governed session. */
 export interface CreateSessionRequest {
   readonly task: string;
@@ -141,6 +170,9 @@ export interface CreateSessionRequest {
     readonly parentSessionId?: string;
     readonly autopilot?: boolean;
     readonly approvalMode?: "auto" | "ask";
+    readonly command?: ChatCommandResolution;
+    readonly taskRef?: ChatTaskReference;
+    readonly route?: ChatRouteResolution;
   };
   /**
    * C2/C3 account-and-plan proof path. When present, the daemon records the
@@ -386,11 +418,7 @@ export interface AccountEntitlementView {
 
 export interface AccountQuotaView {
   readonly status:
-    | "available"
-    | "missing-account"
-    | "not-available"
-    | "pending-key"
-    | "error";
+    "available" | "missing-account" | "not-available" | "pending-key" | "error";
   readonly source: string;
   readonly message: string;
   readonly planId?: string;

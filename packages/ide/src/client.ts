@@ -18,6 +18,9 @@ import type {
   SpecView,
   SpecVerifyResult,
   AddCustomSteeringRequest,
+  ChatCommandResolution,
+  ChatRouteResolution,
+  ChatTaskReference,
   CreateHookRequest,
   FireHookRequest,
   FireHookResponse,
@@ -114,6 +117,9 @@ export interface CreateSessionOptions {
     readonly parentSessionId?: string;
     readonly autopilot?: boolean;
     readonly approvalMode?: "auto" | "ask";
+    readonly command?: ChatCommandResolution;
+    readonly taskRef?: ChatTaskReference;
+    readonly route?: ChatRouteResolution;
   };
   readonly account?: {
     readonly provider?: string;

@@ -59,6 +59,13 @@ import {
   type ChatConversationContext,
 } from "./chat.js";
 import {
+  CHAT_COMMANDS,
+  CHAT_ROUTES,
+  openTaskCandidates,
+  resolveChatAffordances,
+  type ChatTaskCandidate,
+} from "./chatAffordances.js";
+import {
   isWelcomeAction,
   shouldOpenReefWelcome,
   welcomeCommandForAction,
@@ -346,8 +353,7 @@ function configuredAccountQuery(): AccountQuery {
   const name = config.get<string>("model.name", "").trim();
   const gatewayUrl = config.get<string>("gateway.url", "").trim();
   const hasAnthropic =
-    apiKey !== "" ||
-    (process.env.ANTHROPIC_API_KEY ?? "").trim() !== "";
+    apiKey !== "" || (process.env.ANTHROPIC_API_KEY ?? "").trim() !== "";
   const hasBedrock =
     apiKey !== "" ||
     (process.env.AWS_BEARER_TOKEN_BEDROCK ?? "").trim() !== "" ||
@@ -738,12 +744,30 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const postChatConfig = async (): Promise<void> => {
     const usage = await getUsage(activeServerUrl).catch(() => undefined);
+    const tasks = await collectChatTasks().catch(() => []);
     void sessionWebview()?.postMessage({
       kind: "chatConfig",
       conversationId: chatConversationId,
       modelChip: chatModelChip(modelSettings(), process.env),
       usage: focusUsageSnapshot(usage, lastSessionId),
+      commands: CHAT_COMMANDS,
+      routes: CHAT_ROUTES,
+      tasks,
     });
+  };
+
+  const collectChatTasks = async (): Promise<ChatTaskCandidate[]> => {
+    const listed = await listSpecs(activeServerUrl);
+    const specs = (
+      await Promise.all(
+        listed.specs.map((spec) =>
+          getSpec(activeServerUrl, spec.id).catch(() => undefined),
+        ),
+      )
+    ).filter((spec): spec is Awaited<ReturnType<typeof getSpec>> => {
+      return spec !== undefined;
+    });
+    return openTaskCandidates(specs);
   };
 
   const postChatUsage = async (): Promise<void> => {
@@ -909,17 +933,36 @@ export function activate(context: vscode.ExtensionContext): void {
     const base = activeServerUrl;
     const trimmed = input.task.trim();
     if (trimmed === "") return { error: "task is required" };
+    const tasks = await collectChatTasks().catch(() => []);
+    const resolved = resolveChatAffordances(trimmed, tasks);
+    if (!resolved.ok) {
+      postChatError(resolved.message, input.turnId);
+      return { error: resolved.message };
+    }
     const workspaceRoot = firstWorkspaceRoot();
     const model = modelSettings();
     chatConversationId = input.conversationId;
     const parentSessionId = [...chatTurns.values()]
       .filter((turn) => turn.sessionId !== undefined)
       .sort((a, b) => b.turn - a.turn)[0]?.sessionId;
+    const verifyTargetTurnId =
+      resolved.affordances.command?.id === "verify"
+        ? [...chatTurns.values()]
+            .filter((turn) => turn.sessionId !== undefined)
+            .sort((a, b) => b.turn - a.turn)[0]?.turnId
+        : undefined;
     const conversation: ChatConversationContext = chatConversationContext({
       conversationId: input.conversationId,
       turn: input.turn,
       ...(parentSessionId !== undefined ? { parentSessionId } : {}),
       autopilot: input.autopilot,
+      ...(resolved.affordances.command !== undefined
+        ? { command: resolved.affordances.command }
+        : {}),
+      ...(resolved.affordances.taskRef !== undefined
+        ? { taskRef: resolved.affordances.taskRef }
+        : {}),
+      route: resolved.affordances.route,
     });
     const record: ChatTurnRecord = {
       turnId: input.turnId,
@@ -1003,6 +1046,9 @@ export function activate(context: vscode.ExtensionContext): void {
         },
         abort.signal,
       );
+      if (verifyTargetTurnId !== undefined) {
+        await verifyChatTurn(verifyTargetTurnId);
+      }
       return {
         sessionId: id,
         ...(runVerify !== undefined ? { verify: runVerify } : {}),
@@ -1580,6 +1626,11 @@ export function activate(context: vscode.ExtensionContext): void {
   ): Promise<void> => {
     if (message.kind === "chatReady") {
       await postChatConfig();
+      return;
+    }
+    if (message.kind === "openAgentFocus") {
+      openAgentFocusPanel();
+      await moveAgentFocus("focus");
       return;
     }
     if (
