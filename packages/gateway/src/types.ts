@@ -151,6 +151,34 @@ export interface ProvisionAccountResponse {
   readonly evidenceId: string;
 }
 
+export interface SignupRequest {
+  readonly email: string;
+  readonly password: string;
+  readonly displayName?: string;
+}
+
+export interface LoginRequest {
+  readonly email: string;
+  readonly password: string;
+}
+
+export interface LoginResponse {
+  readonly accountId: string;
+  readonly email: string;
+  readonly displayName: string;
+  readonly accessToken: string;
+  readonly evidenceId: string;
+}
+
+export interface RevokeLicenseResponse {
+  readonly accountId: string;
+  readonly revoked: true;
+  readonly evidence: {
+    readonly auth: string;
+    readonly revoke: string;
+  };
+}
+
 export interface GatewayCompletionRequest {
   readonly request?: CompletionRequest;
   readonly prompt?: string;

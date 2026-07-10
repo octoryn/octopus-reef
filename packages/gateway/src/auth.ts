@@ -3,6 +3,7 @@ import {
   createHmac,
   randomBytes,
   randomUUID,
+  scryptSync,
   timingSafeEqual,
 } from "node:crypto";
 import type { GatewayConfig, GatewayPrincipal } from "./types.js";
@@ -115,12 +116,27 @@ export function localPasswordMaterial(email: string): {
   readonly salt: string;
   readonly hash: string;
 } {
+  return passwordMaterial(email);
+}
+
+export function passwordMaterial(password: string): {
+  readonly salt: string;
+  readonly hash: string;
+} {
   const salt = randomBytes(16).toString("base64url");
-  return { salt, hash: hashPassword(email, salt) };
+  return { salt, hash: hashPassword(password, salt) };
 }
 
 export function hashPassword(password: string, salt: string): string {
-  return createHmac("sha256", salt).update(password).digest("hex");
+  return scryptSync(password, salt, 32).toString("hex");
+}
+
+export function verifyPassword(
+  password: string,
+  salt: string,
+  expectedHash: string,
+): boolean {
+  return constantTimeEqual(hashPassword(password, salt), expectedHash);
 }
 
 function signJwt(claims: GatewayJwtClaims, secret: string): string {

@@ -11,8 +11,10 @@ export {
   hashPassword,
   hashSecret,
   issueAccessToken,
+  passwordMaterial,
   randomOpaqueToken,
   verifyAccessToken,
+  verifyPassword,
 } from "./auth.js";
 export { CompletionService } from "./completion.js";
 export type { GatewayDb } from "./db.js";
@@ -32,9 +34,13 @@ export type {
   GatewayQuotaResponse,
   GatewayVerifyResult,
   LicenseRecord,
+  LoginRequest,
+  LoginResponse,
   ProvisionAccountRequest,
   ProvisionAccountResponse,
   QuotaRecord,
+  RevokeLicenseResponse,
+  SignupRequest,
   StoredLedgerRecord,
   UsageRecord,
 } from "./types.js";

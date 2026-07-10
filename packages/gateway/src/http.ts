@@ -10,8 +10,10 @@ import {
   hashSecret,
   issueAccessToken,
   localPasswordMaterial,
+  passwordMaterial,
   randomOpaqueToken,
   verifyAccessToken,
+  verifyPassword,
 } from "./auth.js";
 import { createBillingAdapter } from "./billing.js";
 import { CompletionService } from "./completion.js";
@@ -25,8 +27,12 @@ import type {
   GatewayDecisionRecord,
   GatewayErrorBody,
   GatewayQuotaResponse,
+  LoginRequest,
+  LoginResponse,
   ProvisionAccountRequest,
   ProvisionAccountResponse,
+  RevokeLicenseResponse,
+  SignupRequest,
   GatewayVerifyResult,
 } from "./types.js";
 
@@ -151,6 +157,211 @@ export class GatewayControlPlane {
       }),
       licenseToken,
       evidenceId: evidence.evidenceId,
+    };
+  }
+
+  async signup(request: SignupRequest): Promise<ProvisionAccountResponse> {
+    const email = request.email.trim().toLowerCase();
+    if (email === "" || !email.includes("@")) {
+      throw new HttpError(400, "valid email is required");
+    }
+    if (request.password.length < 8) {
+      throw new HttpError(400, "password must be at least 8 characters");
+    }
+    const existing = await this.db.getAccountByEmail(email);
+    if (existing !== undefined) throw new HttpError(409, "account already exists");
+
+    const accountId = randomUUID();
+    const displayName = clean(request.displayName) ?? email;
+    const material = passwordMaterial(request.password);
+    const now = new Date().toISOString();
+    await this.db.upsertAccount({
+      id: accountId,
+      email,
+      displayName,
+      passwordSalt: material.salt,
+      passwordHash: material.hash,
+      status: "active",
+      createdAt: now,
+    });
+    const signupEvidence = await this.recordDecision({
+      decision: "account.signup",
+      method: "password",
+      tenantId: accountId,
+      accountId,
+      actorId: accountId,
+      content: jsonValue({
+        allowed: true,
+        accountId,
+        email,
+      }),
+    });
+
+    const licenseToken = randomOpaqueToken("reef_license");
+    const entitlements = ["inference:complete"];
+    const planId = "reef-commercial-local";
+    await this.db.upsertLicense({
+      id: randomUUID(),
+      accountId,
+      tokenHash: hashSecret(licenseToken),
+      planId,
+      status: "active",
+      entitlements,
+      createdAt: now,
+    });
+    await this.db.upsertQuota({
+      accountId,
+      limitTokens: this.config.defaultQuotaTokens,
+      usedTokens: 0,
+      updatedAt: now,
+    });
+    await this.recordDecision({
+      decision: "license.provision",
+      method: "signup",
+      tenantId: accountId,
+      accountId,
+      actorId: accountId,
+      content: jsonValue({
+        allowed: true,
+        accountId,
+        email,
+        planId,
+        entitlements,
+      }),
+    });
+
+    return {
+      accountId,
+      email,
+      displayName,
+      planId,
+      entitlements,
+      accessToken: issueAccessToken(this.config, {
+        accountId,
+        tenantId: accountId,
+        email,
+      }),
+      licenseToken,
+      evidenceId: signupEvidence.evidenceId,
+    };
+  }
+
+  async login(request: LoginRequest): Promise<
+    | { readonly ok: true; readonly status: 200; readonly body: LoginResponse }
+    | { readonly ok: false; readonly status: 401; readonly body: GatewayErrorBody }
+  > {
+    const email = request.email.trim().toLowerCase();
+    const account = await this.db.getAccountByEmail(email);
+    const allowed =
+      account !== undefined &&
+      account.status === "active" &&
+      verifyPassword(request.password, account.passwordSalt, account.passwordHash);
+    const evidence = await this.recordDecision({
+      decision: "auth",
+      method: "password",
+      ...(account !== undefined
+        ? {
+            tenantId: account.id,
+            accountId: account.id,
+            actorId: account.id,
+          }
+        : {}),
+      content: {
+        allowed,
+        email,
+        reason: allowed ? "password verified" : "invalid email or password",
+      },
+    });
+    if (!allowed || account === undefined) {
+      return {
+        ok: false,
+        status: 401,
+        body: { error: "login denied", evidenceId: evidence.evidenceId },
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        accountId: account.id,
+        email: account.email,
+        displayName: account.displayName,
+        accessToken: issueAccessToken(this.config, {
+          accountId: account.id,
+          tenantId: account.id,
+          email: account.email,
+        }),
+        evidenceId: evidence.evidenceId,
+      },
+    };
+  }
+
+  async revokeLicense(
+    authHeader: string | undefined,
+  ): Promise<
+    | {
+        readonly ok: true;
+        readonly status: 200;
+        readonly body: RevokeLicenseResponse;
+      }
+    | {
+        readonly ok: false;
+        readonly status: 401;
+        readonly body: GatewayErrorBody;
+      }
+  > {
+    const token = bearerToken(authHeader);
+    const verified =
+      token === undefined
+        ? ({ ok: false, reason: "missing bearer token" } as const)
+        : verifyAccessToken(token, this.config);
+    const authEvidence = await this.ledger.appendDecision({
+      decision: "auth",
+      method: "jwt",
+      ...(verified.ok
+        ? {
+            tenantId: verified.principal.tenantId,
+            accountId: verified.principal.accountId,
+            actorId: verified.principal.accountId,
+          }
+        : {}),
+      content: {
+        allowed: verified.ok,
+        reason: verified.ok ? "signed JWT verified" : verified.reason,
+      },
+    });
+    if (!verified.ok) {
+      return {
+        ok: false,
+        status: 401,
+        body: { error: "auth denied", evidenceId: authEvidence.evidenceId },
+      };
+    }
+    const now = new Date().toISOString();
+    await this.db.revokeLicense(verified.principal.accountId, now);
+    const revokeEvidence = await this.recordDecision({
+      decision: "license.revoke",
+      method: "account",
+      tenantId: verified.principal.tenantId,
+      accountId: verified.principal.accountId,
+      actorId: verified.principal.accountId,
+      content: {
+        allowed: true,
+        accountId: verified.principal.accountId,
+        revokedAt: now,
+      },
+    });
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        accountId: verified.principal.accountId,
+        revoked: true,
+        evidence: {
+          auth: authEvidence.evidenceId,
+          revoke: revokeEvidence.evidenceId,
+        },
+      },
     };
   }
 
@@ -352,6 +563,18 @@ export class GatewayHttpServer {
       const provisioned = await this.#control.provisionAccount(body);
       return respondJson(res, 201, provisioned);
     }
+    if (req.method === "POST" && url.pathname === "/v1/signup") {
+      const signup = await this.#control.signup(parseSignup(await readJson(req)));
+      return respondJson(res, 201, signup);
+    }
+    if (req.method === "POST" && url.pathname === "/v1/login") {
+      const login = await this.#control.login(parseLogin(await readJson(req)));
+      return respondJson(res, login.status, login.body);
+    }
+    if (req.method === "POST" && url.pathname === "/v1/license/revoke") {
+      const revoked = await this.#control.revokeLicense(req.headers.authorization);
+      return respondJson(res, revoked.status, revoked.body);
+    }
     if (
       req.method === "POST" &&
       (url.pathname === "/v1/complete" || url.pathname === "/v1/completions")
@@ -376,6 +599,35 @@ export class GatewayHttpServer {
       ? undefined
       : { error: "admin token denied" };
   }
+}
+
+function parseSignup(value: unknown): SignupRequest {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "JSON object body is required");
+  }
+  const body = value as Record<string, unknown>;
+  const email = clean(body.email);
+  const password = clean(body.password);
+  const displayName = clean(body.displayName);
+  if (email === undefined) throw new HttpError(400, "email is required");
+  if (password === undefined) throw new HttpError(400, "password is required");
+  return {
+    email,
+    password,
+    ...(displayName !== undefined ? { displayName } : {}),
+  };
+}
+
+function parseLogin(value: unknown): LoginRequest {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "JSON object body is required");
+  }
+  const body = value as Record<string, unknown>;
+  const email = clean(body.email);
+  const password = clean(body.password);
+  if (email === undefined) throw new HttpError(400, "email is required");
+  if (password === undefined) throw new HttpError(400, "password is required");
+  return { email, password };
 }
 
 function parseProvisionAccount(value: unknown): ProvisionAccountRequest {
