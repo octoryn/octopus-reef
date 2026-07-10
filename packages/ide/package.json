@@ -69,6 +69,11 @@
         "category": "Reef"
       },
       {
+        "command": "reef.openManager",
+        "title": "Reef: Manager",
+        "category": "Reef"
+      },
+      {
         "command": "reef.openAccount",
         "title": "Reef: Account & Plan",
         "category": "Reef"
@@ -163,6 +168,13 @@
         }
       ],
       "reef": [
+        {
+          "type": "webview",
+          "id": "reef.manager",
+          "name": "Manager",
+          "icon": "$(server-process)",
+          "visibility": "visible"
+        },
         {
           "type": "webview",
           "id": "reef.powers",

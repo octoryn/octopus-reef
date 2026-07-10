@@ -19,6 +19,8 @@ import {
   createHook,
   fireHook,
   getAccount,
+  createManagerFleet,
+  getManagerFleet,
   getUsage,
   getSpec,
   installPower,
@@ -31,6 +33,7 @@ import {
   setActiveSteering,
   streamEvents,
   verifySpec,
+  verifyManagerFleet,
   verifySession,
   type AccountQuery,
   type ServerEvent,
@@ -40,6 +43,7 @@ import {
   agentFocusWebviewHtml,
   browserWebviewHtml,
   hooksWebviewHtml,
+  managerWebviewHtml,
   powersWebviewHtml,
   specsWebviewHtml,
   steeringWebviewHtml,
@@ -104,6 +108,7 @@ const REEF_POWERS_VIEW_ID = "reef.powers";
 const REEF_SPECS_VIEW_ID = "reef.specs";
 const REEF_ACCOUNT_VIEW_ID = "reef.account";
 const REEF_USAGE_VIEW_ID = "reef.usage";
+const REEF_MANAGER_VIEW_ID = "reef.manager";
 const REEF_STEERING_VIEW_ID = "reef.steering";
 const REEF_HOOKS_VIEW_ID = "reef.hooks";
 const REEF_BROWSER_VIEW_ID = "reef.browser";
@@ -618,6 +623,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let welcomePanel: vscode.WebviewPanel | undefined;
   let agentFocusPanel: vscode.WebviewPanel | undefined;
   let powersView: vscode.WebviewView | undefined;
+  let managerView: vscode.WebviewView | undefined;
   let hooksView: vscode.WebviewView | undefined;
   let browserView: vscode.WebviewView | undefined;
   let specsView: vscode.WebviewView | undefined;
@@ -630,6 +636,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let lastVerify: ServerEvent | undefined;
   let lastSessionId: string | undefined;
   let lastSessionDir: string | undefined;
+  let activeManagerFleetId: string | undefined;
   let focusSessionId: string | undefined;
   let focusSessionTask = "";
   let focusEvents: SessionEvent[] = [];
@@ -1492,6 +1499,12 @@ export function activate(context: vscode.ExtensionContext): void {
     void usageView?.webview.postMessage({ kind: "usage", usage });
   };
 
+  const refreshManager = async (): Promise<void> => {
+    if (activeManagerFleetId === undefined) return;
+    const fleet = await getManagerFleet(activeServerUrl, activeManagerFleetId);
+    void managerView?.webview.postMessage({ kind: "managerFleet", fleet });
+  };
+
   const refreshSteering = async (): Promise<void> => {
     const steering = await listSteering(activeServerUrl);
     void steeringView?.webview.postMessage({ kind: "steering", steering });
@@ -1868,6 +1881,48 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  const handleManagerMessage = async (
+    message: WebviewMessage,
+  ): Promise<void> => {
+    try {
+      if (
+        message.kind === "createManagerFleet" &&
+        Array.isArray(message.tasks)
+      ) {
+        const fleet = await createManagerFleet(activeServerUrl, {
+          tasks: message.tasks,
+          persist: true,
+          model: { provider: "mock" },
+        });
+        activeManagerFleetId = fleet.id;
+        void managerView?.webview.postMessage({ kind: "managerFleet", fleet });
+      } else if (
+        message.kind === "getManagerFleet" &&
+        typeof message.id === "string"
+      ) {
+        activeManagerFleetId = message.id;
+        await refreshManager();
+      } else if (
+        message.kind === "verifyManagerFleet" &&
+        typeof message.id === "string"
+      ) {
+        activeManagerFleetId = message.id;
+        const verify = await verifyManagerFleet(activeServerUrl, message.id);
+        void managerView?.webview.postMessage({
+          kind: "managerVerify",
+          verify,
+        });
+        await refreshManager();
+      }
+    } catch (err) {
+      void managerView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
   const handleAccountMessage = async (
     message: WebviewMessage,
   ): Promise<void> => {
@@ -2081,6 +2136,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const openUsageView = (): Thenable<void> =>
     revealView(REEF_USAGE_VIEW_ID, usageView);
 
+  const openManagerView = (): Thenable<void> =>
+    revealView(REEF_MANAGER_VIEW_ID, managerView);
+
   const openSteeringView = (): Thenable<void> =>
     revealView(REEF_STEERING_VIEW_ID, steeringView);
 
@@ -2203,6 +2261,22 @@ export function activate(context: vscode.ExtensionContext): void {
     handleUsageMessage,
     (message) =>
       void usageView?.webview.postMessage({
+        kind: "status",
+        tone: "bad",
+        message,
+      }),
+  );
+
+  const managerViewProvider = registerReefView(
+    REEF_MANAGER_VIEW_ID,
+    "media/manager.js",
+    managerWebviewHtml,
+    (view) => {
+      managerView = view;
+    },
+    handleManagerMessage,
+    (message) =>
+      void managerView?.webview.postMessage({
         kind: "status",
         tone: "bad",
         message,
@@ -2335,6 +2409,22 @@ export function activate(context: vscode.ExtensionContext): void {
       });
     }
   });
+
+  const manager = vscode.commands.registerCommand(
+    "reef.openManager",
+    async () => {
+      await openManagerView();
+      try {
+        await refreshManager();
+      } catch (err) {
+        void managerView?.webview.postMessage({
+          kind: "status",
+          tone: "bad",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
 
   const account = vscode.commands.registerCommand(
     "reef.openAccount",
@@ -2578,6 +2668,7 @@ export function activate(context: vscode.ExtensionContext): void {
     specs,
     account,
     usage,
+    manager,
     steering,
     hooks,
     browser,
@@ -2592,6 +2683,7 @@ export function activate(context: vscode.ExtensionContext): void {
     specsViewProvider,
     accountViewProvider,
     usageViewProvider,
+    managerViewProvider,
     steeringViewProvider,
     hooksViewProvider,
     browserViewProvider,

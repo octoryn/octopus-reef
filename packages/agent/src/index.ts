@@ -44,6 +44,7 @@ export type { CodeWorkerOptions, ToolWorkerOptions } from "./workers.js";
 // Wrap an external agent CLI (Claude Code / Codex / …) as a governed worker.
 export { cliWorker, runCliWithDiff } from "./cli.js";
 export type { CliWorkerOptions, CliRunResult, FileChange } from "./cli.js";
+export { recordOf } from "./session-result.js";
 export type {
   ModelProvider,
   CompletionRequest,

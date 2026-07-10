@@ -115,6 +115,28 @@ function collectSSE(port: number, path: string): Promise<ServerEvent[]> {
   });
 }
 
+function flipOneByte(path: string, needle: string): void {
+  const raw = readFileSync(path);
+  const offset = raw.indexOf(Buffer.from(needle));
+  assert.ok(offset >= 0, `${path} should contain ${needle}`);
+  raw[offset] = raw[offset] === 0x61 ? 0x62 : 0x61;
+  writeFileSync(path, raw);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForFleet(port: number, id: string): Promise<Json> {
+  for (let i = 0; i < 40; i++) {
+    const view = await request(port, "GET", `/manager/fleets/${id}`);
+    assert.equal(view.status, 200);
+    if (view.json.status === "sealed") return view.json;
+    await delay(25);
+  }
+  throw new Error(`fleet ${id} did not seal`);
+}
+
 function chromeAvailable(): boolean {
   if (process.env.CHROME_PATH !== undefined) {
     return existsSync(process.env.CHROME_PATH);
@@ -253,6 +275,76 @@ test("M3: persisted verify turns red after one evidence-log byte is flipped", as
     assert.equal(after.status, 200);
     assert.equal(after.json.ok, false);
     assert.match(after.json.log, /broken/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test("B: Manager spawns two governed sessions and verifies the fleet Worker Ledger", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-b-manager-"));
+  const server = new ReefServer({ persistDir: dir });
+  const port = await server.listen(0);
+  try {
+    const created = await request(port, "POST", "/manager/fleets", {
+      tasks: ["B manager session alpha", "B manager session beta"],
+      persist: true,
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.fleet.id as string;
+
+    const fleet = await waitForFleet(port, id);
+    assert.equal(fleet.sessions.length, 2);
+    assert.ok(
+      fleet.sessions.every((session: Json) => session.verifyOk === true),
+      "each background governed session verifies green",
+    );
+    assert.equal(fleet.ledger.verified, true);
+    assert.match(fleet.ledger.head, /^[0-9a-f]{64}$/);
+    assert.ok(fleet.ledger.links >= 6);
+
+    const verified = await request(port, "GET", `/manager/fleets/${id}/verify`);
+    assert.equal(verified.status, 200);
+    assert.equal(verified.json.ok, true);
+    assert.equal(verified.json.ledger.verified, true);
+
+    flipOneByte(
+      join(dir, "fleets", id, "worker-ledger.json"),
+      "manager-session",
+    );
+    const after = await request(port, "GET", `/manager/fleets/${id}/verify`);
+    assert.equal(after.status, 200);
+    assert.equal(after.json.ok, false);
+    assert.equal(after.json.ledger.verified, false);
+  } finally {
+    await server.close();
+  }
+});
+
+test("B: Manager fleet verification turns red after a session evidence tamper", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-b-manager-session-"));
+  const server = new ReefServer({ persistDir: dir });
+  const port = await server.listen(0);
+  try {
+    const created = await request(port, "POST", "/manager/fleets", {
+      tasks: ["B manager tamper alpha", "B manager tamper beta"],
+      persist: true,
+    });
+    assert.equal(created.status, 201);
+    const id = created.json.fleet.id as string;
+    const fleet = await waitForFleet(port, id);
+    const sessionId = fleet.sessions[0].id as string;
+
+    flipOneByte(join(dir, sessionId, "session.log.jsonl"), "tamper");
+    const after = await request(port, "GET", `/manager/fleets/${id}/verify`);
+    assert.equal(after.status, 200);
+    assert.equal(after.json.ok, false);
+    assert.ok(
+      after.json.sessions.some(
+        (session: Json) =>
+          session.id === sessionId && session.verifyOk === false,
+      ),
+      "the tampered session card turns red",
+    );
   } finally {
     await server.close();
   }
@@ -1548,13 +1640,11 @@ test("C5: commercial priority routing and plan text are evidence-backed", async 
           frame.event.kind === "observation" &&
           (
             frame.event.data.priorityTierDecision as
-              | { tier?: string; queue?: string; model?: string }
-              | undefined
+              { tier?: string; queue?: string; model?: string } | undefined
           )?.tier === "priority" &&
           (
             frame.event.data.priorityTierDecision as
-              | { tier?: string; queue?: string; model?: string }
-              | undefined
+              { tier?: string; queue?: string; model?: string } | undefined
           )?.queue === "priority",
       ),
       "priority routing should be a governed evidence link",
@@ -1566,8 +1656,7 @@ test("C5: commercial priority routing and plan text are evidence-backed", async 
           frame.event.kind === "observation" &&
           (
             frame.event.data.gatewayRoute as
-              | { priority?: { tier?: string }; model?: string }
-              | undefined
+              { priority?: { tier?: string }; model?: string } | undefined
           )?.priority?.tier === "priority",
       ),
       "gateway route should retain the selected priority tier",

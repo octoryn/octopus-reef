@@ -675,6 +675,64 @@ export function usageWebviewHtml(cspSource: string, scriptUri: string): string {
 </html>`;
 }
 
+export function managerWebviewHtml(
+  cspSource: string,
+  scriptUri: string,
+): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource};" />
+<style>
+  :root{--deep:#091315;--panel:#0f1d20;--panel2:#132529;--line:#214044;--ink:#edf6f4;--muted:#86a5a5;--signal:#3de0be;--warn:#ffd166;--danger:#ff6b6b;--mono:ui-monospace,Menlo,monospace}
+  body{margin:0;background:var(--deep);color:var(--ink);font-family:var(--mono);font-size:13px}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+  main{display:grid;grid-template-columns:320px 1fr;min-height:calc(100vh - 58px)}
+  aside{border-right:1px solid var(--line);padding:14px;display:grid;align-content:start;gap:12px;background:#0b1719}
+  section{padding:16px;display:grid;align-content:start;gap:14px}
+  h2{font-size:12px;letter-spacing:0;text-transform:uppercase;color:var(--muted);margin:0}
+  form{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;display:grid;gap:10px}
+  label{display:grid;gap:5px;color:var(--muted)}
+  textarea{min-width:0;min-height:126px;resize:vertical;background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;padding:9px;outline:none}
+  textarea:focus{border-color:var(--signal)}
+  button{background:var(--signal);border:0;border-radius:6px;color:#001714;font:inherit;font-weight:700;padding:7px 10px}
+  button.secondary{background:var(--panel2);border:1px solid var(--line);color:var(--ink)}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}.list{display:grid;gap:10px}
+  .card{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;display:grid;gap:8px}
+  .top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.name{font-weight:700;line-height:1.35}.meta{color:var(--muted);font-size:12px;line-height:1.45}
+  .pill{border:1px solid var(--line);border-radius:999px;padding:3px 8px;color:var(--muted);white-space:nowrap}.pill.ok{color:var(--signal);border-color:rgba(61,224,190,.55)}.pill.bad{color:var(--danger);border-color:rgba(255,107,107,.55)}.pill.warn{color:var(--warn);border-color:rgba(255,209,102,.55)}
+  .ledger{border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:12px;display:grid;gap:8px}.ledger.ok{border-color:rgba(61,224,190,.55)}.ledger.bad{border-color:rgba(255,107,107,.55)}
+  .hash{color:var(--signal);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
+  .status.ok{border-color:var(--signal);color:var(--signal)}.status.bad{border-color:var(--danger);color:var(--danger)}.status.warn{border-color:var(--warn);color:var(--warn)}
+  @media (max-width:880px){main{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}}
+  ${reefPanelPolish}
+</style>
+</head>
+<body class="reef-panel">
+<header class="reef-panel-header"><div class="panel-heading"><div class="reef-kicker">Reef</div><h1>Manager</h1><p>Parallel governed sessions bound into one Worker Ledger.</p></div><div class="panel-actions"><button id="refresh" class="secondary" type="button">Refresh</button><button id="verify" class="secondary" type="button">Verify</button></div></header>
+<main>
+  <aside>
+    <h2>Fleet Tasks</h2>
+    <form id="create">
+      <label>Tasks<textarea id="tasks" spellcheck="false">Review API audit pack behavior
+Verify manager ledger tamper path</textarea></label>
+      <button type="submit">Spawn Fleet</button>
+    </form>
+    <div id="ledger" class="ledger"><div class="meta">No fleet yet.</div></div>
+  </aside>
+  <section>
+    <h2>Sessions</h2>
+    <div id="sessions" class="list"></div>
+    <div id="status" class="status">Waiting for Manager.</div>
+  </section>
+</main>
+<script src="${scriptUri}"></script>
+</body>
+</html>`;
+}
+
 export function accountWebviewHtml(
   cspSource: string,
   scriptUri: string,

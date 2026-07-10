@@ -22,10 +22,14 @@ import type {
   ChatRouteResolution,
   ChatTaskReference,
   CreateHookRequest,
+  CreateManagerFleetRequest,
+  CreateManagerFleetResponse,
   FireHookRequest,
   FireHookResponse,
   HookDefinitionView,
   HookListResponse,
+  ManagerFleetVerifyResponse,
+  ManagerFleetView,
   SetSteeringActiveRequest,
   SteeringItemView,
   SteeringListResponse,
@@ -434,6 +438,38 @@ export async function fireHook(
       method: "POST",
       body: JSON.stringify(input),
     },
+  );
+}
+
+export async function createManagerFleet(
+  baseUrl: string,
+  input: CreateManagerFleetRequest,
+): Promise<ManagerFleetView> {
+  const body = await jsonRequest<CreateManagerFleetResponse>(
+    `${baseUrl}/manager/fleets`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
+  return body.fleet;
+}
+
+export async function getManagerFleet(
+  baseUrl: string,
+  id: string,
+): Promise<ManagerFleetView> {
+  return await jsonRequest<ManagerFleetView>(
+    `${baseUrl}/manager/fleets/${encodeURIComponent(id)}`,
+  );
+}
+
+export async function verifyManagerFleet(
+  baseUrl: string,
+  id: string,
+): Promise<ManagerFleetVerifyResponse> {
+  return await jsonRequest<ManagerFleetVerifyResponse>(
+    `${baseUrl}/manager/fleets/${encodeURIComponent(id)}/verify`,
   );
 }
 

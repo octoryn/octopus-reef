@@ -23,7 +23,14 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { extname, join, relative, resolve } from "node:path";
 import {
   GovernedSession,
@@ -48,7 +55,17 @@ import {
   AgentWorker,
   AnthropicProvider,
   BedrockProvider,
+  Orchestrator,
+  ledgerHead,
+  recordOf,
+  verifyLedger,
   type ModelProvider,
+  type Planner,
+  type Router,
+  type Subtask,
+  type Worker,
+  type WorkerLedger,
+  type WorkerResult,
 } from "@octopus-reef/agent";
 import {
   GatewayProvider,
@@ -69,10 +86,15 @@ import type {
   ChatCommandResolution,
   ChatRouteResolution,
   ChatTaskReference,
+  CreateManagerFleetRequest,
   CreateHookRequest,
   CreateSessionRequest,
   EditionResponse,
   FireHookRequest,
+  ManagerFleetLedgerView,
+  ManagerFleetVerifyResponse,
+  ManagerFleetView,
+  ManagerSessionCardView,
   ReefEdition,
   SetSteeringActiveRequest,
   ServerEvent,
@@ -109,11 +131,24 @@ interface SessionRecord {
   session: GovernedSession;
   readonly events: ReefEvent[];
   readonly subscribers: Set<ServerResponse>;
+  readonly sealed: Promise<void>;
+  readonly finish: () => void;
   status: "running" | "sealed";
   snapshot: SessionSnapshot | null;
   verify: VerifyResult | null;
   outcome: SessionOutcome | null;
   cleanup?: () => void;
+}
+
+interface ManagerFleetRecord {
+  readonly id: string;
+  readonly createdAt: string;
+  sessionIds: readonly string[];
+  status: "running" | "sealed";
+  updatedAt: string;
+  ledger: WorkerLedger | null;
+  ledgerHead: string | null;
+  ledgerVerified: boolean | null;
 }
 
 interface McpSessionRequest {
@@ -1002,6 +1037,7 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
 /** A local daemon hosting the Reef engine for every surface to share. */
 export class ReefServer {
   readonly #sessions = new Map<string, SessionRecord>();
+  readonly #fleets = new Map<string, ManagerFleetRecord>();
   readonly #options: ReefServerOptions;
   readonly #http: Server;
   readonly #powers: McpPowerRegistry;
@@ -1010,6 +1046,7 @@ export class ReefServer {
   readonly #steering: SteeringRegistry;
   readonly #account: AccountStore;
   #counter = 0;
+  #fleetCounter = 0;
 
   constructor(options: ReefServerOptions = {}) {
     this.#options = options;
@@ -1363,6 +1400,25 @@ export class ReefServer {
         }
       }
     }
+    if (parts[0] === "manager" && parts[1] === "fleets") {
+      if (method === "POST" && parts.length === 2) {
+        return this.#createManagerFleet(req, res);
+      }
+      const fleetId = parts[2];
+      if (fleetId !== undefined) {
+        const fleet = this.#fleets.get(fleetId);
+        if (fleet === undefined) return this.#fail(res, 404, "unknown fleet");
+        if (method === "GET" && parts.length === 3) {
+          return this.#json(res, 200, this.#fleetView(fleet));
+        }
+        if (method === "GET" && parts.length === 4 && parts[3] === "ledger") {
+          return this.#json(res, 200, this.#fleetLedgerBody(fleet));
+        }
+        if (method === "GET" && parts.length === 4 && parts[3] === "verify") {
+          return this.#json(res, 200, this.#verifyFleet(fleet));
+        }
+      }
+    }
     if (method === "POST" && parts.length === 1 && parts[0] === "sessions") {
       return this.#createSession(req, res);
     }
@@ -1423,6 +1479,323 @@ export class ReefServer {
     }
   }
 
+  async #createManagerFleet(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    try {
+      const body = (await this.#readJson(req)) as CreateManagerFleetRequest;
+      const tasks = (Array.isArray(body.tasks) ? body.tasks : [])
+        .map((task) => (typeof task === "string" ? task.trim() : ""))
+        .filter((task) => task !== "");
+      if (tasks.length < 2) {
+        throw new RequestFailure(
+          400,
+          "manager fleet requires at least two tasks",
+        );
+      }
+      const id = `fleet-${(this.#fleetCounter++).toString(36)}-${Date.now().toString(36)}`;
+      const createdAt = new Date().toISOString();
+      const sessionIds = tasks.map((task) =>
+        this.#startSession({
+          task,
+          persist: body.persist === true,
+          ...(typeof body.secret === "string" && body.secret.length > 0
+            ? { secret: body.secret }
+            : {}),
+          ...(body.model !== undefined ? { model: body.model } : {}),
+        }),
+      );
+      const fleet: ManagerFleetRecord = {
+        id,
+        createdAt,
+        updatedAt: createdAt,
+        sessionIds,
+        status: "running",
+        ledger: null,
+        ledgerHead: null,
+        ledgerVerified: null,
+      };
+      this.#fleets.set(id, fleet);
+      void this.#completeFleet(fleet);
+      return this.#json(res, 201, { fleet: this.#fleetView(fleet) });
+    } catch (err) {
+      return this.#fail(
+        res,
+        err instanceof RequestFailure ? err.status : 400,
+        err instanceof Error ? err.message : "bad body",
+      );
+    }
+  }
+
+  async #completeFleet(fleet: ManagerFleetRecord): Promise<void> {
+    try {
+      const sessions = fleet.sessionIds
+        .map((id) => this.#sessions.get(id))
+        .filter((rec): rec is SessionRecord => rec !== undefined);
+      await Promise.all(sessions.map((rec) => rec.sealed));
+      const ledger = await this.#buildFleetLedger(fleet, sessions);
+      fleet.ledger = ledger.ledger;
+      fleet.ledgerHead = ledger.head;
+      fleet.ledgerVerified = ledger.verified;
+    } catch {
+      fleet.ledger = null;
+      fleet.ledgerHead = null;
+      fleet.ledgerVerified = false;
+    } finally {
+      fleet.status = "sealed";
+      fleet.updatedAt = new Date().toISOString();
+      this.#persistFleet(fleet);
+    }
+  }
+
+  async #buildFleetLedger(
+    fleet: ManagerFleetRecord,
+    sessions: readonly SessionRecord[],
+  ): Promise<{
+    readonly ledger: WorkerLedger;
+    readonly head: string;
+    readonly verified: boolean;
+  }> {
+    const subtasks: Subtask[] = sessions.map((session) => ({
+      id: session.id,
+      description: session.task,
+    }));
+    const results = sessions.map((session) =>
+      this.#workerResultForSession(session),
+    );
+    let index = 0;
+    let tick = 0;
+    const planner: Planner = { plan: () => Promise.resolve(subtasks) };
+    const router: Router = {
+      route: () =>
+        Promise.resolve({
+          worker: "manager-session",
+          reason: "parallel governed session sealed and ready to verify",
+        }),
+    };
+    const worker: Worker = {
+      name: "manager-session",
+      description:
+        "Binds a sealed governed background session into the Manager Worker Ledger.",
+      run: () => {
+        const result = results[index++];
+        if (result === undefined) throw new Error("manager-session exhausted");
+        return Promise.resolve(result);
+      },
+    };
+    const orchestrator = new Orchestrator({
+      workers: [worker],
+      planner,
+      router,
+      now: () => {
+        const base = new Date().toISOString().replace(/Z$/, "");
+        return `${base}.${String(tick++).padStart(3, "0")}Z`;
+      },
+      acceptance: {
+        contractHash: fleet.id,
+        contract: {
+          kind: "reef.manager.fleet",
+          fleetId: fleet.id,
+          requires: [
+            "each background governed session verifies",
+            "each result pins its work and evidence heads",
+            "the fleet Worker Ledger verifies",
+          ],
+        },
+        judge: (_task, steps) =>
+          Promise.resolve({
+            met: steps.every((step) => step.result.verified),
+            reason: "all Manager sessions produced verified governed proofs",
+          }),
+      },
+    });
+    const result = await orchestrator.orchestrate(`manager fleet ${fleet.id}`);
+    return {
+      ledger: result.ledger,
+      head: ledgerHead(result.ledger),
+      verified: verifyLedger(result.ledger),
+    };
+  }
+
+  #workerResultForSession(rec: SessionRecord): WorkerResult {
+    const seal = [...rec.events]
+      .reverse()
+      .find((event) => event.kind === "session.sealed");
+    const reason = seal?.data["reason"];
+    return {
+      outcome: rec.outcome ?? "failed",
+      output:
+        typeof reason === "string" && reason.length > 0
+          ? reason
+          : `manager session ${rec.id}`,
+      workHead: rec.session.graph.anchor().head,
+      logHead: rec.session.log.head,
+      verified: this.#verifySessionRecord(rec).ok,
+      record: recordOf(rec.session),
+    };
+  }
+
+  #fleetDir(fleet: ManagerFleetRecord): string | undefined {
+    return this.#options.persistDir === undefined
+      ? undefined
+      : join(this.#options.persistDir, "fleets", fleet.id);
+  }
+
+  #persistFleet(fleet: ManagerFleetRecord): void {
+    const dir = this.#fleetDir(fleet);
+    if (dir === undefined) return;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "fleet.json"),
+      `${JSON.stringify(this.#fleetView(fleet), null, 2)}\n`,
+    );
+    if (fleet.ledger !== null) {
+      writeFileSync(
+        join(dir, "worker-ledger.json"),
+        `${JSON.stringify(
+          {
+            fleetId: fleet.id,
+            sessionIds: fleet.sessionIds,
+            ledger: fleet.ledger,
+            head: fleet.ledgerHead,
+            verified: fleet.ledgerVerified,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    }
+  }
+
+  #readPersistedFleetLedger(fleet: ManagerFleetRecord):
+    | {
+        readonly ledger: WorkerLedger;
+        readonly source: "persisted";
+      }
+    | undefined {
+    const dir = this.#fleetDir(fleet);
+    if (dir === undefined) return undefined;
+    const path = join(dir, "worker-ledger.json");
+    if (!existsSync(path)) return undefined;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+      readonly ledger?: WorkerLedger;
+    };
+    if (parsed.ledger === undefined) return undefined;
+    return { ledger: parsed.ledger, source: "persisted" };
+  }
+
+  #fleetLedgerBody(fleet: ManagerFleetRecord): {
+    readonly ledger: WorkerLedger | null;
+    readonly view: ManagerFleetLedgerView | null;
+  } {
+    const loaded = this.#readPersistedFleetLedger(fleet);
+    const ledger = loaded?.ledger ?? fleet.ledger;
+    if (ledger === null) return { ledger: null, view: null };
+    const verified = verifyLedger(ledger);
+    return {
+      ledger,
+      view: {
+        head: ledgerHead(ledger),
+        links: ledger.chain.length,
+        verified,
+        source: loaded?.source ?? "memory",
+      },
+    };
+  }
+
+  #sessionCard(rec: SessionRecord): ManagerSessionCardView {
+    const verify =
+      rec.status === "sealed" ? this.#verifySessionRecord(rec) : rec.verify;
+    return {
+      id: rec.id,
+      task: rec.task,
+      status: rec.status,
+      outcome: rec.outcome,
+      events: rec.events.length,
+      verifyOk: verify?.ok ?? null,
+      verify,
+      ...(rec.snapshot !== null
+        ? {
+            logHead: rec.snapshot.logHead,
+            workChainLength: rec.snapshot.workChainLength,
+            logChainLength: rec.snapshot.logChainLength,
+          }
+        : {}),
+    };
+  }
+
+  #fleetView(fleet: ManagerFleetRecord): ManagerFleetView {
+    let ledger: ManagerFleetLedgerView | null;
+    try {
+      ledger = this.#fleetLedgerBody(fleet).view;
+    } catch {
+      ledger =
+        fleet.ledgerHead === null
+          ? null
+          : {
+              head: fleet.ledgerHead,
+              links: fleet.ledger?.chain.length ?? 0,
+              verified: false,
+              source: "persisted",
+            };
+    }
+    return {
+      id: fleet.id,
+      status: fleet.status,
+      createdAt: fleet.createdAt,
+      updatedAt: fleet.updatedAt,
+      sessions: fleet.sessionIds
+        .map((id) => this.#sessions.get(id))
+        .filter((rec): rec is SessionRecord => rec !== undefined)
+        .map((rec) => this.#sessionCard(rec)),
+      ledger,
+    };
+  }
+
+  #verifyFleet(fleet: ManagerFleetRecord): ManagerFleetVerifyResponse {
+    const sessions = fleet.sessionIds
+      .map((id) => this.#sessions.get(id))
+      .filter((rec): rec is SessionRecord => rec !== undefined)
+      .map((rec) => this.#sessionCard(rec));
+    let ledger: ManagerFleetLedgerView | null = null;
+    let ledgerOk = false;
+    let ledgerReason = "fleet ledger has not sealed yet";
+    if (fleet.status === "sealed") {
+      try {
+        const body = this.#fleetLedgerBody(fleet);
+        ledger = body.view;
+        ledgerOk = ledger?.verified === true;
+        ledgerReason = ledgerOk
+          ? "fleet Worker Ledger verified"
+          : "fleet Worker Ledger failed verification";
+      } catch (err) {
+        ledger =
+          fleet.ledgerHead === null
+            ? null
+            : {
+                head: fleet.ledgerHead,
+                links: fleet.ledger?.chain.length ?? 0,
+                verified: false,
+                source: "persisted",
+              };
+        ledgerReason = err instanceof Error ? err.message : String(err);
+      }
+    }
+    const sessionsOk =
+      sessions.length > 0 &&
+      sessions.every((session) => session.verifyOk === true);
+    const ok = fleet.status === "sealed" && ledgerOk && sessionsOk;
+    return {
+      ok,
+      ledger,
+      sessions,
+      reason: ok
+        ? "fleet ledger and all governed sessions verified"
+        : `${ledgerReason}; sessions ${sessionsOk ? "verified" : "failed verification"}`,
+    };
+  }
+
   #startSession(body: CreateSessionRequest): string {
     const task = typeof body.task === "string" ? body.task.trim() : "";
     if (task === "") throw new RequestFailure(400, "task is required");
@@ -1464,12 +1837,18 @@ export class ReefServer {
       body.conversation,
     );
     const runtime = this.#teamRuntime(conversationalRuntime);
+    let finish!: () => void;
+    const sealed = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
     const rec: SessionRecord = {
       id,
       task,
       session: undefined as unknown as GovernedSession,
       events: [],
       subscribers: new Set(),
+      sealed,
+      finish,
       status: "running",
       snapshot: null,
       verify: null,
@@ -1811,7 +2190,11 @@ export class ReefServer {
     }
     for (const res of rec.subscribers) res.end();
     rec.subscribers.clear();
-    rec.cleanup?.();
+    try {
+      rec.cleanup?.();
+    } finally {
+      rec.finish();
+    }
   }
 
   #subscribe(
@@ -1855,6 +2238,10 @@ export class ReefServer {
       this.#fail(res, 409, "session has not sealed yet");
       return;
     }
+    this.#json(res, 200, this.#verifySessionRecord(rec));
+  }
+
+  #verifySessionRecord(rec: SessionRecord): VerifyResult {
     const persisted =
       this.#options.persistDir !== undefined
         ? join(this.#options.persistDir, rec.id)
@@ -1865,25 +2252,24 @@ export class ReefServer {
     ) {
       try {
         loadSession(persisted);
-        this.#json(res, 200, {
+        return {
           ok: true,
           work: "intact",
           log: "intact",
           binding: "bound",
-        });
+        };
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
-        this.#json(res, 200, {
+        return {
           ok: false,
           work: "unchecked",
           log: `broken: ${reason}`,
           binding: "unchecked",
-        });
+        };
       }
-      return;
     }
     // Re-verify from scratch — store-untrusting, exactly as an offline auditor would.
-    this.#json(res, 200, rec.session.verify());
+    return rec.session.verify();
   }
 
   #view(rec: SessionRecord): SessionView {

@@ -49,6 +49,7 @@ test("layout: Reef tools are contributed as left activity-bar webview views", ()
   assert.deepEqual(
     reefViews.map((view: any) => [view.id, view.type]),
     [
+      ["reef.manager", "webview"],
       ["reef.powers", "webview"],
       ["reef.browser", "webview"],
       ["reef.specs", "webview"],
@@ -236,6 +237,7 @@ test("layout: left Reef panels use the shared polish and Usage keeps sourced val
   );
   for (const title of [
     "Powers",
+    "Manager",
     "Browser",
     "Specs",
     "Account &amp; Plan",

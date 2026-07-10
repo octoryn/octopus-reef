@@ -211,6 +211,55 @@ export interface SessionView {
   readonly events: number;
 }
 
+export type ManagerFleetStatus = "running" | "sealed";
+
+export interface CreateManagerFleetRequest {
+  readonly tasks?: readonly string[];
+  readonly persist?: boolean;
+  readonly secret?: string;
+  readonly model?: CreateSessionRequest["model"];
+}
+
+export interface ManagerSessionCardView {
+  readonly id: string;
+  readonly task: string;
+  readonly status: SessionStatus;
+  readonly outcome: SessionOutcome | null;
+  readonly events: number;
+  readonly verifyOk: boolean | null;
+  readonly verify: VerifyResult | null;
+  readonly logHead?: string;
+  readonly workChainLength?: number;
+  readonly logChainLength?: number;
+}
+
+export interface ManagerFleetLedgerView {
+  readonly head: string;
+  readonly links: number;
+  readonly verified: boolean;
+  readonly source: "memory" | "persisted";
+}
+
+export interface ManagerFleetView {
+  readonly id: string;
+  readonly status: ManagerFleetStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly sessions: readonly ManagerSessionCardView[];
+  readonly ledger: ManagerFleetLedgerView | null;
+}
+
+export interface CreateManagerFleetResponse {
+  readonly fleet: ManagerFleetView;
+}
+
+export interface ManagerFleetVerifyResponse {
+  readonly ok: boolean;
+  readonly ledger: ManagerFleetLedgerView | null;
+  readonly sessions: readonly ManagerSessionCardView[];
+  readonly reason: string;
+}
+
 /**
  * A frame on the `GET /sessions/:id/events` SSE stream. A subscriber always
  * receives `hello`, then every `event` in order (buffered ones replayed first,
