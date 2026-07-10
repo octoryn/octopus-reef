@@ -283,7 +283,8 @@
             "auto",
             "mock",
             "anthropic",
-            "bedrock"
+            "bedrock",
+            "gateway"
           ],
           "default": "auto",
           "description": "Model provider for governed sessions. With no BYOK key, auto falls back to the offline MockDriver."
@@ -297,6 +298,26 @@
           "type": "string",
           "default": "",
           "description": "Optional model name override for the configured provider."
+        },
+        "reef.gateway.url": {
+          "type": "string",
+          "default": "",
+          "description": "Reef control-plane gateway URL. If empty, Reef reads REEF_GATEWAY_URL."
+        },
+        "reef.gateway.licenseToken": {
+          "type": "string",
+          "default": "",
+          "description": "Offline stub gateway token. If empty, Reef reads REEF_LICENSE_TOKEN."
+        },
+        "reef.gateway.accessToken": {
+          "type": "string",
+          "default": "",
+          "description": "Signed real gateway JWT. If empty, Reef reads REEF_GATEWAY_ACCESS_TOKEN."
+        },
+        "reef.account.ssoUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Loopback OIDC issuer for local SSO development. If empty, Reef reads REEF_GATEWAY_OIDC_ISSUER."
         },
         "reef.priority.modelTier": {
           "type": "string",

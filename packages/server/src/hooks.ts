@@ -10,7 +10,6 @@ import type {
   FireHookRequest,
   HookDefinitionView,
   HookListResponse,
-  HookTrigger,
 } from "@octopus-reef/protocol";
 
 interface StoredHooks {

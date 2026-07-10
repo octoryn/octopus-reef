@@ -113,7 +113,6 @@ import {
 import {
   McpPowerRegistry,
   type AddCustomPowerRequest,
-  type InstalledPower,
 } from "./mcp.js";
 import { BrowserDemoDriver, BrowserPowerRuntime } from "./browser.js";
 import { HookRegistry } from "./hooks.js";
@@ -631,6 +630,7 @@ export interface DriverFactoryContext {
     readonly apiKey?: string;
     readonly name?: string;
     readonly licenseToken?: string;
+    readonly accessToken?: string;
     readonly gatewayUrl?: string;
     readonly priorityTier?: PriorityModelTier;
   };
@@ -769,6 +769,7 @@ function sessionContext(
     ...maybe("apiKey", optionalString(modelBody?.apiKey)),
     ...maybe("name", optionalString(modelBody?.name)),
     ...maybe("licenseToken", optionalString(modelBody?.licenseToken)),
+    ...maybe("accessToken", optionalString(modelBody?.accessToken)),
     ...maybe("gatewayUrl", optionalString(modelBody?.gatewayUrl)),
     ...(optionalString(modelBody?.priorityTier) !== undefined
       ? {
@@ -912,13 +913,17 @@ function gatewayRuntime(context: DriverFactoryContext): SessionRuntime {
     context.model?.licenseToken ??
     optionalString(process.env.REEF_LICENSE_TOKEN) ??
     optionalString(process.env.REEF_ENTITLEMENT_TOKEN);
+  const accessToken =
+    context.model?.accessToken ??
+    optionalString(process.env.REEF_GATEWAY_ACCESS_TOKEN);
+  const authToken = accessToken ?? licenseToken;
   const entitlement = gatewayEntitlementDecision(
-    licenseToken === undefined ? {} : { licenseToken },
+    authToken === undefined ? {} : { licenseToken: authToken },
   );
   const quota = gatewayQuotaDecision({
     entitlementAllowed: entitlement.allowed,
   });
-  if (!entitlement.allowed || licenseToken === undefined) {
+  if (!entitlement.allowed || authToken === undefined) {
     return {
       driver: new GatewayGovernanceDriver({
         entitlement,
@@ -953,13 +958,14 @@ function gatewayRuntime(context: DriverFactoryContext): SessionRuntime {
 
   const route = gatewayRouteDecision({
     gatewayUrl,
-    licenseToken,
+    licenseToken: authToken,
     priorityTier,
     ...(context.model?.name !== undefined ? { model: context.model.name } : {}),
   });
   const provider = new GatewayProvider({
     gatewayUrl,
-    licenseToken,
+    ...(licenseToken !== undefined ? { licenseToken } : {}),
+    ...(accessToken !== undefined ? { accessToken } : {}),
     priorityTier,
     ...(context.model?.name !== undefined ? { model: context.model.name } : {}),
   });

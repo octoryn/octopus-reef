@@ -98,7 +98,9 @@ export interface CreateSessionRequest {
     readonly apiKey?: string;
     readonly name?: string;
     readonly licenseToken?: string;
+    readonly accessToken?: string;
     readonly gatewayUrl?: string;
+    readonly priorityTier?: "standard" | "priority";
   };
   /**
    * N5 offline MCP proof path. When present, the daemon uses an explicit

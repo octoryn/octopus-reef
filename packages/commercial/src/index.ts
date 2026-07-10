@@ -73,7 +73,8 @@ export interface GatewayRouteDecision {
 
 export interface GatewayProviderOptions {
   readonly gatewayUrl: string;
-  readonly licenseToken: string;
+  readonly licenseToken?: string;
+  readonly accessToken?: string;
   readonly model?: string;
   readonly priorityTier?: PriorityModelTier;
   readonly fetchImpl?: typeof fetch;
@@ -82,27 +83,27 @@ export interface GatewayProviderOptions {
 export class GatewayProvider {
   readonly name = GATEWAY_PROVIDER_NAME;
   readonly #gatewayUrl: string;
-  readonly #licenseToken: string;
+  readonly #authToken: string | undefined;
   readonly #model: string;
   readonly #priorityTier: PriorityModelTier;
   readonly #fetch: typeof fetch;
 
   constructor(options: GatewayProviderOptions) {
     this.#gatewayUrl = trimTrailingSlash(options.gatewayUrl);
-    this.#licenseToken = options.licenseToken;
+    this.#authToken = clean(options.accessToken) ?? clean(options.licenseToken);
     this.#priorityTier = priorityModelTier(options.priorityTier);
     this.#model = options.model ?? priorityTierModel(this.#priorityTier);
     this.#fetch = options.fetchImpl ?? fetch;
   }
 
   async complete(request: CompletionRequest): Promise<CompletionResponse> {
-    if (this.#licenseToken.trim() === "") {
-      throw new ProviderError("gateway license token is required");
+    if (this.#authToken === undefined) {
+      throw new ProviderError("gateway auth token is required");
     }
     const res = await this.#fetch(`${this.#gatewayUrl}/v1/completions`, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${this.#licenseToken}`,
+        authorization: `Bearer ${this.#authToken}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({

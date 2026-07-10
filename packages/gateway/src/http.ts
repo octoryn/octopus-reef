@@ -432,9 +432,9 @@ export class GatewayControlPlane {
       id: randomUUID(),
       accountId,
       tokenHash: hashSecret(identity.licenseToken),
-      planId: "reef-commercial-sso",
+      planId: "reef-commercial-priority-sso",
       status: "active",
-      entitlements: ["inference:complete", "team:audit"],
+      entitlements: ["inference:complete", "team:audit", "priority:route"],
       createdAt: now,
     });
     await this.db.upsertQuota({

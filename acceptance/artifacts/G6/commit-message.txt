@@ -1,0 +1,21 @@
+G6: wire commercial client to real gateway
+
+Add signed JWT support to the commercial GatewayProvider and thread gateway
+access tokens through protocol, server, and IDE configuration/env wiring while
+preserving the existing license-token offline stub path.
+
+The G6 source test runs the commercial client against the real gateway service
+after local OIDC SSO, exercises entitlement, quota, team audit, priority plan
+routing, verifies the gateway ledger green, then flips a stored tier evidence
+byte and verifies red.
+
+Verification:
+- npm run typecheck --workspace @octopus-reef/gateway
+- npm test --workspace @octopus-reef/gateway
+- npm run typecheck --workspace @octopus-reef/commercial
+- npx tsc --noEmit -p packages/ide
+- node --import tsx --test packages/server/tests/*.test.ts
+- npx eslint packages/gateway packages/commercial packages/server
+- npm run build --workspace @octopus-reef/gateway
+- npm run build --workspace @octopus-reef/commercial
+- git diff --check

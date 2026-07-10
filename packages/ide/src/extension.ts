@@ -349,6 +349,7 @@ function modelSettings():
       readonly apiKey?: string;
       readonly name?: string;
       readonly licenseToken?: string;
+      readonly accessToken?: string;
       readonly gatewayUrl?: string;
       readonly priorityTier?: PriorityModelTier;
     }
@@ -358,14 +359,22 @@ function modelSettings():
   const apiKey = config.get<string>("model.apiKey", "").trim();
   const name = config.get<string>("model.name", "").trim();
   const priorityTier = priorityModelTierSetting();
-  const licenseToken = config.get<string>("gateway.licenseToken", "").trim();
-  const gatewayUrl = config.get<string>("gateway.url", "").trim();
+  const licenseToken =
+    config.get<string>("gateway.licenseToken", "").trim() ||
+    (process.env.REEF_LICENSE_TOKEN ?? "").trim();
+  const accessToken =
+    config.get<string>("gateway.accessToken", "").trim() ||
+    (process.env.REEF_GATEWAY_ACCESS_TOKEN ?? "").trim();
+  const gatewayUrl =
+    config.get<string>("gateway.url", "").trim() ||
+    (process.env.REEF_GATEWAY_URL ?? "").trim();
   const model = {
     ...(provider !== "" ? { provider } : {}),
     ...(apiKey !== "" ? { apiKey } : {}),
     ...(name !== "" ? { name } : {}),
     priorityTier,
     ...(licenseToken !== "" ? { licenseToken } : {}),
+    ...(accessToken !== "" ? { accessToken } : {}),
     ...(gatewayUrl !== "" ? { gatewayUrl } : {}),
   };
   return Object.keys(model).length > 0 ? model : undefined;
@@ -376,8 +385,12 @@ function configuredAccountQuery(): AccountQuery {
   const provider = config.get<string>("model.provider", "auto").trim();
   const apiKey = config.get<string>("model.apiKey", "").trim();
   const name = config.get<string>("model.name", "").trim();
-  const gatewayUrl = config.get<string>("gateway.url", "").trim();
-  const ssoUrl = config.get<string>("account.ssoUrl", "").trim();
+  const gatewayUrl =
+    config.get<string>("gateway.url", "").trim() ||
+    (process.env.REEF_GATEWAY_URL ?? "").trim();
+  const ssoUrl =
+    config.get<string>("account.ssoUrl", "").trim() ||
+    (process.env.REEF_GATEWAY_OIDC_ISSUER ?? "").trim();
   const priorityTier = priorityModelTierSetting();
   const hasAnthropic =
     apiKey !== "" || (process.env.ANTHROPIC_API_KEY ?? "").trim() !== "";
@@ -571,6 +584,15 @@ async function waitForBundledServer(
           ? { REEF_MODEL_API_KEY: model.apiKey }
           : {}),
         ...(model?.name !== undefined ? { REEF_MODEL_NAME: model.name } : {}),
+        ...(model?.gatewayUrl !== undefined
+          ? { REEF_GATEWAY_URL: model.gatewayUrl }
+          : {}),
+        ...(model?.licenseToken !== undefined
+          ? { REEF_LICENSE_TOKEN: model.licenseToken }
+          : {}),
+        ...(model?.accessToken !== undefined
+          ? { REEF_GATEWAY_ACCESS_TOKEN: model.accessToken }
+          : {}),
         ...(model?.priorityTier !== undefined
           ? { REEF_PRIORITY_MODEL_TIER: model.priorityTier }
           : {}),
