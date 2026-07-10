@@ -3,7 +3,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   gatewayEntitlementDecision,
-  TEST_GATEWAY_LICENSE_TOKEN,
+  inProcessStubIdentity,
+  signInWithStubOidc,
+  type StubOidcIdentity,
 } from "@octopus-reef/commercial";
 import type { Driver, DriverContext, DriverStep } from "@octopus-reef/engine";
 import type {
@@ -16,11 +18,12 @@ import type {
   UsageSummaryResponse,
 } from "@octopus-reef/protocol";
 
-interface StoredAccount {
+export interface StoredAccount {
   readonly userId: string;
   readonly displayName: string;
   readonly licenseToken: string;
   readonly signedInAt: string;
+  readonly sso: StubOidcIdentity;
 }
 
 export interface AccountSnapshotRequest {
@@ -28,6 +31,7 @@ export interface AccountSnapshotRequest {
   readonly model?: string;
   readonly source?: string;
   readonly gatewayUrl?: string;
+  readonly ssoUrl?: string;
 }
 
 export class AccountStore {
@@ -44,12 +48,20 @@ export class AccountStore {
     return this.#account;
   }
 
-  login(input: AccountLoginRequest = {}): StoredAccount {
+  async login(input: AccountLoginRequest = {}): Promise<StoredAccount> {
+    const issuer = clean(input.ssoUrl);
+    const oidc = await signInWithStubOidc(
+      issuer === undefined ? {} : { issuer },
+    );
+    const userId = clean(input.userId) ?? oidc.userId;
+    const displayName = clean(input.displayName) ?? oidc.displayName;
+    const licenseToken = clean(input.licenseToken) ?? oidc.licenseToken;
     const account: StoredAccount = {
-      userId: clean(input.userId) ?? "octopus-stub-user",
-      displayName: clean(input.displayName) ?? "Octopus Stub User",
-      licenseToken: clean(input.licenseToken) ?? TEST_GATEWAY_LICENSE_TOKEN,
+      userId,
+      displayName,
+      licenseToken,
       signedInAt: new Date().toISOString(),
+      sso: identityForAccount(oidc, userId, displayName, licenseToken),
     };
     this.#account = account;
     this.#save();
@@ -69,6 +81,7 @@ export class AccountStore {
         displayName?: unknown;
         licenseToken?: unknown;
         signedInAt?: unknown;
+        sso?: unknown;
       };
       const userId = clean(parsed.userId);
       const displayName = clean(parsed.displayName);
@@ -82,7 +95,13 @@ export class AccountStore {
       ) {
         return undefined;
       }
-      return { userId, displayName, licenseToken, signedInAt };
+      return {
+        userId,
+        displayName,
+        licenseToken,
+        signedInAt,
+        sso: parseStoredSso(parsed.sso, userId, displayName, licenseToken),
+      };
     } catch {
       return undefined;
     }
@@ -101,6 +120,7 @@ export class AccountStore {
               displayName: this.#account.displayName,
               licenseToken: this.#account.licenseToken,
               signedInAt: this.#account.signedInAt,
+              sso: this.#account.sso,
             },
         null,
         2,
@@ -128,6 +148,16 @@ export class AccountPlanDriver implements Driver {
         account: plan.account,
         task: ctx.task,
       },
+    };
+    yield {
+      type: "observe",
+      summary: `OIDC SSO decision: ${plan.sso.state}`,
+      data: { ssoDecision: plan.sso },
+    };
+    yield {
+      type: "observe",
+      summary: `team membership: ${plan.team.gated ? "gated" : (plan.team.name ?? "unknown")}`,
+      data: { teamMembership: plan.team },
     };
     yield {
       type: "observe",
@@ -168,12 +198,17 @@ export async function accountPlan(options: {
 }): Promise<AccountPlanResponse> {
   const identity = identityFor(options.edition, options.request);
   const account = accountView(options.edition, options.account);
+  const governance = accountGovernanceContext(options.edition, options.account);
   const entitlement = entitlementFor(options.edition, options.account);
   const quota =
     options.edition === "commercial"
       ? await commercialQuota({
-          ...(options.account !== undefined ? { account: options.account } : {}),
-          ...(options.request !== undefined ? { request: options.request } : {}),
+          ...(options.account !== undefined
+            ? { account: options.account }
+            : {}),
+          ...(options.request !== undefined
+            ? { request: options.request }
+            : {}),
           ...(options.fetchImpl !== undefined
             ? { fetchImpl: options.fetchImpl }
             : {}),
@@ -184,6 +219,16 @@ export async function accountPlan(options: {
     edition: options.edition,
     identity,
     account,
+    sso: governance.sso,
+    team: governance.team,
+    audit: {
+      gated: governance.team.gated,
+      source: governance.team.source,
+      message: governance.team.gated
+        ? "Sign in with the local stub SSO to inspect team evidence."
+        : "Team audit is supplied by the Reef daemon's persisted evidence verifier.",
+      sessions: [],
+    },
     entitlement,
     usage: options.usage,
     plan: {
@@ -193,6 +238,65 @@ export async function accountPlan(options: {
           : "Community BYOK",
       upgradeAvailable: options.edition === "commercial",
       quota,
+    },
+  };
+}
+
+export function accountGovernanceContext(
+  edition: ReefEdition,
+  account: StoredAccount | undefined,
+): Pick<AccountPlanResponse, "sso" | "team" | "entitlement"> {
+  const entitlement = entitlementFor(edition, account);
+  if (edition === "community") {
+    return {
+      entitlement,
+      sso: {
+        state: "community",
+        source: "community-edition",
+        message:
+          "Community uses local BYOK identity; team SSO is not compiled into this edition.",
+      },
+      team: {
+        gated: true,
+        source: "community-edition",
+        message: "Team membership is commercial-only.",
+      },
+    };
+  }
+  if (account === undefined) {
+    return {
+      entitlement,
+      sso: {
+        state: "gated",
+        source: "local-stub-oidc",
+        message:
+          "Sign in through the local stub OIDC provider to unlock the commercial team surface.",
+      },
+      team: {
+        gated: true,
+        source: "local-stub-team",
+        message: "No signed-in team membership is available.",
+      },
+    };
+  }
+  return {
+    entitlement,
+    sso: {
+      state: "signed-in",
+      source: account.sso.source,
+      issuer: account.sso.issuer,
+      subject: account.sso.subject,
+      message:
+        "Local stub OIDC discovery and token exchange granted the commercial entitlement.",
+    },
+    team: {
+      gated: false,
+      source: account.sso.team.source,
+      message: "Membership came from the local stub OIDC team claim.",
+      id: account.sso.team.id,
+      name: account.sso.team.name,
+      role: account.sso.team.role,
+      members: account.sso.team.members,
     },
   };
 }
@@ -255,7 +359,8 @@ function entitlementFor(
       allowed: true,
       state: "community-byok",
       source: "community-edition",
-      reason: "Community runs local BYOK providers only; no Reef plan entitlement is used.",
+      reason:
+        "Community runs local BYOK providers only; no Reef plan entitlement is used.",
     };
   }
   if (account === undefined) {
@@ -263,7 +368,8 @@ function entitlementFor(
       allowed: false,
       state: "missing",
       source: "local-stub-account",
-      reason: "No Octopus account is signed in; commercial surfaces remain gated.",
+      reason:
+        "No Octopus account is signed in; commercial surfaces remain gated.",
     };
   }
   const decision = gatewayEntitlementDecision({
@@ -301,7 +407,8 @@ async function commercialQuota(options: {
       message: "Sign in to the local Octopus stub account to read plan quota.",
     };
   }
-  const gatewayUrl = clean(options.request?.gatewayUrl) ?? clean(process.env.REEF_GATEWAY_URL);
+  const gatewayUrl =
+    clean(options.request?.gatewayUrl) ?? clean(process.env.REEF_GATEWAY_URL);
   if (gatewayUrl === undefined) {
     return {
       status: "not-available",
@@ -351,8 +458,7 @@ async function commercialQuota(options: {
     }
     return {
       status: "available",
-      source:
-        clean(body.source) ?? "local-stub-gateway /v1/quota token ledger",
+      source: clean(body.source) ?? "local-stub-gateway /v1/quota token ledger",
       message: "Quota comes from the local stub gateway token ledger.",
       planId: clean(body.planId) ?? "reef-commercial-stub",
       usedTokens,
@@ -400,6 +506,62 @@ function clean(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== ""
     ? value.trim()
     : undefined;
+}
+
+function identityForAccount(
+  identity: StubOidcIdentity,
+  userId: string,
+  displayName: string,
+  licenseToken: string,
+): StubOidcIdentity {
+  return {
+    ...identity,
+    userId,
+    displayName,
+    licenseToken,
+    licenseSha256: sha256(licenseToken),
+    team: {
+      ...identity.team,
+      members: identity.team.members.map((member) =>
+        member.userId === identity.userId
+          ? { ...member, userId, displayName }
+          : member,
+      ),
+    },
+  };
+}
+
+function parseStoredSso(
+  value: unknown,
+  userId: string,
+  displayName: string,
+  licenseToken: string,
+): StubOidcIdentity {
+  if (value !== null && typeof value === "object") {
+    const candidate = value as Partial<StubOidcIdentity>;
+    if (
+      (candidate.source === "in-process-stub-oidc" ||
+        candidate.source === "local-stub-oidc") &&
+      clean(candidate.issuer) !== undefined &&
+      clean(candidate.subject) !== undefined &&
+      candidate.team !== undefined
+    ) {
+      return identityForAccount(
+        candidate as StubOidcIdentity,
+        userId,
+        displayName,
+        licenseToken,
+      );
+    }
+  }
+  // Accounts written before C4 had no SSO object. Treat them as the same local
+  // stub identity so an existing offline profile remains usable, not privileged.
+  return identityForAccount(
+    inProcessStubIdentity(),
+    userId,
+    displayName,
+    licenseToken,
+  );
 }
 
 function trimTrailingSlash(value: string): string {

@@ -126,6 +126,7 @@ export interface CreateSessionOptions {
     readonly model?: string;
     readonly source?: string;
     readonly gatewayUrl?: string;
+    readonly ssoUrl?: string;
   };
 }
 
@@ -319,6 +320,7 @@ export interface AccountQuery {
   readonly model?: string;
   readonly source?: string;
   readonly gatewayUrl?: string;
+  readonly ssoUrl?: string;
 }
 
 function accountUrl(

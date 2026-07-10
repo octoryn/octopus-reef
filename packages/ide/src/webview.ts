@@ -708,6 +708,7 @@ export function accountWebviewHtml(
   button:disabled{opacity:.55}
   .status{border-left:3px solid var(--line);padding:8px 10px;background:var(--panel);color:var(--muted)}
   .status.ok{border-color:var(--signal);color:var(--signal)}.status.bad{border-color:var(--danger);color:var(--danger)}.status.warn{border-color:var(--warn);color:var(--warn)}
+  .audit-list{display:grid;gap:8px}.audit-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:start;border:1px solid var(--line);border-radius:6px;background:#0b1719;padding:9px}.audit-row b{display:block;color:var(--ink)}.audit-row .meta{color:var(--muted);font-size:11px;margin-top:3px;overflow-wrap:anywhere}
   @media (max-width:760px){.grid,.totals{grid-template-columns:1fr}.kv{grid-template-columns:1fr}}
   ${reefPanelPolish}
 </style>
@@ -734,16 +735,29 @@ export function accountWebviewHtml(
       <div class="kv"><div class="key">User</div><div id="user" class="value">loading</div></div>
       <div class="kv"><div class="key">License Hash</div><div id="license" class="value">not available</div></div>
       <div class="toolbar">
-        <button id="signin" class="primary" type="button">Sign In Stub</button>
+        <button id="signin" class="primary" type="button">Sign In Stub SSO</button>
         <button id="signout" type="button">Sign Out</button>
         <button id="copy" type="button">Copy User ID</button>
       </div>
     </article>
   </section>
+  <section id="team-section" class="card">
+    <h2>Team &amp; SSO</h2>
+    <div id="sso-pill" class="pill">loading</div>
+    <div class="kv"><div class="key">Issuer</div><div id="sso-issuer" class="value">loading</div></div>
+    <div class="kv"><div class="key">Team</div><div id="team" class="value">loading</div></div>
+    <div class="kv"><div class="key">Members</div><div id="team-members" class="value">loading</div></div>
+    <div class="kv"><div class="key">Source</div><div id="team-source" class="value">loading</div></div>
+  </section>
   <section class="card">
     <h2>Usage</h2>
     <div id="usage" class="totals"></div>
     <div id="usage-source" class="value">N6 session evidence aggregation</div>
+  </section>
+  <section id="audit-section" class="card">
+    <h2>Team Audit</h2>
+    <div id="audit-source" class="value">loading</div>
+    <div id="audit-list" class="audit-list"></div>
   </section>
   <section class="card">
     <h2>Plan Quota</h2>

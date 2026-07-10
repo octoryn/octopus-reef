@@ -19,6 +19,10 @@
     "./stub": {
       "types": "./dist/stub-gateway.d.ts",
       "default": "./dist/stub-gateway.js"
+    },
+    "./stub-identity": {
+      "types": "./dist/stub-identity.d.ts",
+      "default": "./dist/stub-identity.js"
     }
   },
   "scripts": {

@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { AgentWorker, type ModelProvider } from "@octopus-reef/agent";
 import { TEST_GATEWAY_LICENSE_TOKEN } from "@octopus-reef/commercial";
 import { startStubGateway } from "@octopus-reef/commercial/stub";
+import { startStubIdentityProvider } from "@octopus-reef/commercial/stub-identity";
 import { WorkspaceExecutor, reefAllowlist } from "@octopus-reef/engine";
 import { ReefServer } from "../src/index.js";
 import type { ServerEvent } from "@octopus-reef/protocol";
@@ -1413,6 +1414,97 @@ test("C3: Account panel state distinguishes community BYOK and commercial stub a
   } finally {
     await commercial.close();
     await gateway.close();
+  }
+});
+
+test("C4: local OIDC team membership and audit sessions are evidence-backed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "reef-c4-team-"));
+  const idp = await startStubIdentityProvider({
+    userId: "octopus-c4-user",
+    displayName: "Octopus C4 User",
+  });
+  const server = new ReefServer({ persistDir: dir, edition: "commercial" });
+  const port = await server.listen(0);
+  const accountPath = `/account?provider=mock&model=offline-mock&ssoUrl=${encodeURIComponent(idp.issuer)}`;
+  try {
+    const gated = await request(port, "GET", accountPath);
+    assert.equal(gated.status, 200);
+    assert.equal(gated.json.sso.state, "gated");
+    assert.equal(gated.json.team.gated, true);
+    assert.equal(gated.json.audit.gated, true);
+
+    const login = await request(
+      port,
+      "POST",
+      accountPath.replace("/account", "/account/login"),
+    );
+    assert.equal(login.status, 200);
+    assert.equal(login.json.sso.state, "signed-in");
+    assert.equal(login.json.team.id, "reef-local-team");
+    assert.equal(login.json.entitlement.allowed, true);
+    assert.equal(typeof login.json.evidenceSessionId, "string");
+
+    const id = login.json.evidenceSessionId as string;
+    const frames = await collectSSE(port, `/sessions/${id}/events`);
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (frame.event.data.ssoDecision as { state?: string } | undefined)
+            ?.state === "signed-in",
+      ),
+      "OIDC sign-in decision should be a governed evidence link",
+    );
+    assert.ok(
+      frames.some(
+        (frame) =>
+          frame.type === "event" &&
+          frame.event.kind === "observation" &&
+          (frame.event.data.teamMembership as { id?: string } | undefined)
+            ?.id === "reef-local-team",
+      ),
+      "team membership should be a governed evidence link",
+    );
+
+    const green = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(green.status, 200);
+    assert.equal(green.json.ok, true);
+
+    const auditGreen = await request(port, "GET", accountPath);
+    const greenRow = auditGreen.json.audit.sessions.find(
+      (session: { id?: string }) => session.id === id,
+    );
+    assert.equal(auditGreen.json.audit.gated, false);
+    assert.equal(greenRow?.status, "verified");
+
+    const logPath = join(dir, id, "session.log.jsonl");
+    const raw = readFileSync(logPath);
+    const offset = raw.indexOf(Buffer.from("OIDC SSO entitlement"));
+    assert.ok(offset >= 0, "team evidence should contain a flippable marker");
+    raw[offset] = raw[offset] === 0x4f ? 0x50 : 0x4f;
+    writeFileSync(logPath, raw);
+
+    const red = await request(port, "GET", `/sessions/${id}/verify`);
+    assert.equal(red.status, 200);
+    assert.equal(red.json.ok, false);
+    const auditRed = await request(port, "GET", accountPath);
+    const redRow = auditRed.json.audit.sessions.find(
+      (session: { id?: string }) => session.id === id,
+    );
+    assert.equal(redRow?.status, "broken");
+
+    const logout = await request(
+      port,
+      "POST",
+      accountPath.replace("/account", "/account/logout"),
+    );
+    assert.equal(logout.status, 200);
+    assert.equal(logout.json.sso.state, "gated");
+    assert.equal(logout.json.team.gated, true);
+  } finally {
+    await server.close();
+    await idp.close();
   }
 });
 

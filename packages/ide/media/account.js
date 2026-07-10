@@ -14,6 +14,15 @@ const els = {
   quotaUsed: document.getElementById("quota-used"),
   quotaRemaining: document.getElementById("quota-remaining"),
   quotaSource: document.getElementById("quota-source"),
+  teamSection: document.getElementById("team-section"),
+  auditSection: document.getElementById("audit-section"),
+  ssoPill: document.getElementById("sso-pill"),
+  ssoIssuer: document.getElementById("sso-issuer"),
+  team: document.getElementById("team"),
+  teamMembers: document.getElementById("team-members"),
+  teamSource: document.getElementById("team-source"),
+  auditSource: document.getElementById("audit-source"),
+  auditList: document.getElementById("audit-list"),
   status: document.getElementById("status"),
   signin: document.getElementById("signin"),
   signout: document.getElementById("signout"),
@@ -97,7 +106,11 @@ function renderUsage(usage) {
 
 function renderQuota(data) {
   const quota = data.plan?.quota || {};
-  setPill(els.quotaPill, quota.status || "not-available", toneFor(quota.status));
+  setPill(
+    els.quotaPill,
+    quota.status || "not-available",
+    toneFor(quota.status),
+  );
   text(els.plan, `${data.plan?.name || "unknown"}`);
   text(
     els.quotaUsed,
@@ -114,12 +127,71 @@ function renderQuota(data) {
       : quota.message || "not available",
   );
   text(els.quotaSource, quota.source || "not available");
-  els.upgrade.hidden = data.edition !== "commercial" || !data.plan?.upgradeAvailable;
+  els.upgrade.hidden =
+    data.edition !== "commercial" || !data.plan?.upgradeAvailable;
+}
+
+function renderTeam(data) {
+  const commercial = data.edition === "commercial";
+  els.teamSection.hidden = !commercial;
+  els.auditSection.hidden = !commercial;
+  if (!commercial) return;
+  const sso = data.sso || {};
+  const team = data.team || {};
+  setPill(
+    els.ssoPill,
+    sso.state || "gated",
+    toneFor(sso.state === "signed-in" ? "licensed" : sso.state),
+  );
+  text(els.ssoIssuer, sso.issuer || sso.message || "not available");
+  text(
+    els.team,
+    team.gated
+      ? team.message || "gated"
+      : `${team.name || "Team"} · ${team.role || "member"}`,
+  );
+  text(
+    els.teamMembers,
+    Array.isArray(team.members)
+      ? team.members
+          .map((member) => `${member.displayName} (${member.role})`)
+          .join(", ")
+      : "not available",
+  );
+  text(els.teamSource, team.source || "not available");
+  renderAudit(data.audit || {});
+}
+
+function renderAudit(audit) {
+  text(
+    els.auditSource,
+    `${audit.source || "not available"} · ${audit.message || ""}`,
+  );
+  const sessions = Array.isArray(audit.sessions) ? audit.sessions : [];
+  if (audit.gated) {
+    els.auditList.innerHTML = `<div class="value">${escapeHtml(audit.message || "Sign in to inspect team evidence.")}</div>`;
+    return;
+  }
+  if (sessions.length === 0) {
+    els.auditList.innerHTML =
+      '<div class="value">No sealed team sessions yet.</div>';
+    return;
+  }
+  els.auditList.innerHTML = sessions
+    .map(
+      (session) =>
+        `<article class="audit-row"><div><b>${escapeHtml(session.task)}</b><div class="meta">${escapeHtml(session.id)} · ${escapeHtml(session.message)}</div></div><span class="pill ${session.status === "verified" ? "ok" : "bad"}">${session.status === "verified" ? "✓ verified" : "✗ broken"}</span></article>`,
+    )
+    .join("");
 }
 
 function render(data) {
   current = data;
-  setPill(els.edition, data.edition, data.edition === "commercial" ? "warn" : "ok");
+  setPill(
+    els.edition,
+    data.edition,
+    data.edition === "commercial" ? "warn" : "ok",
+  );
   text(els.identity, data.identity?.label || "not configured");
   text(els.identitySource, data.identity?.source || "not available");
   setPill(
@@ -148,6 +220,7 @@ function render(data) {
 
   renderUsage(data.usage);
   renderQuota(data);
+  renderTeam(data);
   setStatus(`Account refreshed ${data.generatedAt || ""}`, "ok");
 }
 

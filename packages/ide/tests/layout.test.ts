@@ -90,6 +90,27 @@ test("layout: Reef Account & Plan is opened through a docked view command", () =
   );
 });
 
+test("layout: commercial Account & Plan includes its gated team SSO and evidence audit surface", () => {
+  const webviewSource = readFileSync(
+    path.join(ideRoot, "src", "webview.ts"),
+    "utf8",
+  );
+  assert.match(webviewSource, /id="team-section"/);
+  assert.match(webviewSource, /Team &amp; SSO/);
+  assert.match(webviewSource, /id="audit-section"/);
+  assert.match(webviewSource, /Team Audit/);
+
+  const accountScript = readFileSync(
+    path.join(ideRoot, "media", "account.js"),
+    "utf8",
+  );
+  assert.match(accountScript, /data\.edition === "commercial"/);
+  assert.match(
+    accountScript,
+    /session\.status === "verified" \? "✓ verified" : "✗ broken"/,
+  );
+});
+
 test("layout: Reef suppresses stock startup welcome and avoids beside editor reveals", () => {
   const pkg = readJson("package.json");
   assert.equal(
@@ -138,22 +159,49 @@ test("layout: chat composer is a compact card with an autosizing input", () => {
     "utf8",
   );
   assert.match(webviewSource, /<form id="chat" class="composer-card">/);
-  assert.match(webviewSource, /<textarea id="chat-input"[\s\S]*?<div class="composer-toolbar">/);
-  assert.match(webviewSource, /class="composer-affordances"[\s\S]*?id="hash"[\s\S]*?id="attach"/);
-  assert.match(webviewSource, /class="composer-controls"[\s\S]*?id="model-chip"[\s\S]*?id="autopilot"[\s\S]*?id="chat-submit"/);
+  assert.match(
+    webviewSource,
+    /<textarea id="chat-input"[\s\S]*?<div class="composer-toolbar">/,
+  );
+  assert.match(
+    webviewSource,
+    /class="composer-affordances"[\s\S]*?id="hash"[\s\S]*?id="attach"/,
+  );
+  assert.match(
+    webviewSource,
+    /class="composer-controls"[\s\S]*?id="model-chip"[\s\S]*?id="autopilot"[\s\S]*?id="chat-submit"/,
+  );
   assert.match(webviewSource, /\.picker\{[^}]*bottom:calc\(100% \+ 8px\)/);
-  assert.match(webviewSource, /textarea\{[^}]*max-height:132px[^}]*overflow-y:hidden/);
-  assert.match(webviewSource, /id="model-chip" class="model" title="Mock · Offline"/);
+  assert.match(
+    webviewSource,
+    /textarea\{[^}]*max-height:132px[^}]*overflow-y:hidden/,
+  );
+  assert.match(
+    webviewSource,
+    /id="model-chip" class="model" title="Mock · Offline"/,
+  );
 
   const sessionScript = readFileSync(
     path.join(ideRoot, "media", "webview.js"),
     "utf8",
   );
   assert.match(sessionScript, /function resizeComposerInput\(\)/);
-  assert.match(sessionScript, /input\.style\.height = `\$\{Math\.min\(input\.scrollHeight, maxHeight\)\}px`/);
-  assert.match(sessionScript, /input\.addEventListener\("input", \(\) => \{\s+resizeComposerInput\(\);\s+updatePicker\(\);\s+\}\)/);
-  assert.match(sessionScript, /input\.value = "";\s+resizeComposerInput\(\);\s+addUserMessage\(task\);/);
-  assert.match(sessionScript, /function insertPrompt\(prefix\) \{\s+input\.value = prefix;\s+resizeComposerInput\(\);/);
+  assert.match(
+    sessionScript,
+    /input\.style\.height = `\$\{Math\.min\(input\.scrollHeight, maxHeight\)\}px`/,
+  );
+  assert.match(
+    sessionScript,
+    /input\.addEventListener\("input", \(\) => \{\s+resizeComposerInput\(\);\s+updatePicker\(\);\s+\}\)/,
+  );
+  assert.match(
+    sessionScript,
+    /input\.value = "";\s+resizeComposerInput\(\);\s+addUserMessage\(task\);/,
+  );
+  assert.match(
+    sessionScript,
+    /function insertPrompt\(prefix\) \{\s+input\.value = prefix;\s+resizeComposerInput\(\);/,
+  );
   assert.match(sessionScript, /modelChip\.title = data\.modelChip\.label/);
 });
 
@@ -181,7 +229,16 @@ test("layout: left Reef panels use the shared polish and Usage keeps sourced val
     path.join(ideRoot, "media", "usage.js"),
     "utf8",
   );
-  assert.match(usageScript, /Number\(totals\.inputTokens \|\| 0\) \+ Number\(totals\.outputTokens \|\| 0\)/);
-  assert.match(usageScript, /Provider-normalized cost from persisted usage evidence/);
-  assert.match(usageScript, /Cost is not available from the configured provider/);
+  assert.match(
+    usageScript,
+    /Number\(totals\.inputTokens \|\| 0\) \+ Number\(totals\.outputTokens \|\| 0\)/,
+  );
+  assert.match(
+    usageScript,
+    /Provider-normalized cost from persisted usage evidence/,
+  );
+  assert.match(
+    usageScript,
+    /Cost is not available from the configured provider/,
+  );
 });

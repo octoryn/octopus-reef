@@ -184,6 +184,7 @@ export interface CreateSessionRequest {
     readonly model?: string;
     readonly source?: string;
     readonly gatewayUrl?: string;
+    readonly ssoUrl?: string;
   };
 }
 
@@ -408,6 +409,45 @@ export interface AccountUserView {
   readonly licenseSha256?: string;
 }
 
+export interface AccountSsoView {
+  readonly state: "signed-in" | "gated" | "community";
+  readonly source: string;
+  readonly issuer?: string;
+  readonly subject?: string;
+  readonly message: string;
+}
+
+export interface AccountTeamMemberView {
+  readonly userId: string;
+  readonly displayName: string;
+  readonly role: "owner" | "member";
+}
+
+export interface AccountTeamView {
+  readonly gated: boolean;
+  readonly source: string;
+  readonly message: string;
+  readonly id?: string;
+  readonly name?: string;
+  readonly role?: "owner" | "member";
+  readonly members?: readonly AccountTeamMemberView[];
+}
+
+export interface TeamAuditSessionView {
+  readonly id: string;
+  readonly task: string;
+  readonly status: "verified" | "broken";
+  readonly source: "persisted-evidence";
+  readonly message: string;
+}
+
+export interface TeamAuditView {
+  readonly gated: boolean;
+  readonly source: string;
+  readonly message: string;
+  readonly sessions: readonly TeamAuditSessionView[];
+}
+
 export interface AccountEntitlementView {
   readonly allowed: boolean;
   readonly state: "community-byok" | "licensed" | "missing";
@@ -433,6 +473,9 @@ export interface AccountPlanResponse {
   readonly edition: ReefEdition;
   readonly identity: AccountIdentityView;
   readonly account: AccountUserView;
+  readonly sso: AccountSsoView;
+  readonly team: AccountTeamView;
+  readonly audit: TeamAuditView;
   readonly entitlement: AccountEntitlementView;
   readonly usage: UsageSummaryResponse;
   readonly plan: {
@@ -440,12 +483,16 @@ export interface AccountPlanResponse {
     readonly upgradeAvailable: boolean;
     readonly quota: AccountQuotaView;
   };
+  /** The governed session created by a local stub-SSO sign-in, when applicable. */
+  readonly evidenceSessionId?: string;
 }
 
 export interface AccountLoginRequest {
   readonly userId?: string;
   readonly displayName?: string;
   readonly licenseToken?: string;
+  /** Optional loopback issuer for the local OIDC discovery/token stub. */
+  readonly ssoUrl?: string;
 }
 
 export type SteeringItemKind = "doc" | "skill";

@@ -352,6 +352,7 @@ function configuredAccountQuery(): AccountQuery {
   const apiKey = config.get<string>("model.apiKey", "").trim();
   const name = config.get<string>("model.name", "").trim();
   const gatewayUrl = config.get<string>("gateway.url", "").trim();
+  const ssoUrl = config.get<string>("account.ssoUrl", "").trim();
   const hasAnthropic =
     apiKey !== "" || (process.env.ANTHROPIC_API_KEY ?? "").trim() !== "";
   const hasBedrock =
@@ -365,6 +366,7 @@ function configuredAccountQuery(): AccountQuery {
       model: name !== "" ? name : "reef-gateway-stub",
       source: "Reef settings: hosted gateway",
       ...(gatewayUrl !== "" ? { gatewayUrl } : {}),
+      ...(ssoUrl !== "" ? { ssoUrl } : {}),
     };
   }
   if (provider === "anthropic" || (provider === "auto" && hasAnthropic)) {
@@ -372,6 +374,7 @@ function configuredAccountQuery(): AccountQuery {
       provider: "anthropic",
       model: name !== "" ? name : "Claude Sonnet 4.5",
       source: "Reef settings: BYOK Anthropic",
+      ...(ssoUrl !== "" ? { ssoUrl } : {}),
     };
   }
   if (provider === "bedrock" || (provider === "auto" && hasBedrock)) {
@@ -379,12 +382,14 @@ function configuredAccountQuery(): AccountQuery {
       provider: "bedrock",
       model: name !== "" ? name : "Claude Sonnet 4.5",
       source: "Reef settings: BYOK Bedrock",
+      ...(ssoUrl !== "" ? { ssoUrl } : {}),
     };
   }
   return {
     provider: "mock",
     model: "offline-mock",
     source: "Reef offline MockDriver",
+    ...(ssoUrl !== "" ? { ssoUrl } : {}),
   };
 }
 
@@ -1842,12 +1847,22 @@ export function activate(context: vscode.ExtensionContext): void {
       if (message.kind === "getAccount") {
         await refreshAccount();
       } else if (message.kind === "signInAccount") {
-        await loginAccount(activeServerUrl, configuredAccountQuery());
+        const signedIn = await loginAccount(
+          activeServerUrl,
+          configuredAccountQuery(),
+        );
+        if (signedIn.evidenceSessionId !== undefined) {
+          await streamEvents(
+            activeServerUrl,
+            signedIn.evidenceSessionId,
+            () => {},
+          );
+        }
         await refreshAccount();
         void accountView?.webview.postMessage({
           kind: "status",
           tone: "ok",
-          message: "Signed in to the local Octopus stub account.",
+          message: `Signed in through local stub SSO; evidence sealed: ${signedIn.evidenceSessionId ?? "unknown"}.`,
         });
       } else if (message.kind === "signOutAccount") {
         await logoutAccount(activeServerUrl, configuredAccountQuery());

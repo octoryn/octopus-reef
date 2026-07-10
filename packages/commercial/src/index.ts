@@ -2,6 +2,14 @@ import { createHash } from "node:crypto";
 import type { CompletionRequest, ModelUsage } from "@octopus-reef/agent";
 import { ProviderError, type CompletionResponse } from "@octopus-reef/agent";
 
+export {
+  inProcessStubIdentity,
+  signInWithStubOidc,
+  type CommercialTeamMember,
+  type CommercialTeamMembership,
+  type StubOidcIdentity,
+} from "./team-sso.js";
+
 export type ReefEdition = "community" | "commercial";
 
 export const COMMERCIAL_COMMAND = "reef.openCommercial";
@@ -108,9 +116,11 @@ export interface CommercialSurfaceStatus {
   }[];
 }
 
-export function resolveEntitlementStatus(options: {
-  readonly licenseToken?: string;
-} = {}): EntitlementStatus {
+export function resolveEntitlementStatus(
+  options: {
+    readonly licenseToken?: string;
+  } = {},
+): EntitlementStatus {
   const token =
     clean(options.licenseToken) ??
     clean(process.env.REEF_LICENSE_TOKEN) ??
@@ -180,9 +190,11 @@ export function gatewayRouteDecision(options: {
   };
 }
 
-export function commercialSurfaceStatus(options: {
-  readonly licenseToken?: string;
-} = {}): CommercialSurfaceStatus {
+export function commercialSurfaceStatus(
+  options: {
+    readonly licenseToken?: string;
+  } = {},
+): CommercialSurfaceStatus {
   const entitlement = resolveEntitlementStatus(options);
   const gated = entitlement.state !== "licensed";
   return {

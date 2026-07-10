@@ -23,7 +23,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { extname, join, relative, resolve } from "node:path";
 import {
   GovernedSession,
@@ -76,11 +76,13 @@ import type {
   ServerEvent,
   SessionView,
   SteeringItemView,
+  TeamAuditSessionView,
   VerifyResult,
 } from "@octopus-reef/protocol";
 import {
   AccountPlanDriver,
   AccountStore,
+  accountGovernanceContext,
   accountPlan,
   type AccountSnapshotRequest,
 } from "./account.js";
@@ -172,6 +174,7 @@ interface AccountSessionRequest {
   readonly model?: string;
   readonly source?: string;
   readonly gatewayUrl?: string;
+  readonly ssoUrl?: string;
 }
 
 class McpDemoDriver implements Driver {
@@ -485,6 +488,42 @@ class ConversationDriver implements Driver {
   }
 }
 
+/** Adds the commercial team context to every signed-in governed run. */
+class TeamEvidenceDriver implements Driver {
+  readonly name: string;
+  readonly #inner: Driver;
+  readonly #context: Pick<AccountPlanResponse, "sso" | "team" | "entitlement">;
+
+  constructor(
+    inner: Driver,
+    context: Pick<AccountPlanResponse, "sso" | "team" | "entitlement">,
+  ) {
+    this.#inner = inner;
+    this.#context = context;
+    this.name = `${inner.name}+team`;
+  }
+
+  async *run(ctx: DriverContext): AsyncIterable<DriverStep> {
+    yield {
+      type: "observe",
+      summary: `OIDC SSO entitlement: ${this.#context.entitlement.allowed ? "allowed" : "denied"}`,
+      data: {
+        teamSso: {
+          sso: this.#context.sso,
+          entitlement: this.#context.entitlement,
+          task: ctx.task,
+        },
+      },
+    };
+    yield {
+      type: "observe",
+      summary: `team membership recorded: ${this.#context.team.name ?? "unknown team"}`,
+      data: { teamMembership: this.#context.team },
+    };
+    yield* this.#inner.run(ctx);
+  }
+}
+
 class GatewayGovernanceDriver implements Driver {
   readonly name: string;
   readonly #inner: Driver | undefined;
@@ -702,6 +741,7 @@ function accountQuery(url: URL): AccountSnapshotRequest {
     ...maybe("model", optionalString(url.searchParams.get("model"))),
     ...maybe("source", optionalString(url.searchParams.get("source"))),
     ...maybe("gatewayUrl", optionalString(url.searchParams.get("gatewayUrl"))),
+    ...maybe("ssoUrl", optionalString(url.searchParams.get("ssoUrl"))),
   };
 }
 
@@ -710,6 +750,57 @@ function maybe<T>(
   value: T | undefined,
 ): Record<string, T> | Record<string, never> {
   return value === undefined ? {} : { [key]: value };
+}
+
+function teamAuditSessions(
+  persistDir: string | undefined,
+  teamId: string,
+): readonly TeamAuditSessionView[] {
+  if (persistDir === undefined || !existsSync(persistDir)) return [];
+  const marker = `"teamMembership":{"gated":false`;
+  const teamMarker = `"id":"${teamId}"`;
+  const rows: TeamAuditSessionView[] = [];
+  for (const entry of readdirSync(persistDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith("sess-")) continue;
+    const dir = join(persistDir, entry.name);
+    const logPath = join(dir, "session.log.jsonl");
+    const snapshotPath = join(dir, "session.json");
+    if (!existsSync(logPath) || !existsSync(snapshotPath)) continue;
+    let raw: string;
+    let task = entry.name;
+    try {
+      raw = readFileSync(logPath, "utf8");
+      if (!raw.includes(marker) || !raw.includes(teamMarker)) continue;
+      const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as {
+        task?: unknown;
+      };
+      if (typeof snapshot.task === "string" && snapshot.task.trim() !== "") {
+        task = snapshot.task;
+      }
+    } catch {
+      continue;
+    }
+    try {
+      loadSession(dir);
+      rows.push({
+        id: entry.name,
+        task,
+        status: "verified",
+        source: "persisted-evidence",
+        message:
+          "Work spine, evidence log, and their cross-binding verify intact.",
+      });
+    } catch (err) {
+      rows.push({
+        id: entry.name,
+        task,
+        status: "broken",
+        source: "persisted-evidence",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return rows.sort((left, right) => right.id.localeCompare(left.id));
 }
 
 function normalizeRuntime(value: Driver | SessionRuntime): SessionRuntime {
@@ -966,12 +1057,32 @@ export class ReefServer {
     request: AccountSnapshotRequest = {},
   ): Promise<AccountPlanResponse> {
     const account = this.#account.current();
-    return await accountPlan({
+    const plan = await accountPlan({
       edition: this.#edition(),
       usage: this.#usageSummary(),
       ...(account !== undefined ? { account } : {}),
       request,
     });
+    return { ...plan, audit: this.#teamAudit(plan.team) };
+  }
+
+  #teamAudit(team: AccountPlanResponse["team"]): AccountPlanResponse["audit"] {
+    if (team.gated || team.id === undefined) {
+      return {
+        gated: true,
+        source: team.source,
+        message:
+          "Sign in through local stub SSO before team evidence is available.",
+        sessions: [],
+      };
+    }
+    return {
+      gated: false,
+      source: "persisted Reef evidence chains",
+      message:
+        "Each result is reloaded and verified from its persisted work spine and evidence log.",
+      sessions: teamAuditSessions(this.#options.persistDir, team.id),
+    };
   }
 
   /** Start listening. Pass 0 for an ephemeral port; resolves with the bound port. */
@@ -1015,12 +1126,20 @@ export class ReefServer {
       if (method === "POST" && parts.length === 2 && parts[1] === "login") {
         try {
           const body = (await this.#readJson(req)) as AccountLoginRequest;
-          this.#account.login(body);
-          return this.#json(
-            res,
-            200,
-            await this.#accountPlan(accountQuery(url)),
-          );
+          await this.#account.login({
+            ...body,
+            ...(body.ssoUrl === undefined &&
+            accountQuery(url).ssoUrl !== undefined
+              ? { ssoUrl: accountQuery(url).ssoUrl }
+              : {}),
+          });
+          const evidenceSessionId = this.#startSession({
+            task: "OIDC SSO sign-in and team entitlement",
+            persist: true,
+            account: accountQuery(url),
+          });
+          const plan = await this.#accountPlan(accountQuery(url));
+          return this.#json(res, 200, { ...plan, evidenceSessionId });
         } catch (err) {
           return this.#fail(
             res,
@@ -1313,7 +1432,11 @@ export class ReefServer {
                 );
     const steeredRuntime = this.#steeredRuntime(runtimeBase, body.steering);
     const hookedRuntime = this.#hookedRuntime(steeredRuntime, body.hook);
-    const runtime = this.#conversationRuntime(hookedRuntime, body.conversation);
+    const conversationalRuntime = this.#conversationRuntime(
+      hookedRuntime,
+      body.conversation,
+    );
+    const runtime = this.#teamRuntime(conversationalRuntime);
     const rec: SessionRecord = {
       id,
       task,
@@ -1350,6 +1473,18 @@ export class ReefServer {
   #accountRuntime(request: AccountSessionRequest): SessionRuntime {
     return {
       driver: new AccountPlanDriver(() => this.#accountPlan(request)),
+    };
+  }
+
+  #teamRuntime(runtime: SessionRuntime): SessionRuntime {
+    const context = accountGovernanceContext(
+      this.#edition(),
+      this.#account.current(),
+    );
+    if (context.team.gated || context.sso.state !== "signed-in") return runtime;
+    return {
+      ...runtime,
+      driver: new TeamEvidenceDriver(runtime.driver, context),
     };
   }
 
