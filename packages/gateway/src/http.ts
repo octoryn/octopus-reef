@@ -15,6 +15,7 @@ import {
   verifyAccessToken,
   verifyPassword,
 } from "./auth.js";
+import { signInWithStubOidc } from "@octopus-reef/commercial";
 import { createBillingAdapter } from "./billing.js";
 import { CompletionService } from "./completion.js";
 import type { GatewayDb } from "./db.js";
@@ -33,6 +34,9 @@ import type {
   ProvisionAccountResponse,
   RevokeLicenseResponse,
   SignupRequest,
+  SsoLoginRequest,
+  SsoLoginResponse,
+  TeamAuditResponse,
   GatewayVerifyResult,
 } from "./types.js";
 
@@ -365,6 +369,242 @@ export class GatewayControlPlane {
     };
   }
 
+  async ssoLogin(request: SsoLoginRequest): Promise<SsoLoginResponse> {
+    const issuer = request.issuer ?? this.config.oidcIssuer;
+    const identity = await signInWithStubOidc(
+      issuer === undefined ? {} : { issuer },
+    );
+    const accountId = identity.userId;
+    const email = `${identity.userId}@oidc.local`;
+    const now = new Date().toISOString();
+    const existing = await this.db.getAccount(accountId);
+    const material =
+      existing === undefined
+        ? localPasswordMaterial(identity.userId)
+        : {
+            salt: existing.passwordSalt,
+            hash: existing.passwordHash,
+          };
+    await this.db.upsertAccount({
+      id: accountId,
+      email,
+      displayName: identity.displayName,
+      passwordSalt: material.salt,
+      passwordHash: material.hash,
+      status: "active",
+      teamId: identity.team.id,
+      createdAt: existing?.createdAt ?? now,
+    });
+    await this.db.upsertTeam({
+      id: identity.team.id,
+      name: identity.team.name,
+      createdAt: now,
+    });
+    for (const member of identity.team.members) {
+      const memberEmail = `${member.userId}@oidc.local`;
+      const memberExisting = await this.db.getAccount(member.userId);
+      const memberMaterial =
+        memberExisting === undefined
+          ? localPasswordMaterial(member.userId)
+          : {
+              salt: memberExisting.passwordSalt,
+              hash: memberExisting.passwordHash,
+            };
+      await this.db.upsertAccount({
+        id: member.userId,
+        email: memberEmail,
+        displayName: member.displayName,
+        passwordSalt: memberMaterial.salt,
+        passwordHash: memberMaterial.hash,
+        status: "active",
+        teamId: identity.team.id,
+        createdAt: memberExisting?.createdAt ?? now,
+      });
+      await this.db.upsertTeamMember({
+        teamId: identity.team.id,
+        accountId: member.userId,
+        role: member.role,
+        createdAt: now,
+      });
+    }
+    await this.db.upsertLicense({
+      id: randomUUID(),
+      accountId,
+      tokenHash: hashSecret(identity.licenseToken),
+      planId: "reef-commercial-sso",
+      status: "active",
+      entitlements: ["inference:complete", "team:audit"],
+      createdAt: now,
+    });
+    await this.db.upsertQuota({
+      accountId,
+      limitTokens: this.config.defaultQuotaTokens,
+      usedTokens: await this.db.sumUsageForAccount(accountId),
+      updatedAt: now,
+    });
+    const ssoEvidence = await this.recordDecision({
+      decision: "sso",
+      method: "oidc-code-flow",
+      tenantId: identity.team.id,
+      accountId,
+      actorId: accountId,
+      content: jsonValue({
+        allowed: true,
+        marker: "OIDC SSO entitlement",
+        issuer: identity.issuer,
+        subject: identity.subject,
+        source: identity.source,
+      }),
+    });
+    const teamEvidence = await this.recordDecision({
+      decision: "team",
+      method: "oidc-claims",
+      tenantId: identity.team.id,
+      accountId,
+      actorId: accountId,
+      content: jsonValue({
+        allowed: true,
+        team: identity.team,
+      }),
+    });
+    return {
+      accountId,
+      accessToken: issueAccessToken(this.config, {
+        accountId,
+        tenantId: identity.team.id,
+        email,
+      }),
+      sso: {
+        issuer: identity.issuer,
+        subject: identity.subject,
+        userId: identity.userId,
+        displayName: identity.displayName,
+      },
+      team: {
+        id: identity.team.id,
+        name: identity.team.name,
+        role: identity.team.role,
+        members: identity.team.members.map((member) => ({
+          accountId: member.userId,
+          displayName: member.displayName,
+          role: member.role,
+        })),
+      },
+      evidence: {
+        sso: ssoEvidence.evidenceId,
+        team: teamEvidence.evidenceId,
+      },
+    };
+  }
+
+  async teamAudit(
+    authHeader: string | undefined,
+  ): Promise<
+    | {
+        readonly ok: true;
+        readonly status: 200;
+        readonly body: TeamAuditResponse;
+      }
+    | {
+        readonly ok: false;
+        readonly status: 401 | 403;
+        readonly body: GatewayErrorBody;
+      }
+  > {
+    const token = bearerToken(authHeader);
+    const verified =
+      token === undefined
+        ? ({ ok: false, reason: "missing bearer token" } as const)
+        : verifyAccessToken(token, this.config);
+    const authEvidence = await this.ledger.appendDecision({
+      decision: "auth",
+      method: "jwt",
+      ...(verified.ok
+        ? {
+            tenantId: verified.principal.tenantId,
+            accountId: verified.principal.accountId,
+            actorId: verified.principal.accountId,
+          }
+        : {}),
+      content: {
+        allowed: verified.ok,
+        reason: verified.ok ? "signed JWT verified" : verified.reason,
+      },
+    });
+    if (!verified.ok) {
+      return {
+        ok: false,
+        status: 401,
+        body: { error: "auth denied", evidenceId: authEvidence.evidenceId },
+      };
+    }
+    const membership = await this.db.getTeamForAccount(
+      verified.principal.accountId,
+    );
+    if (membership === undefined) {
+      const denied = await this.recordDecision({
+        decision: "team.audit",
+        method: "membership",
+        tenantId: verified.principal.tenantId,
+        accountId: verified.principal.accountId,
+        actorId: verified.principal.accountId,
+        content: {
+          allowed: false,
+          reason: "account is not a team member",
+        },
+      });
+      return {
+        ok: false,
+        status: 403,
+        body: { error: "team membership denied", evidenceId: denied.evidenceId },
+      };
+    }
+    const members = await this.db.listTeamMembers(membership.team.id);
+    const usageMembers = await Promise.all(
+      members.map(async (member) => ({
+        accountId: member.accountId,
+        displayName: member.displayName,
+        role: member.role,
+        usedTokens: await this.db.sumUsageForAccount(member.accountId),
+      })),
+    );
+    const totalTokens = usageMembers.reduce(
+      (sum, member) => sum + member.usedTokens,
+      0,
+    );
+    const auditEvidence = await this.recordDecision({
+      decision: "team.audit",
+      method: "membership",
+      tenantId: membership.team.id,
+      accountId: verified.principal.accountId,
+      actorId: verified.principal.accountId,
+      content: jsonValue({
+        allowed: true,
+        teamId: membership.team.id,
+        role: membership.member.role,
+        totalTokens,
+        members: usageMembers,
+      }),
+    });
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        teamId: membership.team.id,
+        teamName: membership.team.name,
+        role: membership.member.role,
+        usage: {
+          totalTokens,
+          members: usageMembers,
+        },
+        evidence: {
+          auth: authEvidence.evidenceId,
+          audit: auditEvidence.evidenceId,
+        },
+      },
+    };
+  }
+
   complete(
     authHeader: string | undefined,
     body: unknown,
@@ -575,6 +815,14 @@ export class GatewayHttpServer {
       const revoked = await this.#control.revokeLicense(req.headers.authorization);
       return respondJson(res, revoked.status, revoked.body);
     }
+    if (req.method === "POST" && url.pathname === "/v1/sso/login") {
+      const login = await this.#control.ssoLogin(parseSsoLogin(await readJson(req)));
+      return respondJson(res, 200, login);
+    }
+    if (req.method === "GET" && url.pathname === "/v1/team/audit") {
+      const audit = await this.#control.teamAudit(req.headers.authorization);
+      return respondJson(res, audit.status, audit.body);
+    }
     if (
       req.method === "POST" &&
       (url.pathname === "/v1/complete" || url.pathname === "/v1/completions")
@@ -628,6 +876,15 @@ function parseLogin(value: unknown): LoginRequest {
   if (email === undefined) throw new HttpError(400, "email is required");
   if (password === undefined) throw new HttpError(400, "password is required");
   return { email, password };
+}
+
+function parseSsoLogin(value: unknown): SsoLoginRequest {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "JSON object body is required");
+  }
+  const body = value as Record<string, unknown>;
+  const issuer = clean(body.issuer);
+  return issuer === undefined ? {} : { issuer };
 }
 
 function parseProvisionAccount(value: unknown): ProvisionAccountRequest {

@@ -5,6 +5,8 @@ import type {
   LicenseRecord,
   QuotaRecord,
   StoredLedgerRecord,
+  TeamMemberRecord,
+  TeamRecord,
   UsageRecord,
 } from "./types.js";
 
@@ -29,5 +31,20 @@ export interface GatewayDb {
   sumCostForAccount(accountId: string): Promise<number>;
   appendBillingRecord(record: BillingRecord): Promise<void>;
   sumBillingForAccount(accountId: string): Promise<number>;
+  upsertTeam(team: TeamRecord): Promise<void>;
+  upsertTeamMember(member: {
+    readonly teamId: string;
+    readonly accountId: string;
+    readonly role: TeamMemberRecord["role"];
+    readonly createdAt: string;
+  }): Promise<void>;
+  getTeamForAccount(accountId: string): Promise<
+    | {
+        readonly team: TeamRecord;
+        readonly member: TeamMemberRecord;
+      }
+    | undefined
+  >;
+  listTeamMembers(teamId: string): Promise<readonly TeamMemberRecord[]>;
   close(): Promise<void>;
 }

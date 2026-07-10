@@ -39,6 +39,7 @@ export interface StoredLedgerRecord {
 
 export type AccountStatus = "active" | "disabled";
 export type LicenseStatus = "active" | "revoked";
+export type TeamRole = "owner" | "member";
 
 export interface AccountRecord {
   readonly id: string;
@@ -90,6 +91,21 @@ export interface BillingRecord {
   readonly currency: "usd";
   readonly provider: "local-ledger" | "stripe";
   readonly status: "recorded" | "stubbed";
+  readonly createdAt: string;
+}
+
+export interface TeamRecord {
+  readonly id: string;
+  readonly name: string;
+  readonly createdAt: string;
+}
+
+export interface TeamMemberRecord {
+  readonly teamId: string;
+  readonly accountId: string;
+  readonly email: string;
+  readonly displayName: string;
+  readonly role: TeamRole;
   readonly createdAt: string;
 }
 
@@ -176,6 +192,54 @@ export interface RevokeLicenseResponse {
   readonly evidence: {
     readonly auth: string;
     readonly revoke: string;
+  };
+}
+
+export interface SsoLoginRequest {
+  readonly issuer?: string;
+}
+
+export interface SsoLoginResponse {
+  readonly accountId: string;
+  readonly accessToken: string;
+  readonly sso: {
+    readonly issuer: string;
+    readonly subject: string;
+    readonly userId: string;
+    readonly displayName: string;
+  };
+  readonly team: {
+    readonly id: string;
+    readonly name: string;
+    readonly role: TeamRole;
+    readonly members: readonly {
+      readonly accountId: string;
+      readonly displayName: string;
+      readonly role: TeamRole;
+    }[];
+  };
+  readonly evidence: {
+    readonly sso: string;
+    readonly team: string;
+  };
+}
+
+export interface TeamAuditResponse {
+  readonly teamId: string;
+  readonly teamName: string;
+  readonly role: TeamRole;
+  readonly usage: {
+    readonly totalTokens: number;
+    readonly members: readonly {
+      readonly accountId: string;
+      readonly displayName: string;
+      readonly role: TeamRole;
+      readonly usedTokens: number;
+    }[];
+  };
+  readonly evidence: {
+    readonly auth: string;
+    readonly audit: string;
   };
 }
 

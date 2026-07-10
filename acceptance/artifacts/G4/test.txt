@@ -1,0 +1,17 @@
+
+> @octopus-reef/gateway@0.1.0 test
+> node --import tsx --test tests/*.test.ts
+
+✔ G0: gateway ledger verifies store-untrusting and turns red after one-byte tamper (61.3065ms)
+✔ G1: authenticated completion routes through entitlement, provider, metering, and evidence (131.585333ms)
+✔ G2: quota is honest, debited, billing-ledgered, and enforced fail-closed (86.779541ms)
+✔ G3: signup/login issue signed tokens and license revoke denies completion (168.58125ms)
+✔ G4: local OIDC SSO creates team membership and verifiable team audit (184.765041ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 341.688584

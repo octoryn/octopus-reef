@@ -10,6 +10,8 @@ import type {
   LicenseRecord,
   QuotaRecord,
   StoredLedgerRecord,
+  TeamMemberRecord,
+  TeamRecord,
   UsageRecord,
 } from "./types.js";
 
@@ -69,6 +71,17 @@ interface QuotaRow {
 
 interface SumRow {
   readonly total: number | null;
+}
+
+interface TeamJoinRow {
+  readonly team_id: string;
+  readonly team_name: string;
+  readonly team_created_at: string;
+  readonly account_id: string;
+  readonly email: string;
+  readonly display_name: string;
+  readonly role: TeamMemberRecord["role"];
+  readonly member_created_at: string;
 }
 
 export class SqliteGatewayDb implements GatewayDb {
@@ -315,6 +328,62 @@ export class SqliteGatewayDb implements GatewayDb {
     return row?.total ?? 0;
   }
 
+  async upsertTeam(team: TeamRecord): Promise<void> {
+    this.#db
+      .prepare(
+        "INSERT INTO teams (id, name, created_at) VALUES (?, ?, ?) " +
+          "ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+      )
+      .run(team.id, team.name, team.createdAt);
+  }
+
+  async upsertTeamMember(member: {
+    readonly teamId: string;
+    readonly accountId: string;
+    readonly role: TeamMemberRecord["role"];
+    readonly createdAt: string;
+  }): Promise<void> {
+    this.#db
+      .prepare("UPDATE accounts SET team_id = ? WHERE id = ?")
+      .run(member.teamId, member.accountId);
+    this.#db
+      .prepare(
+        "INSERT INTO team_members (team_id, account_id, role, created_at) VALUES (?, ?, ?, ?) " +
+          "ON CONFLICT(team_id, account_id) DO UPDATE SET role = excluded.role",
+      )
+      .run(member.teamId, member.accountId, member.role, member.createdAt);
+  }
+
+  async getTeamForAccount(accountId: string): Promise<
+    | {
+        readonly team: TeamRecord;
+        readonly member: TeamMemberRecord;
+      }
+    | undefined
+  > {
+    const row = this.#db
+      .prepare(
+        "SELECT t.id AS team_id, t.name AS team_name, t.created_at AS team_created_at, " +
+          "a.id AS account_id, a.email, a.display_name, tm.role, tm.created_at AS member_created_at " +
+          "FROM team_members tm JOIN teams t ON t.id = tm.team_id JOIN accounts a ON a.id = tm.account_id " +
+          "WHERE tm.account_id = ? LIMIT 1",
+      )
+      .get(accountId) as TeamJoinRow | undefined;
+    return row === undefined ? undefined : teamJoinFromRow(row);
+  }
+
+  async listTeamMembers(teamId: string): Promise<readonly TeamMemberRecord[]> {
+    const rows = this.#db
+      .prepare(
+        "SELECT t.id AS team_id, t.name AS team_name, t.created_at AS team_created_at, " +
+          "a.id AS account_id, a.email, a.display_name, tm.role, tm.created_at AS member_created_at " +
+          "FROM team_members tm JOIN teams t ON t.id = tm.team_id JOIN accounts a ON a.id = tm.account_id " +
+          "WHERE tm.team_id = ? ORDER BY a.display_name ASC",
+      )
+      .all(teamId) as TeamJoinRow[];
+    return rows.map((row) => teamJoinFromRow(row).member);
+  }
+
   async close(): Promise<void> {
     this.#db.close();
   }
@@ -372,5 +441,26 @@ function quotaFromRow(row: QuotaRow): QuotaRecord {
     limitTokens: row.limit_tokens,
     usedTokens: row.used_tokens,
     updatedAt: row.updated_at,
+  };
+}
+
+function teamJoinFromRow(row: TeamJoinRow): {
+  readonly team: TeamRecord;
+  readonly member: TeamMemberRecord;
+} {
+  return {
+    team: {
+      id: row.team_id,
+      name: row.team_name,
+      createdAt: row.team_created_at,
+    },
+    member: {
+      teamId: row.team_id,
+      accountId: row.account_id,
+      email: row.email,
+      displayName: row.display_name,
+      role: row.role,
+      createdAt: row.member_created_at,
+    },
   };
 }

@@ -41,6 +41,12 @@ export type {
   QuotaRecord,
   RevokeLicenseResponse,
   SignupRequest,
+  SsoLoginRequest,
+  SsoLoginResponse,
   StoredLedgerRecord,
+  TeamAuditResponse,
+  TeamMemberRecord,
+  TeamRecord,
+  TeamRole,
   UsageRecord,
 } from "./types.js";
