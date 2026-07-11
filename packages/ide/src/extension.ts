@@ -340,7 +340,7 @@ function priorityModelTierSetting(): PriorityModelTier {
 }
 
 function isCommercialEdition(): boolean {
-  return reefEdition() === "commercial";
+  return (reefEdition as string) === "commercial";
 }
 
 function modelSettings():
@@ -573,7 +573,7 @@ async function waitForBundledServer(
         ...process.env,
         ELECTRON_RUN_AS_NODE: "1",
         REEF_BUNDLED_DAEMON: "1",
-        REEF_EDITION: reefEdition(),
+        REEF_EDITION: reefEdition,
         ...(workspaceRoot !== undefined
           ? { REEF_WORKSPACE_ROOT: workspaceRoot }
           : {}),
