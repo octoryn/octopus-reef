@@ -9,12 +9,14 @@ export interface ChatModelSettings {
   readonly provider?: string;
   readonly apiKey?: string;
   readonly name?: string;
+  readonly gatewayUrl?: string;
 }
 
 export interface ChatModelEnvironment {
   readonly REEF_MODEL_API_KEY?: string;
   readonly ANTHROPIC_API_KEY?: string;
   readonly AWS_BEARER_TOKEN_BEDROCK?: string;
+  readonly REEF_GATEWAY_URL?: string;
 }
 
 export interface ChatModelChip {
@@ -57,10 +59,13 @@ export function chatModelChip(
   const bedrockKey =
     explicitKey ?? reefKey ?? trim(env.AWS_BEARER_TOKEN_BEDROCK);
   const modelName = trim(settings?.name);
+  const gatewayUrl = trim(settings?.gatewayUrl) ?? trim(env.REEF_GATEWAY_URL);
 
-  if (requested === "gateway") {
+  // A configured hosted gateway wins for "auto" too: commercial sessions
+  // auto-provision a gateway token server-side, so this is the real provider.
+  if (requested === "gateway" || (requested === "auto" && gatewayUrl !== undefined)) {
     return {
-      label: `Gateway · ${modelName ?? "Hosted Bedrock"}`,
+      label: `Gateway · ${modelName ?? "Hosted Claude"}`,
       provider: "gateway",
       keyed: true,
     };

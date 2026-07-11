@@ -1494,6 +1494,7 @@ export class ReefServer {
   ): Promise<void> {
     try {
       const body = (await this.#readJson(req)) as CreateSessionRequest;
+      await this.#maybeAutoSignIn(body);
       return this.#json(res, 201, { id: this.#startSession(body) });
     } catch (err) {
       return this.#fail(
@@ -1821,6 +1822,29 @@ export class ReefServer {
     };
   }
 
+  // Commercial "open the app and type" experience: if nobody is signed in but a
+  // hosted gateway is configured, provision an account (real gateway token) before
+  // the session runs, unless the request already carries an explicit token.
+  async #maybeAutoSignIn(body: CreateSessionRequest): Promise<void> {
+    if (
+      this.#account.current() !== undefined ||
+      this.#edition() !== "commercial" ||
+      optionalString(process.env.REEF_GATEWAY_URL) === undefined
+    ) {
+      return;
+    }
+    const model =
+      body.model !== null && typeof body.model === "object"
+        ? (body.model as Record<string, unknown>)
+        : undefined;
+    const hasToken = (key: string): boolean => {
+      const value = model?.[key];
+      return typeof value === "string" && value.trim() !== "";
+    };
+    if (hasToken("accessToken") || hasToken("licenseToken")) return;
+    await this.#account.login().catch(() => undefined);
+  }
+
   #startSession(body: CreateSessionRequest): string {
     const task = typeof body.task === "string" ? body.task.trim() : "";
     if (task === "") throw new RequestFailure(400, "task is required");
@@ -1844,6 +1868,7 @@ export class ReefServer {
     const baseContext = sessionContext(task, body, this.#edition());
     // Flow a signed-in account's hosted-gateway token into the session when the
     // request didn't set one explicitly, so "Sign in" then "Run" reaches the gateway.
+    // (Commercial sessions auto-provision an account first — see maybeAutoSignIn.)
     const signedIn = this.#account.current();
     const context =
       signedIn?.licenseToken !== undefined &&
