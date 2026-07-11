@@ -28,7 +28,11 @@ const KIND = {
 
 let conversationId = `reef-chat-${Date.now().toString(36)}`;
 let nextTurn = 1;
-let autopilot = false;
+// Default on so casual chat flows without a per-turn "Approve and Run" click.
+// This only skips the turn-start approval; the fail-closed action gate (file
+// edits / commands) inside the governed session still applies. Toggle off in the
+// composer for per-turn review.
+let autopilot = true;
 let busy = false;
 let legacyTurnId = "";
 const turns = new Map();
