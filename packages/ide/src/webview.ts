@@ -809,7 +809,7 @@ export function accountWebviewHtml(
       <div class="kv"><div class="key">User</div><div id="user" class="value">loading</div></div>
       <div class="kv"><div class="key">License Hash</div><div id="license" class="value">not available</div></div>
       <div class="toolbar">
-        <button id="signin" class="primary" type="button">Sign In Stub SSO</button>
+        <button id="signin" class="primary" type="button">Sign In</button>
         <button id="signout" type="button">Sign Out</button>
         <button id="copy" type="button">Copy User ID</button>
       </div>

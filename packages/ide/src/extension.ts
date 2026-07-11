@@ -399,11 +399,19 @@ function configuredAccountQuery(): AccountQuery {
     (process.env.AWS_BEARER_TOKEN_BEDROCK ?? "").trim() !== "" ||
     (process.env.BEDROCK_API_KEY ?? "").trim() !== "";
 
-  if (provider === "gateway") {
+  // Commercial edition with a hosted gateway configured routes "auto" sessions
+  // through the gateway (see the server's defaultRuntime), so reflect that here
+  // instead of falling through to the offline mock label.
+  if (
+    provider === "gateway" ||
+    ((provider === "auto" || provider === "") &&
+      gatewayUrl !== "" &&
+      isCommercialEdition())
+  ) {
     return {
       provider: "gateway",
-      model: name !== "" ? name : "reef-gateway-stub",
-      source: "Reef settings: hosted gateway",
+      model: name !== "" ? name : "reef-gateway",
+      source: "Reef hosted gateway",
       priorityTier,
       ...(gatewayUrl !== "" ? { gatewayUrl } : {}),
       ...(ssoUrl !== "" ? { ssoUrl } : {}),

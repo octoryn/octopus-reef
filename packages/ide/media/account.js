@@ -45,6 +45,34 @@ function setStatus(message, tone = "") {
   els.status.textContent = message;
 }
 
+// Per-button feedback: disable the panel's action buttons and show a working
+// label on the clicked one; restore on the next response so clicks feel alive.
+function actionButtons() {
+  return [
+    document.getElementById("refresh"),
+    document.getElementById("evidence"),
+    els.signin,
+    els.signout,
+    els.copy,
+  ].filter(Boolean);
+}
+function busy(btn, label) {
+  for (const b of actionButtons()) b.disabled = true;
+  if (btn) {
+    if (btn.dataset.origLabel === undefined) btn.dataset.origLabel = btn.textContent;
+    btn.textContent = label;
+  }
+}
+function clearBusy() {
+  for (const b of actionButtons()) {
+    b.disabled = false;
+    if (b.dataset.origLabel !== undefined) {
+      b.textContent = b.dataset.origLabel;
+      delete b.dataset.origLabel;
+    }
+  }
+}
+
 function text(el, value) {
   el.textContent = value;
 }
@@ -267,23 +295,27 @@ function render(data) {
   setStatus(`Account refreshed ${data.generatedAt || ""}`, "ok");
 }
 
-document.getElementById("refresh").addEventListener("click", () => {
-  setStatus("Refreshing account...", "warn");
+document.getElementById("refresh").addEventListener("click", (e) => {
+  busy(e.currentTarget, "Refreshing…");
+  setStatus("Refreshing account…", "warn");
   vscode.postMessage({ kind: "getAccount" });
 });
 
-document.getElementById("evidence").addEventListener("click", () => {
-  setStatus("Recording account evidence...", "warn");
+document.getElementById("evidence").addEventListener("click", (e) => {
+  busy(e.currentTarget, "Recording…");
+  setStatus("Recording account evidence…", "warn");
   vscode.postMessage({ kind: "recordAccountEvidence" });
 });
 
-els.signin.addEventListener("click", () => {
-  setStatus("Signing in to local stub account...", "warn");
+els.signin.addEventListener("click", (e) => {
+  busy(e.currentTarget, "Signing in…");
+  setStatus("Signing in…", "warn");
   vscode.postMessage({ kind: "signInAccount" });
 });
 
-els.signout.addEventListener("click", () => {
-  setStatus("Signing out...", "warn");
+els.signout.addEventListener("click", (e) => {
+  busy(e.currentTarget, "Signing out…");
+  setStatus("Signing out…", "warn");
   vscode.postMessage({ kind: "signOutAccount" });
 });
 
@@ -295,11 +327,13 @@ els.priorityTier.addEventListener("change", () => {
   }
 });
 
-els.copy.addEventListener("click", () => {
+els.copy.addEventListener("click", (e) => {
+  busy(e.currentTarget, "Copied ✓");
   vscode.postMessage({
     kind: "copyAccountId",
     id: current?.account?.userId || "",
   });
+  setTimeout(clearBusy, 700);
 });
 
 els.upgrade.addEventListener("click", () => {
@@ -308,6 +342,7 @@ els.upgrade.addEventListener("click", () => {
 
 window.addEventListener("message", (message) => {
   const data = message.data;
+  clearBusy();
   if (data.kind === "account") {
     render(data.account);
   } else if (data.kind === "status") {
