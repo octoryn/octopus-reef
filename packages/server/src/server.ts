@@ -1841,7 +1841,22 @@ export class ReefServer {
     }
 
     const id = `sess-${(this.#counter++).toString(36)}-${Date.now().toString(36)}`;
-    const context = sessionContext(task, body, this.#edition());
+    const baseContext = sessionContext(task, body, this.#edition());
+    // Flow a signed-in account's hosted-gateway token into the session when the
+    // request didn't set one explicitly, so "Sign in" then "Run" reaches the gateway.
+    const signedIn = this.#account.current();
+    const context =
+      signedIn?.licenseToken !== undefined &&
+      baseContext.model?.licenseToken === undefined &&
+      baseContext.model?.accessToken === undefined
+        ? {
+            ...baseContext,
+            model: {
+              ...(baseContext.model ?? {}),
+              licenseToken: signedIn.licenseToken,
+            },
+          }
+        : baseContext;
     const runtimeBase =
       body.account !== undefined
         ? this.#accountRuntime(body.account)

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -59,7 +59,16 @@ export class AccountStore {
     );
     const userId = clean(input.userId) ?? oidc.userId;
     const displayName = clean(input.displayName) ?? oidc.displayName;
-    const licenseToken = clean(input.licenseToken) ?? oidc.licenseToken;
+    // When a hosted gateway is configured, authenticate against it for a REAL
+    // token that governed sessions can use; otherwise keep the local stub token.
+    let licenseToken = clean(input.licenseToken) ?? oidc.licenseToken;
+    const gatewayUrl = clean(process.env.REEF_GATEWAY_URL);
+    if (clean(input.licenseToken) === undefined && gatewayUrl !== undefined) {
+      const real = await this.#gatewayToken(gatewayUrl, displayName).catch(
+        () => undefined,
+      );
+      if (real !== undefined) licenseToken = real;
+    }
     const account: StoredAccount = {
       userId,
       displayName,
@@ -70,6 +79,29 @@ export class AccountStore {
     this.#account = account;
     this.#save();
     return account;
+  }
+
+  // Provision a real hosted-gateway token by signing up an account on the gateway.
+  // Each sign-in mints a fresh gateway account (fine for BYOK-hosted staging); the
+  // returned JWT is what governed sessions send to the gateway.
+  async #gatewayToken(
+    gatewayUrl: string,
+    displayName: string,
+  ): Promise<string> {
+    const res = await fetch(`${trimTrailingSlash(gatewayUrl)}/v1/signup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: `reef-${randomUUID()}@reef.local`,
+        password: randomUUID(),
+        displayName,
+      }),
+    });
+    if (!res.ok) throw new Error(`gateway signup failed: ${res.status}`);
+    const body = (await res.json()) as { accessToken?: string };
+    const token = clean(body.accessToken);
+    if (token === undefined) throw new Error("gateway signup returned no token");
+    return token;
   }
 
   logout(): void {
