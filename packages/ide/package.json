@@ -299,10 +299,16 @@
           "default": "",
           "description": "Optional model name override for the configured provider."
         },
+        "reef.edition": {
+          "type": "string",
+          "enum": ["community", "commercial"],
+          "default": "commercial",
+          "description": "Reef edition. 'commercial' unlocks the hosted gateway provider (sign in to use it; falls back to BYOK/offline until then). 'community' is BYOK/offline only."
+        },
         "reef.gateway.url": {
           "type": "string",
-          "default": "",
-          "description": "Reef control-plane gateway URL. If empty, Reef reads REEF_GATEWAY_URL."
+          "default": "https://gateway.reef.octoryn.dev",
+          "description": "Reef control-plane gateway URL. Defaults to the hosted Reef gateway; override or set empty to use REEF_GATEWAY_URL."
         },
         "reef.gateway.licenseToken": {
           "type": "string",

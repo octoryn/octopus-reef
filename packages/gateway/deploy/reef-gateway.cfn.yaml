@@ -1,0 +1,502 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Reef commercial control plane (gateway) — Staging.
+  ECS Fargate (arm64) behind an ALB, single-AZ RDS Postgres, secrets in Secrets Manager.
+  HTTP-first (custom domain + HTTPS layered on later). Durable, won't-re-architect shape:
+  the same template scales to multi-AZ / HTTPS / more tasks by parameter, not rewrite.
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  ImageUri:
+    Type: String
+    Description: ECR image URI for the gateway (tag or digest-pinned).
+  DesiredCount:
+    Type: Number
+    Default: 1
+    Description: Number of Fargate tasks. Deploy with 0 first, populate the DB URL secret, then raise.
+  TaskCpu:
+    Type: String
+    Default: "256"
+    AllowedValues: ["256", "512", "1024"]
+  TaskMemory:
+    Type: String
+    Default: "512"
+    AllowedValues: ["512", "1024", "2048"]
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+  DbAllocatedStorage:
+    Type: Number
+    Default: 20
+  DbMultiAz:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  BedrockModel:
+    Type: String
+    Default: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+  BedrockAuth:
+    Type: String
+    Default: "iam"
+    AllowedValues: ["iam", "bearer", ""]
+    Description: >
+      How the gateway reaches Bedrock. iam = same-account SigV4 via the task role (no key,
+      recommended); bearer = a Bedrock API key in the bedrock-bearer-token secret; "" = local stub.
+  VpcCidr:
+    Type: String
+    Default: 10.20.0.0/16
+  EnableAutoscaling:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Turn on CPU target-tracking autoscaling (enable after the service is proven healthy).
+  MaxTasks:
+    Type: Number
+    Default: 4
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: >
+      ACM cert ARN (us-west-2) for the HTTPS listener. Empty = HTTP-only. When set, an
+      HTTPS:443 listener is added and HTTP:80 redirects to it.
+
+Conditions:
+  AutoscalingOn: !Equals [!Ref EnableAutoscaling, "true"]
+  HasCert: !Not [!Equals [!Ref CertificateArn, ""]]
+  # Only inject AWS_BEARER_TOKEN_BEDROCK in bearer mode. In iam mode its presence
+  # (even blank) makes the AWS SDK use bearer auth and skip SigV4.
+  BedrockBearerMode: !Equals [!Ref BedrockAuth, "bearer"]
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # ---- Network -------------------------------------------------------------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: reef-gateway-staging }]
+
+  Igw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: reef-gateway-staging }]
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref Igw
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: reef-public-a }]
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.1.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: reef-public-b }]
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.10.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: reef-db-a }]
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.11.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: reef-db-b }]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: reef-public }]
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttach
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref Igw
+  PublicAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { RouteTableId: !Ref PublicRouteTable, SubnetId: !Ref PublicSubnetA }
+  PublicAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { RouteTableId: !Ref PublicRouteTable, SubnetId: !Ref PublicSubnetB }
+
+  # DB subnets are isolated (no route to the IGW) — reachable only from the task SG.
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: reef-db }]
+  PrivateAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { RouteTableId: !Ref PrivateRouteTable, SubnetId: !Ref PrivateSubnetA }
+  PrivateAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { RouteTableId: !Ref PrivateRouteTable, SubnetId: !Ref PrivateSubnetB }
+
+  # ---- Security groups -----------------------------------------------------
+  AlbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: reef-gateway ALB - public HTTP
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: HTTP }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS }
+      Tags: [{ Key: Name, Value: reef-alb }]
+  TaskSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: reef-gateway Fargate task - only the ALB may reach 8787
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: reef-task }]
+  TaskIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref TaskSg
+      IpProtocol: tcp
+      FromPort: 8787
+      ToPort: 8787
+      SourceSecurityGroupId: !Ref AlbSg
+      Description: app port from ALB only
+  DbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: reef-gateway RDS - only the task SG may reach 5432
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: reef-db }]
+  DbIngressFromTask:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DbSg
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref TaskSg
+      Description: postgres from tasks only
+
+  # ---- Secrets -------------------------------------------------------------
+  LedgerSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: reef/gateway/ledger-secret
+      Description: HMAC key for the gateway evidence ledger (store-untrusting verify).
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+  JwtSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: reef/gateway/jwt-secret
+      Description: HMAC key used to sign gateway JWTs.
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+  AdminSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: reef/gateway/admin-token
+      Description: Bearer token for the gateway admin setup endpoints.
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+  DbMasterSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: reef/gateway/db-master
+      Description: RDS master credentials (username + generated password).
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"reef"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+  BedrockSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: reef/gateway/bedrock-bearer-token
+      Description: >
+        AWS_BEARER_TOKEN_BEDROCK. The gateway routes to real Bedrock iff this trims to
+        non-empty; a single space means "no key -> use the local deterministic stub".
+        Replace with a rotated Bedrock API key to activate the real model path.
+      SecretString: " "
+  DbUrlSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: reef/gateway/db-url
+      Description: REEF_GATEWAY_DB_URL. Placeholder until composed post-deploy from the RDS endpoint.
+      SecretString: "postgres://pending"
+
+  # ---- Database ------------------------------------------------------------
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: reef-gateway isolated DB subnets
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+  Db:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      Engine: postgres
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: !Ref DbAllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      MasterUsername: reef
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DbMasterSecret}:SecretString:password}}"
+      DBName: reef_gateway
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups: [!Ref DbSg]
+      MultiAZ: !Ref DbMultiAz
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 1
+      DeletionProtection: false
+      Tags: [{ Key: Name, Value: reef-gateway-staging }]
+
+  # ---- ECS -----------------------------------------------------------------
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: reef-gateway
+      ClusterSettings: [{ Name: containerInsights, Value: enabled }]
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/reef-gateway
+      RetentionInDays: 14
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: reef-gateway-exec
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-injected-secrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DbUrlSecret
+                  - !Ref LedgerSecret
+                  - !Ref JwtSecret
+                  - !Ref AdminSecret
+                  - !Ref BedrockSecret
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: reef-gateway-task
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: bedrock-invoke
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Present for the IAM/SigV4 path; the current provider uses the bearer token.
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: "*"
+
+  TaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: reef-gateway
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: reef-gateway
+          Image: !Ref ImageUri
+          Essential: true
+          PortMappings: [{ ContainerPort: 8787, Protocol: tcp }]
+          Environment:
+            - { Name: REEF_GATEWAY_HOST, Value: "0.0.0.0" }
+            - { Name: REEF_GATEWAY_PORT, Value: "8787" }
+            - { Name: AWS_REGION, Value: !Ref "AWS::Region" }
+            - { Name: REEF_GATEWAY_BEDROCK_MODEL, Value: !Ref BedrockModel }
+            - { Name: REEF_GATEWAY_BEDROCK_AUTH, Value: !Ref BedrockAuth }
+          Secrets:
+            - { Name: REEF_GATEWAY_DB_URL, ValueFrom: !Ref DbUrlSecret }
+            - { Name: REEF_GATEWAY_LEDGER_SECRET, ValueFrom: !Ref LedgerSecret }
+            - { Name: REEF_GATEWAY_JWT_SECRET, ValueFrom: !Ref JwtSecret }
+            - { Name: REEF_GATEWAY_ADMIN_TOKEN, ValueFrom: !Ref AdminSecret }
+            - !If
+              - BedrockBearerMode
+              - { Name: AWS_BEARER_TOKEN_BEDROCK, ValueFrom: !Ref BedrockSecret }
+              - !Ref "AWS::NoValue"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: ecs
+
+  # ---- Load balancer -------------------------------------------------------
+  Alb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: reef-gateway
+      Type: application
+      Scheme: internet-facing
+      Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      SecurityGroups: [!Ref AlbSg]
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: reef-gateway
+      VpcId: !Ref Vpc
+      Port: 8787
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /ready
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher: { HttpCode: "200" }
+      TargetGroupAttributes:
+        - { Key: deregistration_delay.timeout_seconds, Value: "30" }
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions: !If
+        - HasCert
+        - - Type: redirect
+            RedirectConfig: { Protocol: HTTPS, Port: "443", StatusCode: HTTP_301 }
+        - - { Type: forward, TargetGroupArn: !Ref TargetGroup }
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCert
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates: [{ CertificateArn: !Ref CertificateArn }]
+      DefaultActions: [{ Type: forward, TargetGroupArn: !Ref TargetGroup }]
+
+  # ---- Service -------------------------------------------------------------
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: Listener
+    Properties:
+      ServiceName: reef-gateway
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDef
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      HealthCheckGracePeriodSeconds: 90
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+          SecurityGroups: [!Ref TaskSg]
+      LoadBalancers:
+        - { ContainerName: reef-gateway, ContainerPort: 8787, TargetGroupArn: !Ref TargetGroup }
+
+  # ---- Autoscaling (enable after the service is proven healthy) -------------
+  ScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Condition: AutoscalingOn
+    Properties:
+      ServiceNamespace: ecs
+      ResourceId: !Sub "service/${Cluster}/${Service.Name}"
+      ScalableDimension: ecs:service:DesiredCount
+      MinCapacity: 1
+      MaxCapacity: !Ref MaxTasks
+      # RoleARN omitted on purpose: Application Auto Scaling uses (and auto-creates on
+      # first use) its service-linked role. Hardcoding the SLR ARN fails on fresh accounts
+      # where it does not yet exist.
+  CpuScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Condition: AutoscalingOn
+    Properties:
+      PolicyName: reef-gateway-cpu
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification: { PredefinedMetricType: ECSServiceAverageCPUUtilization }
+        TargetValue: 60
+        ScaleInCooldown: 120
+        ScaleOutCooldown: 60
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  GatewayUrl:
+    Description: Base URL for the editor/CLI (REEF_GATEWAY_URL). HTTP for staging.
+    Value: !Sub "http://${Alb.DNSName}"
+  AlbDnsName:
+    Value: !GetAtt Alb.DNSName
+  RdsEndpoint:
+    Value: !GetAtt Db.Endpoint.Address
+  RdsPort:
+    Value: !GetAtt Db.Endpoint.Port
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt Service.Name
+  DbMasterSecretArn:
+    Value: !Ref DbMasterSecret
+  DbUrlSecretArn:
+    Value: !Ref DbUrlSecret
+  BedrockSecretArn:
+    Value: !Ref BedrockSecret
+  AdminTokenSecretArn:
+    Value: !Ref AdminSecret
+  LogGroup:
+    Value: !Ref LogGroup

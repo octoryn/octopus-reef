@@ -875,6 +875,22 @@ function defaultRuntime(context: DriverFactoryContext): SessionRuntime {
   if (requested === "gateway") {
     return gatewayRuntime(context);
   }
+  // Commercial "auto": if the user is signed into a hosted gateway (a gateway URL
+  // AND an auth token are configured), route through it. BYOK/offline users without
+  // a gateway token fall through to the key/mock logic below, unchanged.
+  if (requested === "auto") {
+    const gwUrl =
+      context.model?.gatewayUrl ?? optionalString(process.env.REEF_GATEWAY_URL);
+    const gwToken =
+      context.model?.accessToken ??
+      context.model?.licenseToken ??
+      optionalString(process.env.REEF_GATEWAY_ACCESS_TOKEN) ??
+      optionalString(process.env.REEF_LICENSE_TOKEN) ??
+      optionalString(process.env.REEF_ENTITLEMENT_TOKEN);
+    if (gwUrl !== undefined && gwToken !== undefined) {
+      return gatewayRuntime(context);
+    }
+  }
   const providerName = selectProvider(requested, context.model?.apiKey);
   if (providerName === "mock") return { driver: new MockDriver() };
 
