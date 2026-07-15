@@ -1,0 +1,16 @@
+G0: scaffold verifiable gateway ledger
+
+Build the new @octopus-reef/gateway package with a Node HTTP service shell,
+configuration, DB interface, SQLite default, Postgres adapter, migrations,
+Docker/compose deployment files, and CONFIG.md.
+
+The gateway ledger reuses octopus-evidence primitives for evidence creation,
+chain links, and verification. GET /v1/verify reloads records from the store,
+checks evidence integrity, link bindings, expected length, and expected head,
+and turns red after a one-byte stored evidence tamper.
+
+Verification:
+- npm run typecheck --workspace @octopus-reef/gateway
+- npm test --workspace @octopus-reef/gateway
+- npx eslint packages/gateway
+- git diff --check

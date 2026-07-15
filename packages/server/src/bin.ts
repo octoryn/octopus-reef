@@ -9,6 +9,7 @@
  * starts.
  */
 import { ReefServer, type ReefServerOptions } from "./server.js";
+import type { ReefEdition } from "@octopus-reef/protocol";
 
 function arg(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
@@ -20,9 +21,12 @@ async function main(): Promise<void> {
   const host = arg("--host") ?? process.env.HOST ?? "127.0.0.1";
   const persistDir = arg("--persist");
   const staticDir = arg("--static") ?? process.env.REEF_STATIC;
+  const edition: ReefEdition =
+    process.env.REEF_EDITION === "commercial" ? "commercial" : "community";
   const options: ReefServerOptions = {
     ...(persistDir !== undefined ? { persistDir } : {}),
     ...(staticDir !== undefined ? { staticDir } : {}),
+    edition,
   };
   const server = new ReefServer(options);
   const bound = await server.listen(port, host);

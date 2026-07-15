@@ -224,6 +224,16 @@ export class AgentWorker implements Driver {
         };
         return;
       }
+      if (response.usage !== undefined) {
+        const input = response.usage.inputTokens ?? 0;
+        const output = response.usage.outputTokens ?? 0;
+        const total = response.usage.totalTokens ?? input + output;
+        yield {
+          type: "observe",
+          summary: `model usage: ${total} tokens (${input} input, ${output} output)`,
+          data: { modelUsage: response.usage, turn },
+        };
+      }
       messages.push({ role: "assistant", content: response.content });
 
       const toolUses = response.content.filter(

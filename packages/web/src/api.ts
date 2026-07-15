@@ -6,10 +6,11 @@
 import type {
   CreateSessionResponse,
   ServerEvent,
+  TamperSessionResponse,
   VerifyResult,
 } from "@octopus-reef/protocol";
 
-export type { ServerEvent, VerifyResult };
+export type { ServerEvent, TamperSessionResponse, VerifyResult };
 
 /** Parse+validate one SSE frame body into a typed {@link ServerEvent}. */
 export function parseServerEvent(data: string): ServerEvent {
@@ -29,12 +30,16 @@ export function parseServerEvent(data: string): ServerEvent {
 export async function createSession(
   baseUrl: string,
   task: string,
-  secret?: string,
+  options: { readonly secret?: string; readonly persist?: boolean } = {},
 ): Promise<string> {
   const res = await fetch(`${baseUrl}/sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ task, ...(secret ? { secret } : {}) }),
+    body: JSON.stringify({
+      task,
+      ...(options.secret ? { secret: options.secret } : {}),
+      ...(options.persist ? { persist: true } : {}),
+    }),
   });
   if (!res.ok) {
     const body: unknown = await res.json().catch(() => ({}));
@@ -46,6 +51,42 @@ export async function createSession(
   }
   const body = (await res.json()) as CreateSessionResponse;
   return body.id;
+}
+
+export async function verifySession(
+  baseUrl: string,
+  id: string,
+): Promise<VerifyResult> {
+  const res = await fetch(
+    `${baseUrl}/sessions/${encodeURIComponent(id)}/verify`,
+    {
+      headers: { accept: "application/json" },
+    },
+  );
+  if (!res.ok) throw new Error(`verify failed: ${res.statusText}`);
+  return (await res.json()) as VerifyResult;
+}
+
+export async function tamperSession(
+  baseUrl: string,
+  id: string,
+): Promise<TamperSessionResponse> {
+  const res = await fetch(
+    `${baseUrl}/sessions/${encodeURIComponent(id)}/tamper`,
+    {
+      method: "POST",
+      headers: { accept: "application/json" },
+    },
+  );
+  if (!res.ok) {
+    const body: unknown = await res.json().catch(() => ({}));
+    const msg =
+      typeof body === "object" && body !== null && "error" in body
+        ? String((body as { error: unknown }).error)
+        : res.statusText;
+    throw new Error(msg);
+  }
+  return (await res.json()) as TamperSessionResponse;
 }
 
 export interface Subscription {

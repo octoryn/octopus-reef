@@ -1,0 +1,4 @@
+
+> @octopus-reef/commercial@0.1.0 build
+> tsc -b
+

@@ -1,0 +1,14 @@
+G3: add account login and license revoke
+
+Add password-backed signup/login, signed JWT issuance on login, active license
+records, and an authenticated license revoke endpoint. Revoked accounts now
+fail entitlement checks before completion routing.
+
+Account signup, password auth, license provision, revoke, and post-revoke
+entitlement denial are all gateway evidence links.
+
+Verification:
+- npm run typecheck --workspace @octopus-reef/gateway
+- npm test --workspace @octopus-reef/gateway
+- npx eslint packages/gateway
+- git diff --check

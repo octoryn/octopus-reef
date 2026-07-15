@@ -19,7 +19,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@octopus-reef/engine": "^0.1.0",
+    "@octopus-reef/engine": "^0.2.0",
     "octopus-runtime": "^0.7.0"
   }
 }

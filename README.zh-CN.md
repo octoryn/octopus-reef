@@ -30,6 +30,10 @@ Reef 治理单个智能体的一场会话 —— 而借助它的**指挥官**(`@
 docker compose up      # → http://localhost:4300 (离线、免密钥)
 ```
 
+compose demo 会显式设置 `REEF_ALLOW_UNAUTHENTICATED_REMOTE=1`,因为容器需要绑定
+`0.0.0.0` 才能做端口映射。任何共享主机或非 demo 部署都应设置
+`REEF_DAEMON_TOKEN`,并限制 `REEF_ALLOWED_ORIGINS`。
+
 或从源码运行(Node ≥ 22):
 
 ```bash
@@ -75,6 +79,16 @@ proof ────────────────────────�
 
 **诚实的边界**:本地沙箱是纵深防御,不是不可信 repo 的牢笼 —— 对完全不可信的 repo,请在容器里运行 Reef(`docker compose up`),由操作系统隔离执行。详见 [SECURITY.md](SECURITY.md)。
 
+## 守护进程安全
+
+守护进程默认面向本机:未指定 host 时,`reef-serve` 只绑定 `127.0.0.1`。如果绑定非
+loopback 接口且没有 `REEF_DAEMON_TOKEN`,启动会被拒绝;只有可信 demo 才应设置
+`REEF_ALLOW_UNAUTHENTICATED_REMOTE=1`。CORS 默认只允许 loopback 浏览器来源;部署时用
+`REEF_ALLOWED_ORIGINS=https://your-ui.example` 显式放行。
+
+custom stdio MCP power 可以 spawn 本机命令,因此默认关闭。只有信任本机用户与 MCP
+命令时,才设置 `REEF_ALLOW_CUSTOM_MCP_STDIO=1`。
+
 ## 指挥官 —— 证明*舰队*做过什么
 
 引擎证明单个智能体的一场会话;**指挥官**(`@octopus-reef/agent`)证明一整支舰队。它把一个任务翻译成子任务,把每个子任务路由到最合适的 worker,把每个 worker 当作一场独立可验证的会话来治理,并把整轮运行绑成一份 **Worker Ledger**:一条 `octopus-evidence` 链 —— `plan → contract → route → result → acceptance → done`,其中每个 `result` 都**钉住**它所来自子会话的链头。换掉一个子会话,钉子就断;改动一个字节,账本就变红。
@@ -94,14 +108,19 @@ Reef 与 driver、形态无关;治理集中在一个引擎(`@octopus-reef/engine
 | 形态 | 包 | 状态 |
 |---|---|---|
 | **引擎**(治理:evidence + workstate + gate + executor + replay) | `@octopus-reef/engine` | ✅ |
-| **CLI**(`run` · `verify` · `replay` · `serve`) | `@octopus-reef/cli` | ✅ |
+| **CLI**(`run` · `verify` · `replay` · `serve`) | repo/Docker beta | ✅ |
 | **指挥官**(路由 + 治理 + 证明一支异构 worker 舰队) | `@octopus-reef/agent` | ✅ |
 | **真实智能体 driver**(Claude) | `@octopus-reef/driver-claude` | ✅ |
-| **服务端**(守护进程 —— 所有形态的统一后端) | `@octopus-reef/server` | ✅ |
-| **Web**(Vite + React) | `@octopus-reef/web` | ✅ |
-| **IDE**(VS Code) | `@octopus-reef/ide` | ✅ |
+| **服务端**(守护进程 —— 所有形态的统一后端) | repo/Docker beta | ✅ |
+| **Web**(Vite + React) | repo/Docker beta | ✅ |
+| **IDE**(VS Code) | repo beta | ✅ |
 | **Docker** 一键 | `Dockerfile` · `docker-compose.yml` | ✅ |
 | 移动端 | — | 暂缓 |
+
+Public npm beta 只发布开放基础包:`@octopus-reef/protocol`、`@octopus-reef/engine`、
+`@octopus-reef/agent`、`@octopus-reef/driver-claude` 与 Octopus adapter 系列。
+server、CLI、Web、IDE 先保持 repo/Docker beta,直到 commercial gateway 接缝从可发布的
+server 包里拆出。
 
 指挥官见 [docs/CONDUCTOR.zh-CN.md](docs/CONDUCTOR.zh-CN.md),栈如何组合见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),完整路线图见 [docs/DELIVERY-PLAN.md](docs/DELIVERY-PLAN.md)。
 

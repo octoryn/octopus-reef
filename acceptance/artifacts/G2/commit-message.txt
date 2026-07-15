@@ -1,0 +1,16 @@
+G2: enforce quota and local billing ledger
+
+Add DB-backed quota enforcement, honest quota reporting, cost records, and a
+billing adapter interface. The default local billing adapter writes to the DB
+billing ledger; the Stripe adapter is explicitly stubbed and throws rather than
+pretending to bill.
+
+Completion requests now evidence-log quota decisions before routing, deny
+over-quota callers fail-closed, debit actual provider usage, and expose sourced
+quota numbers through GET /v1/quota.
+
+Verification:
+- npm run typecheck --workspace @octopus-reef/gateway
+- npm test --workspace @octopus-reef/gateway
+- npx eslint packages/gateway
+- git diff --check

@@ -1,0 +1,35 @@
+{
+  "name": "@octopus-reef/commercial",
+  "version": "0.1.0",
+  "description": "Commercial-only Reef client helpers: entitlement-gated surfaces and hosted gateway support kept outside the community surface.",
+  "license": "UNLICENSED",
+  "author": "Ran Tao <ran@octopusos.ai>",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "reef-gateway-stub": "dist/stub-bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./stub": {
+      "types": "./dist/stub-gateway.d.ts",
+      "default": "./dist/stub-gateway.js"
+    },
+    "./stub-identity": {
+      "types": "./dist/stub-identity.d.ts",
+      "default": "./dist/stub-identity.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@octopus-reef/agent": "^0.2.1"
+  }
+}

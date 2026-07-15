@@ -11,7 +11,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -21,11 +21,30 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - run: npm ci
       - run: npm run verify:all
-      - name: publish public packages
-        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+      - run: npm run release:smoke
+      - name: publish public beta packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          for pkg in engine protocol driver-claude server; do
-            npm publish --access public --workspace "@octopus-reef/$pkg" || true
+          set -euo pipefail
+          for pkg in \
+            protocol \
+            engine \
+            driver-claude \
+            agent \
+            adapter-runtime \
+            adapter-observe \
+            adapter-blackboard \
+            adapter-experience \
+            adapter-scout
+          do
+            npm publish --access public --provenance --workspace "@octopus-reef/$pkg"
           done
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PKG_VERSION="$(node -p 'require("./package.json").version')"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Published Reef ${PKG_VERSION} public beta workspace packages to npm with provenance."

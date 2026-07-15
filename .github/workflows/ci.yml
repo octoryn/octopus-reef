@@ -20,6 +20,7 @@ jobs:
       # The full house gate: typecheck (libs + web + ide), format, lint, tests
       # (the macOS sandbox-exec tests self-skip off darwin), then all builds.
       - run: npm run verify:all
+      - run: npm run release:smoke
 
   docker:
     name: docker image builds

@@ -35,6 +35,25 @@ ships the substrate underneath:
 | A session you trust | A session you can independently verify (and replay-ready) |
 | A fleet of agents you trust | A **Worker Ledger** proving what the fleet did (plan → route → result → acceptance) |
 
+## The wedge: auditability plus honest economics
+
+Reef's product wedge is the trust layer incumbents still mostly render as UI:
+
+- **Audit Pack**: `reef audit-pack` exports the evidence chain, Worker Ledger,
+  replay proof, and SOC 2 Type II / ISO-42001 / EU AI Act control map for a
+  governed run. `reef audit-verify` re-checks the bundle store-untrusting; a
+  one-byte edit to any listed artifact turns verification red.
+- **Governance that can say NO**: denied actions fail closed before execution,
+  and the denial is itself an evidence link. The `reef say-no-demo` command
+  scripts the unreviewed-dangerous-change path offline.
+- **Fleet accountability**: the Manager surface runs multiple governed sessions
+  in parallel and binds them into a Worker Ledger, so "who did what" verifies at
+  both the session and fleet level.
+- **Honest economics**: BYOK means no Reef markup on model usage. Usage is
+  provider/API-sourced and labeled by source; pending keys and missing provider
+  data stay `pending-key` or `not available`. Reef never fabricates a `0/50`
+  credit meter or hides model spend behind opaque credits.
+
 ## Quickstart
 
 The whole workspace — governed backend **and** web UI — in one command:
@@ -42,6 +61,11 @@ The whole workspace — governed backend **and** web UI — in one command:
 ```bash
 docker compose up      # → http://localhost:4300  (offline, keyless)
 ```
+
+The compose demo explicitly sets `REEF_ALLOW_UNAUTHENTICATED_REMOTE=1` because
+the container must bind `0.0.0.0` for port publishing. For any shared host or
+non-demo deployment, set `REEF_DAEMON_TOKEN` and restrict
+`REEF_ALLOWED_ORIGINS`.
 
 Or from source (Node ≥ 22):
 
@@ -57,11 +81,15 @@ node packages/cli/dist/cli.js verify ./.reef/demo
 # Re-verify AND reconstruct the full timeline, byte-for-byte, from the log
 node packages/cli/dist/cli.js replay ./.reef/demo
 
+# Export and verify an audit bundle for the run
+node packages/cli/dist/cli.js audit-pack ./.reef/demo --out ./.reef/demo-audit
+node packages/cli/dist/cli.js audit-verify ./.reef/demo-audit
+
 # Serve the daemon (HTTP + SSE) that the web/IDE surfaces share
 node packages/cli/dist/cli.js serve 4300
 
 # See the gate deny a dangerous action
-node packages/cli/dist/cli.js run "clean up the machine" --demo-denial
+node packages/cli/dist/cli.js say-no-demo --out ./.reef/say-no
 ```
 
 Every run emits a live event stream, then a proof block:
@@ -100,6 +128,18 @@ neutralised, a throwaway `HOME`, and a process-group timeout.
 fully untrusted repo — for that, run Reef in the container (`docker compose up`),
 where execution is isolated by the OS. See [SECURITY.md](SECURITY.md).
 
+## Daemon safety
+
+The daemon is local-first by default: `reef-serve` binds to `127.0.0.1` unless a
+host is supplied. Binding a non-loopback interface without `REEF_DAEMON_TOKEN`
+is refused unless `REEF_ALLOW_UNAUTHENTICATED_REMOTE=1` is set for a trusted
+demo. CORS defaults to loopback browser origins only; use
+`REEF_ALLOWED_ORIGINS=https://your-ui.example` for deployments.
+
+Custom stdio MCP powers can spawn local commands, so they are disabled by
+default. Set `REEF_ALLOW_CUSTOM_MCP_STDIO=1` only when you trust the local user
+and the configured MCP command.
+
 ## The conductor — prove what the *fleet* did
 
 The engine proves one agent's session. The **conductor** (`@octopus-reef/agent`)
@@ -137,16 +177,23 @@ Reef is driver- and surface-agnostic; the governance lives in one engine
 | Surface | Package | Status |
 |---|---|---|
 | **Engine** (governance: evidence + workstate + gate + executor + replay) | `@octopus-reef/engine` | ✅ |
-| **CLI** (`run` · `verify` · `replay` · `serve`) | `@octopus-reef/cli` | ✅ |
+| **CLI** (`run` · `verify` · `replay` · `serve`) | repo/Docker beta | ✅ |
 | **Conductor** (route + govern + prove a fleet of heterogeneous workers) | `@octopus-reef/agent` | ✅ |
 | **Real agent driver** (Claude) | `@octopus-reef/driver-claude` | ✅ |
-| **Server** (daemon — one backend for all surfaces) | `@octopus-reef/server` | ✅ |
-| **Web** (Vite + React) | `@octopus-reef/web` | ✅ |
-| **IDE** (VS Code) | `@octopus-reef/ide` | ✅ |
+| **Server** (daemon — one backend for all surfaces) | repo/Docker beta | ✅ |
+| **Web** (Vite + React) | repo/Docker beta | ✅ |
+| **IDE** (VS Code) | repo beta | ✅ |
 | **Docker** one-click | `Dockerfile` · `docker-compose.yml` | ✅ |
 | Mobile | — | on hold |
 
-See [docs/CONDUCTOR.md](docs/CONDUCTOR.md) for the conductor,
+Public npm beta publishes the open foundation packages only:
+`@octopus-reef/protocol`, `@octopus-reef/engine`, `@octopus-reef/agent`,
+`@octopus-reef/driver-claude`, and the Octopus adapter packages. The server,
+CLI, web, and IDE surfaces remain repo/Docker beta while the commercial gateway
+seam is split out of the publishable server package.
+
+See [docs/POSITIONING.md](docs/POSITIONING.md) for the audit wedge and honest
+economics framing, [docs/CONDUCTOR.md](docs/CONDUCTOR.md) for the conductor,
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the stack composes, and
 [docs/DELIVERY-PLAN.md](docs/DELIVERY-PLAN.md) for the full roadmap.
 

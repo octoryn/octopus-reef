@@ -1,0 +1,33 @@
+✔ M2: two clients observe one live session and both verify it (81.008333ms)
+✔ M2: a keyed session verifies with the same secret over the wire (10.502291ms)
+✔ M3: persisted verify turns red after one evidence-log byte is flipped (79.91825ms)
+✔ C: persisted session tamper endpoint turns web verification red (75.90675ms)
+✔ B: Manager spawns two governed sessions and verifies the fleet Worker Ledger (66.381333ms)
+✔ B: Manager fleet verification turns red after a session evidence tamper (50.784417ms)
+✔ N1: server can run a real governed edit driver when BYOK runtime is configured (4.0325ms)
+✔ N5: installs an MCP power, records a governed tool call, and denies an unallowlisted tool (95.874209ms)
+✔ N11: browser Power records governed CDP reads and denied unallowlisted tool (1607.757584ms)
+✔ N11c: browser annotation is evidence-logged and the annotated DOM is reachable (1391.8085ms)
+✔ C0: edition split reports flavor and community rejects gateway provider (3.521917ms)
+✔ C1: commercial gateway records entitlement, quota, route evidence and denies no-license (44.689166ms)
+✔ N8: chat turns record conversation approval evidence and tamper per turn (37.753083ms)
+✔ N12: chat affordances are evidence links and reject unknown tokens (28.679083ms)
+✔ N6: usage endpoint aggregates persisted provider usage and labelled cost (20.579416ms)
+✔ C3: Account panel state distinguishes community BYOK and commercial stub account evidence (59.964375ms)
+✔ C4: local OIDC team membership and audit sessions are evidence-backed (27.4575ms)
+✔ C5: commercial priority routing and plan text are evidence-backed (41.793166ms)
+✔ C2: Account plan quota and usage come from aggregation and stub gateway ledger (66.298625ms)
+✔ N3: active steering is evidence-pinned, changes mock behavior, and detects tamper (21.856459ms)
+✔ N4: firing a hook creates a governed session and detects evidence tamper (20.790667ms)
+✔ N2: creates a spec, advances workstate through governance, rejects illegal moves, and detects tamper (34.798583ms)
+✔ M5: serves the web SPA for non-API routes, confined, API still works (4.077833ms)
+✔ surface review: sessions are evicted at capacity (bounded memory) (4.978166ms)
+✔ M2: health, unknown session, and bad requests (1.460208ms)
+ℹ tests 25
+ℹ suites 0
+ℹ pass 25
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4088.345875

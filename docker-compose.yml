@@ -14,6 +14,8 @@ services:
     environment:
       PORT: "4300"
       HOST: "0.0.0.0"
+      REEF_ALLOW_UNAUTHENTICATED_REMOTE: "1"
+      REEF_ALLOWED_ORIGINS: "http://localhost:4300,http://127.0.0.1:4300"
     # volumes:
     #   - ./.reef-sessions:/app/sessions
     # command: ["node", "packages/server/dist/bin.js", "--persist", "/app/sessions"]

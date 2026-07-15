@@ -29,6 +29,18 @@ Reef 是一个*治理*工具 —— 它的全部价值在于:一场会话可以�
 - **外部 CLI 不受操作系统沙箱约束。** `cliWorker` 包裹的是一个需要网络与自身鉴权的智能体,所以它被限定在工作区里运行(不在沙箱内)。我们把它的文件**效果**(内容哈希差异)捕获为证据 —— 我们证明*它改了什么*,而非它内部如何推理,也不声称能围困一个恶意的外部 CLI。请把不可信的工作放进容器里跑。
 - **BYOK。** 模型密钥属于操作者;Reef 从环境读取它们,除模型端点外不在任何地方持久化或传输它们。
 
+### 守护进程 / API 边界
+
+`reef-serve` 默认面向本机,绑定 `127.0.0.1`。如果绑定非 loopback host 且没有
+`REEF_DAEMON_TOKEN`,启动会被拒绝;只有可信 demo 才应设置
+`REEF_ALLOW_UNAUTHENTICATED_REMOTE=1`。配置 daemon token 后,API/SSE 路由需要
+`Authorization: Bearer <token>`;对 EventSource 这类不能设置 header 的客户端,也可使用
+`?token=<token>`。
+
+CORS 不再使用 wildcard。默认浏览器 allowlist 仅包含 loopback 来源;托管 UI 请用
+`REEF_ALLOWED_ORIGINS` 提供逗号分隔的显式来源列表。custom stdio MCP power 可 spawn
+本机命令,因此默认关闭;只有可信本地开发才设置 `REEF_ALLOW_CUSTOM_MCP_STDIO=1`。
+
 ## 范围
 
 在范围内:能验证通过的证据伪造(有密钥模式)、读取机密 / 写出工作区 / 触达网络的沙箱逃逸、服务端静态文件服务中的路径穿越、能验证通过的 Worker Ledger 伪造,以及鉴权/验证绕过。

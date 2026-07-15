@@ -1,0 +1,14 @@
+G4: add OIDC SSO team audit
+
+Add team and team-member persistence, local OIDC SSO sign-in through the
+existing commercial OIDC helper, team-scoped JWT issuance, and a membership
+enforced team audit endpoint.
+
+SSO, team membership, team audit, and team audit denial are all gateway ledger
+evidence links, and team usage is sourced from persisted usage records.
+
+Verification:
+- npm run typecheck --workspace @octopus-reef/gateway
+- npm test --workspace @octopus-reef/gateway
+- npx eslint packages/gateway
+- git diff --check

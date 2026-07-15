@@ -100,6 +100,16 @@ body {
   font-size: 13px;
   margin-bottom: 18px;
 }
+.banner.note {
+  background: rgba(61, 224, 190, 0.08);
+  border: 1px solid var(--line);
+  color: var(--signal);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-family: var(--mono);
+  font-size: 13px;
+  margin-bottom: 18px;
+}
 
 .hint {
   color: var(--muted);
@@ -218,6 +228,28 @@ body {
   font-family: var(--mono);
   font-size: 12px;
   margin-bottom: 12px;
+}
+.proof-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.proof-actions button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.proof-actions .secondary {
+  background: #111923;
+  color: var(--ink);
+}
+.proof-actions .danger {
+  background: rgba(255, 107, 107, 0.1);
+  color: var(--danger);
+  border-color: var(--danger);
 }
 .head {
   color: var(--muted);

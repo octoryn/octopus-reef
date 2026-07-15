@@ -1,0 +1,32 @@
+{
+  "name": "@octopus-reef/gateway",
+  "version": "0.1.0",
+  "description": "The verifiable Reef commercial control plane: authenticated inference gateway, entitlement, quota, team, SSO, priority routing, and evidence-backed verification.",
+  "license": "UNLICENSED",
+  "author": "Ran Tao <ran@octopusos.ai>",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "reef-gateway": "dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1085.0",
+    "@octopus-reef/agent": "^0.2.1",
+    "@octopus-reef/commercial": "^0.1.0",
+    "octopus-evidence": "^0.2.0",
+    "pg": "^8.16.3"
+  }
+}

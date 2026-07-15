@@ -56,6 +56,8 @@ export interface CompletionResponse {
   readonly content: readonly ContentBlock[];
   /** Why generation stopped, e.g. `"tool_use"` | `"end_turn"`. */
   readonly stopReason: string;
+  /** Token usage returned by the provider API, persisted by the worker as evidence. */
+  readonly usage?: ModelUsage;
 }
 
 /** The inference backend. Implement this to swap models/providers. */
@@ -70,6 +72,17 @@ export class ProviderError extends Error {
     super(message);
     this.name = "ProviderError";
   }
+}
+
+/** Normalized per-call token usage from a provider response. */
+export interface ModelUsage {
+  readonly provider: string;
+  readonly model: string;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly cacheCreationInputTokens?: number;
+  readonly cacheReadInputTokens?: number;
+  readonly totalTokens?: number;
 }
 
 export interface BedrockProviderOptions {
@@ -90,6 +103,8 @@ export interface BedrockProviderOptions {
 
 export const DEFAULT_BEDROCK_MODEL =
   "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929";
 
 interface RawBlock {
   type: string;
@@ -178,22 +193,134 @@ export class BedrockProvider implements ModelProvider {
       if (!res.ok) {
         throw new ProviderError(`bedrock ${res.status}: ${text.slice(0, 400)}`);
       }
-      let parsed: { content?: RawBlock[]; stop_reason?: string };
+      let parsed: {
+        content?: RawBlock[];
+        stop_reason?: string;
+        usage?: RawUsage;
+      };
       try {
         parsed = JSON.parse(text) as typeof parsed;
       } catch {
         throw new ProviderError("bedrock returned non-JSON");
       }
-      return normalize(parsed);
+      return normalize(parsed, "bedrock", this.#model);
+    }
+  }
+}
+
+export interface AnthropicProviderOptions {
+  readonly model?: string;
+  readonly apiKey?: string;
+  readonly fetchImpl?: typeof fetch;
+  readonly maxRetries?: number;
+  readonly retryBaseMs?: number;
+  readonly sleep?: (ms: number) => Promise<void>;
+}
+
+/** Direct Anthropic Messages API provider for BYOK desktop runs. */
+export class AnthropicProvider implements ModelProvider {
+  readonly name = "anthropic";
+  readonly #model: string;
+  readonly #apiKey: string | undefined;
+  readonly #fetch: typeof fetch;
+  readonly #maxRetries: number;
+  readonly #retryBaseMs: number;
+  readonly #sleep: (ms: number) => Promise<void>;
+
+  constructor(options: AnthropicProviderOptions = {}) {
+    this.#model = options.model ?? DEFAULT_ANTHROPIC_MODEL;
+    this.#apiKey = options.apiKey ?? process.env.ANTHROPIC_API_KEY;
+    this.#fetch = options.fetchImpl ?? fetch;
+    this.#maxRetries = options.maxRetries ?? 4;
+    this.#retryBaseMs = options.retryBaseMs ?? 1200;
+    this.#sleep =
+      options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  }
+
+  async complete(request: CompletionRequest): Promise<CompletionResponse> {
+    if (this.#apiKey === undefined || this.#apiKey === "") {
+      throw new ProviderError(
+        "no Anthropic API key (set ANTHROPIC_API_KEY or reef.model.apiKey)",
+      );
+    }
+    const body = JSON.stringify({
+      model: this.#model,
+      max_tokens: request.maxTokens,
+      system: request.system,
+      tools: request.tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.inputSchema,
+      })),
+      messages: request.messages,
+    });
+
+    for (let attempt = 0; ; attempt++) {
+      let res: Response;
+      try {
+        res = await this.#fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": this.#apiKey,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+          },
+          body,
+        });
+      } catch (err) {
+        if (attempt >= this.#maxRetries) {
+          throw new ProviderError(
+            `anthropic request failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        await this.#sleep(this.#retryBaseMs * (attempt + 1));
+        continue;
+      }
+      if (
+        (res.status === 429 || res.status === 503) &&
+        attempt < this.#maxRetries
+      ) {
+        await this.#sleep(this.#retryBaseMs * (attempt + 1));
+        continue;
+      }
+      const text = await res.text();
+      if (!res.ok) {
+        throw new ProviderError(
+          `anthropic ${res.status}: ${text.slice(0, 400)}`,
+        );
+      }
+      let parsed: {
+        content?: RawBlock[];
+        stop_reason?: string;
+        usage?: RawUsage;
+      };
+      try {
+        parsed = JSON.parse(text) as typeof parsed;
+      } catch {
+        throw new ProviderError("anthropic returned non-JSON");
+      }
+      return normalize(parsed, "anthropic", this.#model);
     }
   }
 }
 
 /** Coerce a raw Bedrock response into the typed {@link CompletionResponse}. */
-function normalize(parsed: {
-  content?: RawBlock[];
-  stop_reason?: string;
-}): CompletionResponse {
+interface RawUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
+function normalize(
+  parsed: {
+    content?: RawBlock[];
+    stop_reason?: string;
+    usage?: RawUsage;
+  },
+  provider: string,
+  model: string,
+): CompletionResponse {
   const content: ContentBlock[] = [];
   for (const b of parsed.content ?? []) {
     if (b.type === "text" && typeof b.text === "string") {
@@ -211,5 +338,46 @@ function normalize(parsed: {
       });
     }
   }
-  return { content, stopReason: parsed.stop_reason ?? "end_turn" };
+  const usage = normalizeUsage(parsed.usage, provider, model);
+  return {
+    content,
+    stopReason: parsed.stop_reason ?? "end_turn",
+    ...(usage !== undefined ? { usage } : {}),
+  };
+}
+
+function normalizeUsage(
+  usage: RawUsage | undefined,
+  provider: string,
+  model: string,
+): ModelUsage | undefined {
+  if (usage === undefined) return undefined;
+  const inputTokens = numberOrUndefined(usage.input_tokens);
+  const outputTokens = numberOrUndefined(usage.output_tokens);
+  const cacheCreationInputTokens = numberOrUndefined(
+    usage.cache_creation_input_tokens,
+  );
+  const cacheReadInputTokens = numberOrUndefined(usage.cache_read_input_tokens);
+  const totalTokens =
+    (inputTokens ?? 0) +
+    (outputTokens ?? 0) +
+    (cacheCreationInputTokens ?? 0) +
+    (cacheReadInputTokens ?? 0);
+  return {
+    provider,
+    model,
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(cacheCreationInputTokens !== undefined
+      ? { cacheCreationInputTokens }
+      : {}),
+    ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {}),
+    totalTokens,
+  };
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
