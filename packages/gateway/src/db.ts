@@ -20,12 +20,18 @@ export interface GatewayDb {
   getAccount(accountId: string): Promise<AccountRecord | undefined>;
   getAccountByEmail(email: string): Promise<AccountRecord | undefined>;
   upsertLicense(license: LicenseRecord): Promise<void>;
-  getActiveLicenseByAccount(accountId: string): Promise<LicenseRecord | undefined>;
+  getActiveLicenseByAccount(
+    accountId: string,
+  ): Promise<LicenseRecord | undefined>;
   getLicenseByTokenHash(tokenHash: string): Promise<LicenseRecord | undefined>;
   revokeLicense(accountId: string, revokedAt: string): Promise<void>;
   upsertQuota(quota: QuotaRecord): Promise<void>;
   getQuota(accountId: string): Promise<QuotaRecord | undefined>;
-  debitQuota(accountId: string, tokens: number, updatedAt: string): Promise<void>;
+  debitQuota(
+    accountId: string,
+    tokens: number,
+    updatedAt: string,
+  ): Promise<void>;
   appendUsageRecord(record: UsageRecord): Promise<void>;
   sumUsageForAccount(accountId: string): Promise<number>;
   sumCostForAccount(accountId: string): Promise<number>;

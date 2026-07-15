@@ -252,7 +252,10 @@ test("layout: left Reef panels use the shared polish and Usage keeps sourced val
   assert.match(webviewSource, /Session and provider detail/);
   assert.match(webviewSource, /Honest Economics/);
   assert.match(webviewSource, /BYOK: no markup/);
-  assert.match(webviewSource, /Usage is provider\/API-sourced and labeled by source/);
+  assert.match(
+    webviewSource,
+    /Usage is provider\/API-sourced and labeled by source/,
+  );
   assert.match(webviewSource, /No fake credit meter/);
   assert.match(webviewSource, /opaque credit meters/);
   assert.doesNotMatch(webviewSource, /<strong[^>]*>0\/50/);

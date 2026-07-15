@@ -1,9 +1,4 @@
-import {
-  existsSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-} from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ReefEvent } from "@octopus-reef/engine";
 import type {
@@ -229,8 +224,7 @@ function costForUsage(
     (usage.inputTokens * price.inputPerMillionUsd +
       usage.outputTokens * price.outputPerMillionUsd +
       usage.cacheCreationInputTokens *
-        (price.cacheCreationInputPerMillionUsd ??
-          price.inputPerMillionUsd) +
+        (price.cacheCreationInputPerMillionUsd ?? price.inputPerMillionUsd) +
       usage.cacheReadInputTokens *
         (price.cacheReadInputPerMillionUsd ?? price.inputPerMillionUsd)) /
     1_000_000;
@@ -319,7 +313,8 @@ function remainingStatuses(): UsageRemainingView[] {
       provider: "anthropic",
       status: "pending-key",
       source: "Anthropic billing/admin API",
-      message: "Live remaining balance/limit lookup is pending a BYOK/admin key.",
+      message:
+        "Live remaining balance/limit lookup is pending a BYOK/admin key.",
     },
     {
       provider: "bedrock",

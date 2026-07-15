@@ -73,7 +73,9 @@ export class CompletionService {
         : {}),
       content: {
         allowed: input.principal.ok,
-        reason: input.principal.ok ? "signed JWT verified" : input.principal.reason,
+        reason: input.principal.ok
+          ? "signed JWT verified"
+          : input.principal.reason,
       },
     });
     if (!input.principal.ok) {
@@ -198,7 +200,10 @@ export class CompletionService {
       return {
         ok: false,
         status: 502,
-        body: { error: "model provider failed", evidenceId: failure.evidenceId },
+        body: {
+          error: "model provider failed",
+          evidenceId: failure.evidenceId,
+        },
       };
     }
 
@@ -225,12 +230,19 @@ export class CompletionService {
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,
       totalTokens,
-      costUsd: costForTokens(totalTokens, this.#config.localPricePerThousandTokens),
+      costUsd: costForTokens(
+        totalTokens,
+        this.#config.localPricePerThousandTokens,
+      ),
       evidenceId: meterEvidence.evidenceId,
       createdAt: new Date().toISOString(),
     };
     await this.#db.appendUsageRecord(usageRecord);
-    await this.#db.debitQuota(principal.accountId, totalTokens, usageRecord.createdAt);
+    await this.#db.debitQuota(
+      principal.accountId,
+      totalTokens,
+      usageRecord.createdAt,
+    );
     await this.#billing.recordUsage(usageRecord);
 
     return {
@@ -285,7 +297,10 @@ export class CompletionService {
       };
     }
     if (!license.entitlements.includes("inference:complete")) {
-      return deniedLicense(license, "license does not include inference:complete");
+      return deniedLicense(
+        license,
+        "license does not include inference:complete",
+      );
     }
     return {
       allowed: true,
@@ -367,7 +382,9 @@ function deniedLicense(
   };
 }
 
-function completionRequestFromParsed(input: GatewayCompletionRequest): CompletionRequest {
+function completionRequestFromParsed(
+  input: GatewayCompletionRequest,
+): CompletionRequest {
   if (input.request !== undefined) return input.request;
   if (input.prompt !== undefined) {
     return {
@@ -380,16 +397,31 @@ function completionRequestFromParsed(input: GatewayCompletionRequest): Completio
   throw new Error("request or prompt is required");
 }
 
-function parseGatewayCompletionRequest(body: unknown): GatewayCompletionRequest {
+function parseGatewayCompletionRequest(
+  body: unknown,
+): GatewayCompletionRequest {
   if (body === null || typeof body !== "object" || Array.isArray(body)) {
     throw new Error("JSON object body is required");
   }
   const raw = body as Record<string, unknown>;
-  const prompt = typeof raw.prompt === "string" && raw.prompt.trim() !== "" ? raw.prompt : undefined;
-  const model = typeof raw.model === "string" && raw.model.trim() !== "" ? raw.model : undefined;
-  const priorityTier = raw.priorityTier === "priority" ? "priority" : raw.priorityTier === "standard" ? "standard" : undefined;
+  const prompt =
+    typeof raw.prompt === "string" && raw.prompt.trim() !== ""
+      ? raw.prompt
+      : undefined;
+  const model =
+    typeof raw.model === "string" && raw.model.trim() !== ""
+      ? raw.model
+      : undefined;
+  const priorityTier =
+    raw.priorityTier === "priority"
+      ? "priority"
+      : raw.priorityTier === "standard"
+        ? "standard"
+        : undefined;
   const request =
-    raw.request !== undefined ? coerceCompletionRequest(raw.request) : undefined;
+    raw.request !== undefined
+      ? coerceCompletionRequest(raw.request)
+      : undefined;
   return {
     ...(request !== undefined ? { request } : {}),
     ...(prompt !== undefined ? { prompt } : {}),
@@ -423,8 +455,12 @@ function normalizeUsage(
     return {
       provider: usage.provider,
       model: usage.model,
-      ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
-      ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+      ...(usage.inputTokens !== undefined
+        ? { inputTokens: usage.inputTokens }
+        : {}),
+      ...(usage.outputTokens !== undefined
+        ? { outputTokens: usage.outputTokens }
+        : {}),
       ...(usage.cacheCreationInputTokens !== undefined
         ? { cacheCreationInputTokens: usage.cacheCreationInputTokens }
         : {}),

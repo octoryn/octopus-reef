@@ -73,9 +73,17 @@ test("G4: local OIDC SSO creates team membership and verifiable team audit", asy
     assert.match(String(deniedAudit.body.evidenceId), /^ev_[a-f0-9]{64}$/);
 
     const records = await db.listLedgerRecords();
-    assert.ok(records.some((record) => record.evidence.kind === "reef.gateway.sso"));
-    assert.ok(records.some((record) => record.evidence.kind === "reef.gateway.team"));
-    assert.ok(records.some((record) => record.evidence.kind === "reef.gateway.team.audit"));
+    assert.ok(
+      records.some((record) => record.evidence.kind === "reef.gateway.sso"),
+    );
+    assert.ok(
+      records.some((record) => record.evidence.kind === "reef.gateway.team"),
+    );
+    assert.ok(
+      records.some(
+        (record) => record.evidence.kind === "reef.gateway.team.audit",
+      ),
+    );
 
     const verify = await fetchJson(port, "GET", "/v1/verify");
     assert.equal(verify.status, 200);
@@ -99,9 +107,13 @@ async function fetchJson(
       ...(options.token !== undefined
         ? { authorization: `Bearer ${options.token}` }
         : {}),
-      ...(options.body !== undefined ? { "content-type": "application/json" } : {}),
+      ...(options.body !== undefined
+        ? { "content-type": "application/json" }
+        : {}),
     },
-    ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+    ...(options.body !== undefined
+      ? { body: JSON.stringify(options.body) }
+      : {}),
   });
   return { status: res.status, body: (await res.json()) as JsonObject };
 }

@@ -95,7 +95,8 @@ export class GatewayControlPlane {
     }
     const existing = await this.db.getAccountByEmail(email);
     const accountId = existing?.id ?? randomUUID();
-    const displayName = clean(request.displayName) ?? existing?.displayName ?? email;
+    const displayName =
+      clean(request.displayName) ?? existing?.displayName ?? email;
     const material =
       existing === undefined
         ? localPasswordMaterial(email)
@@ -174,7 +175,8 @@ export class GatewayControlPlane {
       throw new HttpError(400, "password must be at least 8 characters");
     }
     const existing = await this.db.getAccountByEmail(email);
-    if (existing !== undefined) throw new HttpError(409, "account already exists");
+    if (existing !== undefined)
+      throw new HttpError(409, "account already exists");
 
     const accountId = randomUUID();
     const displayName = clean(request.displayName) ?? email;
@@ -253,14 +255,22 @@ export class GatewayControlPlane {
 
   async login(request: LoginRequest): Promise<
     | { readonly ok: true; readonly status: 200; readonly body: LoginResponse }
-    | { readonly ok: false; readonly status: 401; readonly body: GatewayErrorBody }
+    | {
+        readonly ok: false;
+        readonly status: 401;
+        readonly body: GatewayErrorBody;
+      }
   > {
     const email = request.email.trim().toLowerCase();
     const account = await this.db.getAccountByEmail(email);
     const allowed =
       account !== undefined &&
       account.status === "active" &&
-      verifyPassword(request.password, account.passwordSalt, account.passwordHash);
+      verifyPassword(
+        request.password,
+        account.passwordSalt,
+        account.passwordHash,
+      );
     const evidence = await this.recordDecision({
       decision: "auth",
       method: "password",
@@ -301,9 +311,7 @@ export class GatewayControlPlane {
     };
   }
 
-  async revokeLicense(
-    authHeader: string | undefined,
-  ): Promise<
+  async revokeLicense(authHeader: string | undefined): Promise<
     | {
         readonly ok: true;
         readonly status: 200;
@@ -498,9 +506,7 @@ export class GatewayControlPlane {
     };
   }
 
-  async teamAudit(
-    authHeader: string | undefined,
-  ): Promise<
+  async teamAudit(authHeader: string | undefined): Promise<
     | {
         readonly ok: true;
         readonly status: 200;
@@ -557,7 +563,10 @@ export class GatewayControlPlane {
       return {
         ok: false,
         status: 403,
-        body: { error: "team membership denied", evidenceId: denied.evidenceId },
+        body: {
+          error: "team membership denied",
+          evidenceId: denied.evidenceId,
+        },
       };
     }
     const members = await this.db.listTeamMembers(membership.team.id);
@@ -635,9 +644,7 @@ export class GatewayControlPlane {
     });
   }
 
-  async quota(
-    authHeader: string | undefined,
-  ): Promise<
+  async quota(authHeader: string | undefined): Promise<
     | {
         readonly ok: true;
         readonly status: 200;
@@ -677,7 +684,9 @@ export class GatewayControlPlane {
       };
     }
     const principal = verified.principal;
-    const license = await this.db.getActiveLicenseByAccount(principal.accountId);
+    const license = await this.db.getActiveLicenseByAccount(
+      principal.accountId,
+    );
     const quota = await this.db.getQuota(principal.accountId);
     const costUsd = await this.db.sumCostForAccount(principal.accountId);
     const allowed = license !== undefined && quota !== undefined;
@@ -794,14 +803,21 @@ export class GatewayControlPlane {
       return {
         ok: false,
         status: 403,
-        body: { error: "active license is missing", evidenceId: denied.evidenceId },
+        body: {
+          error: "active license is missing",
+          evidenceId: denied.evidenceId,
+        },
       };
     }
-    const selected = priorityDecision(requestedTier, {
-      allowed: true,
-      planId: license.planId,
-      entitlements: license.entitlements,
-    }, undefined);
+    const selected = priorityDecision(
+      requestedTier,
+      {
+        allowed: true,
+        planId: license.planId,
+        entitlements: license.entitlements,
+      },
+      undefined,
+    );
     const tierEvidence = await this.recordDecision({
       decision: "tier",
       method: "plan-policy",
@@ -859,13 +875,18 @@ export class GatewayHttpServer {
     });
   }
 
-  async listen(port = this.#control.config.port, host = this.#control.config.host): Promise<number> {
+  async listen(
+    port = this.#control.config.port,
+    host = this.#control.config.host,
+  ): Promise<number> {
     await this.#control.start();
     return new Promise((resolve, reject) => {
       this.#server.once("error", reject);
       this.#server.listen(port, host, () => {
         const address = this.#server.address();
-        resolve(typeof address === "object" && address !== null ? address.port : port);
+        resolve(
+          typeof address === "object" && address !== null ? address.port : port,
+        );
       });
     });
   }
@@ -917,7 +938,9 @@ export class GatewayHttpServer {
       return respondJson(res, 201, provisioned);
     }
     if (req.method === "POST" && url.pathname === "/v1/signup") {
-      const signup = await this.#control.signup(parseSignup(await readJson(req)));
+      const signup = await this.#control.signup(
+        parseSignup(await readJson(req)),
+      );
       return respondJson(res, 201, signup);
     }
     if (req.method === "POST" && url.pathname === "/v1/login") {
@@ -925,11 +948,15 @@ export class GatewayHttpServer {
       return respondJson(res, login.status, login.body);
     }
     if (req.method === "POST" && url.pathname === "/v1/license/revoke") {
-      const revoked = await this.#control.revokeLicense(req.headers.authorization);
+      const revoked = await this.#control.revokeLicense(
+        req.headers.authorization,
+      );
       return respondJson(res, revoked.status, revoked.body);
     }
     if (req.method === "POST" && url.pathname === "/v1/sso/login") {
-      const login = await this.#control.ssoLogin(parseSsoLogin(await readJson(req)));
+      const login = await this.#control.ssoLogin(
+        parseSsoLogin(await readJson(req)),
+      );
       return respondJson(res, 200, login);
     }
     if (req.method === "GET" && url.pathname === "/v1/team/audit") {
@@ -941,7 +968,10 @@ export class GatewayHttpServer {
       (url.pathname === "/v1/complete" || url.pathname === "/v1/completions")
     ) {
       const body = await readJson(req);
-      const completed = await this.#control.complete(req.headers.authorization, body);
+      const completed = await this.#control.complete(
+        req.headers.authorization,
+        body,
+      );
       return respondJson(res, completed.status, completed.body);
     }
     if (req.method === "GET" && url.pathname === "/v1/quota") {
@@ -951,7 +981,10 @@ export class GatewayHttpServer {
     if (req.method === "GET" && url.pathname === "/v1/plan") {
       const requestedTier =
         url.searchParams.get("tier") === "priority" ? "priority" : "standard";
-      const plan = await this.#control.plan(req.headers.authorization, requestedTier);
+      const plan = await this.#control.plan(
+        req.headers.authorization,
+        requestedTier,
+      );
       return respondJson(res, plan.status, plan.body);
     }
     return respondJson(res, 404, { error: "not found" });
@@ -1016,7 +1049,9 @@ function parseProvisionAccount(value: unknown): ProvisionAccountRequest {
   const displayName = clean(body.displayName);
   const planId = clean(body.planId);
   const entitlements = Array.isArray(body.entitlements)
-    ? body.entitlements.filter((value): value is string => typeof value === "string")
+    ? body.entitlements.filter(
+        (value): value is string => typeof value === "string",
+      )
     : undefined;
   return {
     email,
@@ -1070,11 +1105,7 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-function respondJson(
-  res: ServerResponse,
-  status: number,
-  body: unknown,
-): void {
+function respondJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
 }
@@ -1099,7 +1130,10 @@ function statusOf(error: unknown): number {
 }
 
 class HttpError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
     super(message);
     this.name = "HttpError";
   }

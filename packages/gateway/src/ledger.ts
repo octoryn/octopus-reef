@@ -36,7 +36,9 @@ export class GatewayLedger {
     this.#now = options.now ?? (() => new Date().toISOString());
   }
 
-  async appendDecision(input: GatewayDecisionInput): Promise<GatewayDecisionRecord> {
+  async appendDecision(
+    input: GatewayDecisionInput,
+  ): Promise<GatewayDecisionRecord> {
     const existing = await this.#db.listLedgerRecords();
     const evidence = this.#evidenceFor(input);
     const chain = existing.map((record) => record.link);

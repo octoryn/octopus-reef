@@ -1,4 +1,8 @@
-export { loadGatewayConfig, dbDriverFor, sqliteLocationFromUrl } from "./config.js";
+export {
+  loadGatewayConfig,
+  dbDriverFor,
+  sqliteLocationFromUrl,
+} from "./config.js";
 export { createGatewayDb } from "./factory.js";
 export {
   createBillingAdapter,
@@ -20,7 +24,10 @@ export { CompletionService, priorityDecision } from "./completion.js";
 export type { GatewayDb } from "./db.js";
 export { GatewayLedger } from "./ledger.js";
 export { PostgresGatewayDb } from "./postgres.js";
-export { LocalDeterministicProvider, createGatewayModelProvider } from "./provider.js";
+export {
+  LocalDeterministicProvider,
+  createGatewayModelProvider,
+} from "./provider.js";
 export { SqliteGatewayDb } from "./sqlite.js";
 export { GatewayControlPlane, GatewayHttpServer } from "./http.js";
 export type {

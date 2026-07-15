@@ -4,6 +4,7 @@
   "description": "The Reef server daemon: one governed-session backend, hosted over plain HTTP + Server-Sent Events, that every surface (CLI, IDE, Web) shares. Live evidence streaming, real governed agent sessions, and store-untrusting verification over the wire.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",
+  "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

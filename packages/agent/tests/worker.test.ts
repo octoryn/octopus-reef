@@ -99,13 +99,18 @@ class FakeExecutor implements ActionExecutor {
 
 test("worker drives read → run(fail) → fix → run(pass) → done, feeding results back", async () => {
   const provider = new ScriptedProvider([
-    use("1", "read_file", { path: "sum.js" }, {
-      provider: "anthropic",
-      model: "claude-test",
-      inputTokens: 11,
-      outputTokens: 7,
-      totalTokens: 18,
-    }),
+    use(
+      "1",
+      "read_file",
+      { path: "sum.js" },
+      {
+        provider: "anthropic",
+        model: "claude-test",
+        inputTokens: 11,
+        outputTokens: 7,
+        totalTokens: 18,
+      },
+    ),
     use("2", "run_command", { command: "npm test" }), // fails first
     use("3", "write_file", {
       path: "sum.js",

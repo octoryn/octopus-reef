@@ -57,13 +57,22 @@ export function verifyAccessToken(
   now: Date = new Date(),
 ): TokenVerification {
   const parts = token.split(".");
-  if (parts.length !== 3) return { ok: false, reason: "malformed bearer token" };
-  const [headerPart, claimsPart, signaturePart] = parts as [string, string, string];
+  if (parts.length !== 3)
+    return { ok: false, reason: "malformed bearer token" };
+  const [headerPart, claimsPart, signaturePart] = parts as [
+    string,
+    string,
+    string,
+  ];
   let header: JwtHeader;
   let claims: GatewayJwtClaims;
   try {
-    header = JSON.parse(Buffer.from(headerPart, "base64url").toString("utf8")) as JwtHeader;
-    claims = JSON.parse(Buffer.from(claimsPart, "base64url").toString("utf8")) as GatewayJwtClaims;
+    header = JSON.parse(
+      Buffer.from(headerPart, "base64url").toString("utf8"),
+    ) as JwtHeader;
+    claims = JSON.parse(
+      Buffer.from(claimsPart, "base64url").toString("utf8"),
+    ) as GatewayJwtClaims;
   } catch {
     return { ok: false, reason: "bearer token is not valid JSON" };
   }

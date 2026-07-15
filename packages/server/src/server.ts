@@ -110,10 +110,7 @@ import {
   accountPlan,
   type AccountSnapshotRequest,
 } from "./account.js";
-import {
-  McpPowerRegistry,
-  type AddCustomPowerRequest,
-} from "./mcp.js";
+import { McpPowerRegistry, type AddCustomPowerRequest } from "./mcp.js";
 import { BrowserDemoDriver, BrowserPowerRuntime } from "./browser.js";
 import { HookRegistry } from "./hooks.js";
 import {
@@ -667,6 +664,27 @@ export interface ReefServerOptions {
   readonly maxSubscribers?: number;
   /** Build flavor served by this daemon. Default follows REEF_EDITION, then community. */
   readonly edition?: ReefEdition;
+  /**
+   * Optional bearer token for API/SSE routes. Can also be set with
+   * REEF_DAEMON_TOKEN. Static assets and /health remain public.
+   */
+  readonly authToken?: string;
+  /**
+   * Allowed browser origins for CORS. Defaults to loopback origins only. Set
+   * REEF_ALLOWED_ORIGINS to a comma-separated list for deployments.
+   */
+  readonly allowedOrigins?: readonly string[];
+  /**
+   * Binding the daemon to a non-loopback interface without auth is refused unless
+   * this is true (or REEF_ALLOW_UNAUTHENTICATED_REMOTE=1). This keeps local dev
+   * frictionless while making remote exposure explicit.
+   */
+  readonly allowUnauthenticatedRemote?: boolean;
+  /**
+   * Custom stdio MCP powers can spawn local commands. They are disabled by
+   * default; enable only for trusted local development.
+   */
+  readonly allowCustomMcpStdio?: boolean;
 }
 
 const MAX_BODY = 64 * 1024;
@@ -728,6 +746,56 @@ function optionalString(value: unknown): string | undefined {
     ? value.trim()
     : undefined;
 }
+
+function envFlag(name: string): boolean {
+  const value = optionalString(process.env[name]);
+  return value === "1" || value === "true" || value === "yes";
+}
+
+function isLoopbackHost(host: string): boolean {
+  const normalized = host
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1"
+  );
+}
+
+function isLoopbackOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      isLoopbackHost(url.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function splitList(value: string | undefined): string[] {
+  return value === undefined
+    ? []
+    : value
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item) => item !== "");
+}
+
+const API_PREFIXES = new Set([
+  "account",
+  "edition",
+  "hooks",
+  "manager",
+  "powers",
+  "sessions",
+  "specs",
+  "steering",
+  "usage",
+]);
 
 function jsonObject(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -1072,7 +1140,14 @@ export class ReefServer {
 
   constructor(options: ReefServerOptions = {}) {
     this.#options = options;
-    this.#powers = new McpPowerRegistry(options.persistDir);
+    this.#powers = new McpPowerRegistry({
+      ...(options.persistDir !== undefined
+        ? { persistDir: options.persistDir }
+        : {}),
+      allowCustomStdio:
+        options.allowCustomMcpStdio === true ||
+        envFlag("REEF_ALLOW_CUSTOM_MCP_STDIO"),
+    });
     this.#hooks = new HookRegistry(options.persistDir);
     this.#specs = new SpecRegistry(options.persistDir);
     this.#steering = new SteeringRegistry(options.persistDir);
@@ -1092,6 +1167,27 @@ export class ReefServer {
 
   #maxSessions(): number {
     return this.#options.maxSessions ?? DEFAULT_MAX_SESSIONS;
+  }
+
+  #authToken(): string | undefined {
+    return (
+      optionalString(this.#options.authToken) ??
+      optionalString(process.env.REEF_DAEMON_TOKEN)
+    );
+  }
+
+  #allowUnauthenticatedRemote(): boolean {
+    return (
+      this.#options.allowUnauthenticatedRemote === true ||
+      envFlag("REEF_ALLOW_UNAUTHENTICATED_REMOTE")
+    );
+  }
+
+  #allowedOrigins(): readonly string[] {
+    return [
+      ...(this.#options.allowedOrigins ?? []),
+      ...splitList(optionalString(process.env.REEF_ALLOWED_ORIGINS)),
+    ];
   }
 
   #edition(): ReefEdition {
@@ -1173,6 +1269,17 @@ export class ReefServer {
 
   /** Start listening. Pass 0 for an ephemeral port; resolves with the bound port. */
   listen(port = 0, host = "127.0.0.1"): Promise<number> {
+    if (
+      !isLoopbackHost(host) &&
+      this.#authToken() === undefined &&
+      !this.#allowUnauthenticatedRemote()
+    ) {
+      return Promise.reject(
+        new Error(
+          "refusing to bind Reef daemon to a non-loopback interface without REEF_DAEMON_TOKEN; set REEF_ALLOW_UNAUTHENTICATED_REMOTE=1 only for trusted demos",
+        ),
+      );
+    }
     return new Promise((resolve, reject) => {
       this.#http.once("error", reject);
       this.#http.listen(port, host, () => {
@@ -1195,9 +1302,23 @@ export class ReefServer {
     const url = new URL(req.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
     const method = req.method ?? "GET";
+    this.#applyCors(req, res);
+
+    if (method === "OPTIONS") {
+      res.writeHead(204, {
+        "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Max-Age": "600",
+      });
+      res.end();
+      return;
+    }
 
     if (method === "GET" && parts.length === 1 && parts[0] === "health") {
       return this.#json(res, 200, { ok: true });
+    }
+    if (this.#isApiPath(parts) && !this.#isAuthorized(req, url)) {
+      return this.#fail(res, 401, "missing or invalid Reef daemon token");
     }
     if (method === "GET" && parts.length === 1 && parts[0] === "edition") {
       return this.#json(res, 200, this.#editionResponse());
@@ -1465,6 +1586,37 @@ export class ReefServer {
       return this.#serveStatic(this.#options.staticDir, url.pathname, res);
     }
     this.#fail(res, 404, "not found");
+  }
+
+  #isApiPath(parts: readonly string[]): boolean {
+    const first = parts[0];
+    return first !== undefined && API_PREFIXES.has(first);
+  }
+
+  #isAuthorized(req: IncomingMessage, url: URL): boolean {
+    const expected = this.#authToken();
+    if (expected === undefined) return true;
+    const header = optionalString(req.headers.authorization);
+    const bearer =
+      header?.toLowerCase().startsWith("bearer ") === true
+        ? header.slice("bearer ".length).trim()
+        : undefined;
+    const query =
+      optionalString(url.searchParams.get("token")) ??
+      optionalString(url.searchParams.get("access_token"));
+    return bearer === expected || query === expected;
+  }
+
+  #applyCors(req: IncomingMessage, res: ServerResponse): void {
+    const origin =
+      typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+    if (origin === undefined) return;
+    const allowed = this.#allowedOrigins();
+    const explicit = allowed.includes("*") || allowed.includes(origin);
+    if (explicit || (allowed.length === 0 && isLoopbackOrigin(origin))) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
   }
 
   #serveStatic(dir: string, pathname: string, res: ServerResponse): void {
@@ -2277,7 +2429,6 @@ export class ReefServer {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
-      "Access-Control-Allow-Origin": "*",
     });
     // No `await` below this point: the handler runs to completion atomically, so
     // no live event can interleave between the replay and the subscription.
@@ -2391,7 +2542,6 @@ export class ReefServer {
     const payload = JSON.stringify(body);
     res.writeHead(status, {
       "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
     });
     res.end(payload);
   }

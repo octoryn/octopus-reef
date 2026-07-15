@@ -1,7 +1,4 @@
-import {
-  createServer,
-  type ServerResponse,
-} from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { stubIdToken } from "./team-sso.js";
 
 export interface StubIdentityProviderOptions {

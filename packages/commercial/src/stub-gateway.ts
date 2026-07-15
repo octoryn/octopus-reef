@@ -1,4 +1,8 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { BedrockProvider, type CompletionRequest } from "@octopus-reef/agent";
 import {
   TEST_GATEWAY_LICENSE_TOKEN,
@@ -128,9 +132,12 @@ async function handle(
   if (request === undefined || typeof request !== "object") {
     return json(res, 400, { error: "request is required" });
   }
-  const priorityTier = priorityModelTier(body.priorityTier ?? options.priorityTier);
+  const priorityTier = priorityModelTier(
+    body.priorityTier ?? options.priorityTier,
+  );
 
-  const bedrockToken = options.bedrockToken ?? process.env.AWS_BEARER_TOKEN_BEDROCK;
+  const bedrockToken =
+    options.bedrockToken ?? process.env.AWS_BEARER_TOKEN_BEDROCK;
   if (bedrockToken !== undefined && bedrockToken.trim() !== "") {
     const provider = new BedrockProvider({
       token: bedrockToken,

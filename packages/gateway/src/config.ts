@@ -6,7 +6,8 @@ export function loadGatewayConfig(
 ): GatewayConfig {
   const host = clean(env.REEF_GATEWAY_HOST) ?? "127.0.0.1";
   const port = intFromEnv(env.REEF_GATEWAY_PORT, 8787, "REEF_GATEWAY_PORT");
-  const dbUrl = clean(env.REEF_GATEWAY_DB_URL) ?? "sqlite:.reef-gateway/gateway.sqlite";
+  const dbUrl =
+    clean(env.REEF_GATEWAY_DB_URL) ?? "sqlite:.reef-gateway/gateway.sqlite";
   const jwtSecret = clean(env.REEF_GATEWAY_JWT_SECRET);
   const ledgerSecret = clean(env.REEF_GATEWAY_LEDGER_SECRET);
   const adminToken = clean(env.REEF_GATEWAY_ADMIN_TOKEN);

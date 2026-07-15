@@ -104,7 +104,9 @@ export class SqliteGatewayDb implements GatewayDb {
       for (const migration of MIGRATIONS) {
         this.#db.exec(migration.sql);
         this.#db
-          .prepare("INSERT OR IGNORE INTO gateway_meta (key, value) VALUES (?, ?)")
+          .prepare(
+            "INSERT OR IGNORE INTO gateway_meta (key, value) VALUES (?, ?)",
+          )
           .run(`migration:${migration.id}`, new Date(0).toISOString());
       }
       this.#db.exec("COMMIT");
@@ -247,7 +249,12 @@ export class SqliteGatewayDb implements GatewayDb {
         "INSERT INTO quotas (account_id, limit_tokens, used_tokens, updated_at) VALUES (?, ?, ?, ?) " +
           "ON CONFLICT(account_id) DO UPDATE SET limit_tokens = excluded.limit_tokens, used_tokens = excluded.used_tokens, updated_at = excluded.updated_at",
       )
-      .run(quota.accountId, quota.limitTokens, quota.usedTokens, quota.updatedAt);
+      .run(
+        quota.accountId,
+        quota.limitTokens,
+        quota.usedTokens,
+        quota.updatedAt,
+      );
   }
 
   async getQuota(accountId: string): Promise<QuotaRecord | undefined> {
@@ -292,14 +299,18 @@ export class SqliteGatewayDb implements GatewayDb {
 
   async sumUsageForAccount(accountId: string): Promise<number> {
     const row = this.#db
-      .prepare("SELECT SUM(total_tokens) AS total FROM usage_records WHERE account_id = ?")
+      .prepare(
+        "SELECT SUM(total_tokens) AS total FROM usage_records WHERE account_id = ?",
+      )
       .get(accountId) as SumRow | undefined;
     return row?.total ?? 0;
   }
 
   async sumCostForAccount(accountId: string): Promise<number> {
     const row = this.#db
-      .prepare("SELECT SUM(cost_usd) AS total FROM usage_records WHERE account_id = ?")
+      .prepare(
+        "SELECT SUM(cost_usd) AS total FROM usage_records WHERE account_id = ?",
+      )
       .get(accountId) as SumRow | undefined;
     return row?.total ?? 0;
   }
@@ -323,7 +334,9 @@ export class SqliteGatewayDb implements GatewayDb {
 
   async sumBillingForAccount(accountId: string): Promise<number> {
     const row = this.#db
-      .prepare("SELECT SUM(amount_usd) AS total FROM billing_records WHERE account_id = ?")
+      .prepare(
+        "SELECT SUM(amount_usd) AS total FROM billing_records WHERE account_id = ?",
+      )
       .get(accountId) as SumRow | undefined;
     return row?.total ?? 0;
   }
@@ -388,7 +401,11 @@ export class SqliteGatewayDb implements GatewayDb {
     this.#db.close();
   }
 
-  tamperLedgerEvidenceForTests(sequence: number, search: string, replace: string): void {
+  tamperLedgerEvidenceForTests(
+    sequence: number,
+    search: string,
+    replace: string,
+  ): void {
     const row = this.#db
       .prepare("SELECT evidence_json FROM gateway_ledger WHERE sequence = ?")
       .get(sequence) as { evidence_json: string } | undefined;

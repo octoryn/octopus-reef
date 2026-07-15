@@ -44,9 +44,14 @@ test("G5: priority tier routing is plan-gated, evidenced, and honestly reported"
       routeCountBefore,
       "standard priority denial must happen before route",
     );
-    const standardPlan = await fetchJson(port, "GET", "/v1/plan?tier=priority", {
-      token: standardToken,
-    });
+    const standardPlan = await fetchJson(
+      port,
+      "GET",
+      "/v1/plan?tier=priority",
+      {
+        token: standardToken,
+      },
+    );
     assert.equal(standardPlan.status, 200);
     assert.equal(standardPlan.body.selectedTier, "standard");
     const standardTiers = standardPlan.body.tiers as readonly {
@@ -87,9 +92,14 @@ test("G5: priority tier routing is plan-gated, evidenced, and honestly reported"
     const evidence = priorityCompletion.body.evidence as Record<string, string>;
     assert.match(evidence.tier, /^ev_[a-f0-9]{64}$/);
 
-    const priorityPlan = await fetchJson(port, "GET", "/v1/plan?tier=priority", {
-      token: priorityToken,
-    });
+    const priorityPlan = await fetchJson(
+      port,
+      "GET",
+      "/v1/plan?tier=priority",
+      {
+        token: priorityToken,
+      },
+    );
     assert.equal(priorityPlan.status, 200);
     assert.equal(priorityPlan.body.selectedTier, "priority");
     const priorityTiers = priorityPlan.body.tiers as readonly {
@@ -142,9 +152,13 @@ async function fetchJson(
       ...(options.token !== undefined
         ? { authorization: `Bearer ${options.token}` }
         : {}),
-      ...(options.body !== undefined ? { "content-type": "application/json" } : {}),
+      ...(options.body !== undefined
+        ? { "content-type": "application/json" }
+        : {}),
     },
-    ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+    ...(options.body !== undefined
+      ? { body: JSON.stringify(options.body) }
+      : {}),
   });
   return { status: res.status, body: (await res.json()) as JsonObject };
 }

@@ -272,11 +272,6 @@
           "default": "http://127.0.0.1:5173/",
           "description": "Local URL used by Reef browser preview/read commands. Only localhost http/https URLs are accepted."
         },
-        "reef.account.ssoUrl": {
-          "type": "string",
-          "default": "",
-          "description": "Optional loopback OIDC issuer for the local Reef commercial stub. Empty uses the bundled offline stub identity."
-        },
         "reef.model.provider": {
           "type": "string",
           "enum": [
@@ -357,6 +352,6 @@
   },
   "devDependencies": {
     "@types/vscode": "^1.90.0",
-    "esbuild": "^0.24.0"
+    "esbuild": "^0.25.12"
   }
 }

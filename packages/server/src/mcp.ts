@@ -84,6 +84,11 @@ interface StoreFile {
   readonly installed: readonly InstalledPower[];
 }
 
+export interface McpPowerRegistryOptions {
+  readonly persistDir?: string;
+  readonly allowCustomStdio?: boolean;
+}
+
 const ECHO_TOOLS: readonly McpToolDefinition[] = [
   {
     name: "echo",
@@ -526,11 +531,15 @@ async function callMcpTool(
 
 export class McpPowerRegistry {
   readonly #storePath: string | undefined;
+  readonly #allowCustomStdio: boolean;
   #installed: InstalledPower[] = [];
 
-  constructor(persistDir?: string) {
+  constructor(options: McpPowerRegistryOptions = {}) {
     this.#storePath =
-      persistDir === undefined ? undefined : join(persistDir, "powers.json");
+      options.persistDir === undefined
+        ? undefined
+        : join(options.persistDir, "powers.json");
+    this.#allowCustomStdio = options.allowCustomStdio === true;
     this.#installed = this.#load();
   }
 
@@ -569,6 +578,11 @@ export class McpPowerRegistry {
       id = `${id}-${i}`;
     }
     const transport = normalizeTransport(input);
+    if (transport.type === "stdio" && !this.#allowCustomStdio) {
+      throw new Error(
+        "custom stdio MCP powers are disabled by default; set REEF_ALLOW_CUSTOM_MCP_STDIO=1 only for trusted local development",
+      );
+    }
     const description = optionalString(input.description);
     const tools = normalizeTools(input.tools);
     const allowedTools =

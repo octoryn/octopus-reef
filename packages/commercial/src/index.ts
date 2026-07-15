@@ -379,7 +379,9 @@ function trimTrailingSlash(value: string): string {
 
 function parseStubGatewayPriorityPlan(value: unknown): StubGatewayPriorityPlan {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new ProviderError("priority plan source returned an invalid response");
+    throw new ProviderError(
+      "priority plan source returned an invalid response",
+    );
   }
   const candidate = value as Record<string, unknown>;
   const planId = cleanString(candidate.planId);
@@ -394,7 +396,9 @@ function parseStubGatewayPriorityPlan(value: unknown): StubGatewayPriorityPlan {
     serviceLevel === undefined ||
     tiers.length !== 2
   ) {
-    throw new ProviderError("priority plan source omitted required tier metadata");
+    throw new ProviderError(
+      "priority plan source omitted required tier metadata",
+    );
   }
   return {
     planId,
@@ -414,7 +418,8 @@ function parseStubGatewayPlanTier(value: unknown): StubGatewayPlanTier[] {
   const label = cleanString(candidate.label);
   const model = cleanString(candidate.model);
   const queue = candidate.queue === "priority" ? "priority" : "standard";
-  if (label === undefined || model === undefined || candidate.id !== id) return [];
+  if (label === undefined || model === undefined || candidate.id !== id)
+    return [];
   return [{ id, label, queue, model }];
 }
 

@@ -314,10 +314,10 @@ interface RawUsage {
 
 function normalize(
   parsed: {
-  content?: RawBlock[];
-  stop_reason?: string;
-  usage?: RawUsage;
-},
+    content?: RawBlock[];
+    stop_reason?: string;
+    usage?: RawUsage;
+  },
   provider: string,
   model: string,
 ): CompletionResponse {

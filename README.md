@@ -62,6 +62,11 @@ The whole workspace — governed backend **and** web UI — in one command:
 docker compose up      # → http://localhost:4300  (offline, keyless)
 ```
 
+The compose demo explicitly sets `REEF_ALLOW_UNAUTHENTICATED_REMOTE=1` because
+the container must bind `0.0.0.0` for port publishing. For any shared host or
+non-demo deployment, set `REEF_DAEMON_TOKEN` and restrict
+`REEF_ALLOWED_ORIGINS`.
+
 Or from source (Node ≥ 22):
 
 ```bash
@@ -123,6 +128,18 @@ neutralised, a throwaway `HOME`, and a process-group timeout.
 fully untrusted repo — for that, run Reef in the container (`docker compose up`),
 where execution is isolated by the OS. See [SECURITY.md](SECURITY.md).
 
+## Daemon safety
+
+The daemon is local-first by default: `reef-serve` binds to `127.0.0.1` unless a
+host is supplied. Binding a non-loopback interface without `REEF_DAEMON_TOKEN`
+is refused unless `REEF_ALLOW_UNAUTHENTICATED_REMOTE=1` is set for a trusted
+demo. CORS defaults to loopback browser origins only; use
+`REEF_ALLOWED_ORIGINS=https://your-ui.example` for deployments.
+
+Custom stdio MCP powers can spawn local commands, so they are disabled by
+default. Set `REEF_ALLOW_CUSTOM_MCP_STDIO=1` only when you trust the local user
+and the configured MCP command.
+
 ## The conductor — prove what the *fleet* did
 
 The engine proves one agent's session. The **conductor** (`@octopus-reef/agent`)
@@ -160,14 +177,20 @@ Reef is driver- and surface-agnostic; the governance lives in one engine
 | Surface | Package | Status |
 |---|---|---|
 | **Engine** (governance: evidence + workstate + gate + executor + replay) | `@octopus-reef/engine` | ✅ |
-| **CLI** (`run` · `verify` · `replay` · `serve`) | `@octopus-reef/cli` | ✅ |
+| **CLI** (`run` · `verify` · `replay` · `serve`) | repo/Docker beta | ✅ |
 | **Conductor** (route + govern + prove a fleet of heterogeneous workers) | `@octopus-reef/agent` | ✅ |
 | **Real agent driver** (Claude) | `@octopus-reef/driver-claude` | ✅ |
-| **Server** (daemon — one backend for all surfaces) | `@octopus-reef/server` | ✅ |
-| **Web** (Vite + React) | `@octopus-reef/web` | ✅ |
-| **IDE** (VS Code) | `@octopus-reef/ide` | ✅ |
+| **Server** (daemon — one backend for all surfaces) | repo/Docker beta | ✅ |
+| **Web** (Vite + React) | repo/Docker beta | ✅ |
+| **IDE** (VS Code) | repo beta | ✅ |
 | **Docker** one-click | `Dockerfile` · `docker-compose.yml` | ✅ |
 | Mobile | — | on hold |
+
+Public npm beta publishes the open foundation packages only:
+`@octopus-reef/protocol`, `@octopus-reef/engine`, `@octopus-reef/agent`,
+`@octopus-reef/driver-claude`, and the Octopus adapter packages. The server,
+CLI, web, and IDE surfaces remain repo/Docker beta while the commercial gateway
+seam is split out of the publishable server package.
 
 See [docs/POSITIONING.md](docs/POSITIONING.md) for the audit wedge and honest
 economics framing, [docs/CONDUCTOR.md](docs/CONDUCTOR.md) for the conductor,

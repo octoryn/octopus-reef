@@ -139,7 +139,8 @@ export class SpecRegistry {
   #counter = 0;
 
   constructor(persistDir?: string) {
-    this.#root = persistDir === undefined ? undefined : join(persistDir, "specs");
+    this.#root =
+      persistDir === undefined ? undefined : join(persistDir, "specs");
     if (this.#root !== undefined) this.#loadPersisted();
   }
 
@@ -233,7 +234,9 @@ export class SpecRegistry {
       const metaPath = join(dir, META_FILE);
       if (!existsSync(metaPath)) continue;
       try {
-        const meta = JSON.parse(readFileSync(metaPath, "utf8")) as StoredSpecMeta;
+        const meta = JSON.parse(
+          readFileSync(metaPath, "utf8"),
+        ) as StoredSpecMeta;
         if (typeof meta.id !== "string" || typeof meta.title !== "string") {
           continue;
         }

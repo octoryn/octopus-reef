@@ -4,6 +4,7 @@
   "description": "The Reef terminal surface: run governed agentic sessions and independently verify them from the command line.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",
+  "private": true,
   "type": "module",
   "main": "./dist/cli.js",
   "bin": {

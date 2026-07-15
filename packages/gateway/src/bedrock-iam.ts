@@ -110,7 +110,9 @@ export class BedrockIamProvider implements ModelProvider {
 }
 
 function num(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 export function mapResponse(

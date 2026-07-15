@@ -60,8 +60,14 @@ test("G2: quota is honest, debited, billing-ledgered, and enforced fail-closed",
     assert.equal(afterQuota.body.remainingTokens, 1000 - totalTokens);
     assert.ok(Number(afterQuota.body.costUsd) > 0);
     assert.equal(await db.sumUsageForAccount(accountId), totalTokens);
-    assert.equal(await db.sumCostForAccount(accountId), afterQuota.body.costUsd);
-    assert.equal(await db.sumBillingForAccount(accountId), afterQuota.body.costUsd);
+    assert.equal(
+      await db.sumCostForAccount(accountId),
+      afterQuota.body.costUsd,
+    );
+    assert.equal(
+      await db.sumBillingForAccount(accountId),
+      afterQuota.body.costUsd,
+    );
 
     await db.upsertQuota({
       accountId,
@@ -118,9 +124,13 @@ async function fetchJson(
       ...(options.token !== undefined
         ? { authorization: `Bearer ${options.token}` }
         : {}),
-      ...(options.body !== undefined ? { "content-type": "application/json" } : {}),
+      ...(options.body !== undefined
+        ? { "content-type": "application/json" }
+        : {}),
     },
-    ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+    ...(options.body !== undefined
+      ? { body: JSON.stringify(options.body) }
+      : {}),
   });
   return { status: res.status, body: (await res.json()) as JsonObject };
 }

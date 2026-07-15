@@ -100,7 +100,8 @@ export class AccountStore {
     if (!res.ok) throw new Error(`gateway signup failed: ${res.status}`);
     const body = (await res.json()) as { accessToken?: string };
     const token = clean(body.accessToken);
-    if (token === undefined) throw new Error("gateway signup returned no token");
+    if (token === undefined)
+      throw new Error("gateway signup returned no token");
     return token;
   }
 
@@ -259,7 +260,9 @@ export async function accountPlan(options: {
     edition: options.edition,
     ...(options.account !== undefined ? { account: options.account } : {}),
     ...(options.request !== undefined ? { request: options.request } : {}),
-    ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
+    ...(options.fetchImpl !== undefined
+      ? { fetchImpl: options.fetchImpl }
+      : {}),
   });
   return {
     generatedAt: (options.now ?? (() => new Date().toISOString()))(),
@@ -468,7 +471,8 @@ async function priorityPlan(options: {
       selectedTier,
       source: "local-stub-account",
       serviceLevel: "Sign in to read the local commercial plan source.",
-      message: "Sign in to the local Octopus stub account before selecting a tier.",
+      message:
+        "Sign in to the local Octopus stub account before selecting a tier.",
       tiers: [],
     };
   }
@@ -480,7 +484,8 @@ async function priorityPlan(options: {
       available: false,
       selectedTier,
       source: "REEF_GATEWAY_URL",
-      serviceLevel: "No plan source is configured, so Reef does not claim an SLA.",
+      serviceLevel:
+        "No plan source is configured, so Reef does not claim an SLA.",
       message: "Configure the local stub gateway to read priority tiers.",
       tiers: [],
     };
@@ -490,7 +495,9 @@ async function priorityPlan(options: {
       gatewayUrl,
       licenseToken: options.account.licenseToken,
       priorityTier: selectedTier,
-      ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
+      ...(options.fetchImpl !== undefined
+        ? { fetchImpl: options.fetchImpl }
+        : {}),
     });
     return {
       gated: false,
@@ -498,7 +505,8 @@ async function priorityPlan(options: {
       selectedTier: plan.selectedTier,
       source: plan.source,
       serviceLevel: plan.serviceLevel,
-      message: "Tier and service-level text were read from the local stub gateway.",
+      message:
+        "Tier and service-level text were read from the local stub gateway.",
       tiers: plan.tiers,
     };
   } catch (err) {
@@ -507,7 +515,8 @@ async function priorityPlan(options: {
       available: false,
       selectedTier,
       source: "local-stub-gateway /v1/plan",
-      serviceLevel: "The local plan source was unavailable; Reef does not claim an SLA.",
+      serviceLevel:
+        "The local plan source was unavailable; Reef does not claim an SLA.",
       message: err instanceof Error ? err.message : String(err),
       tiers: [],
     };

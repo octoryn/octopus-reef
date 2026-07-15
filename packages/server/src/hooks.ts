@@ -1,9 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type {
   CreateHookRequest,
@@ -81,8 +76,7 @@ export class HookRegistry {
     if (this.#storePath === undefined || !existsSync(this.#storePath)) return;
     try {
       const stored = JSON.parse(readFileSync(this.#storePath, "utf8")) as
-        | StoredHooks
-        | undefined;
+        StoredHooks | undefined;
       this.#hooks = Array.isArray(stored?.hooks)
         ? stored.hooks.filter(isHook)
         : [];

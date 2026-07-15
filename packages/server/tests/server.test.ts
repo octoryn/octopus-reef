@@ -54,7 +54,8 @@ function request(
   method: string,
   path: string,
   body?: unknown,
-): Promise<{ status: number; json: Json }> {
+  headers: Record<string, string> = {},
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; json: Json }> {
   return new Promise((resolve, reject) => {
     const data = body === undefined ? undefined : JSON.stringify(body);
     const req = http.request(
@@ -65,8 +66,9 @@ function request(
         path,
         headers:
           data === undefined
-            ? {}
+            ? headers
             : {
+                ...headers,
                 "Content-Type": "application/json",
                 "Content-Length": Buffer.byteLength(data),
               },
@@ -81,7 +83,7 @@ function request(
           } catch {
             json = raw;
           }
-          resolve({ status: res.statusCode ?? 0, json });
+          resolve({ status: res.statusCode ?? 0, headers: res.headers, json });
         });
       },
     );
@@ -90,6 +92,98 @@ function request(
     req.end();
   });
 }
+
+test("M2 security: remote bind requires auth token or explicit demo opt-in", async () => {
+  const rejected = new ReefServer();
+  await assert.rejects(
+    () => rejected.listen(0, "0.0.0.0"),
+    /refusing to bind Reef daemon/,
+  );
+
+  const allowed = new ReefServer({ allowUnauthenticatedRemote: true });
+  const port = await allowed.listen(0, "0.0.0.0");
+  assert.ok(port > 0);
+  await allowed.close();
+});
+
+test("M2 security: token protects API routes and supports bearer/query auth", async () => {
+  const server = new ReefServer({ authToken: "reef-secret" });
+  const port = await server.listen(0);
+  try {
+    const health = await request(port, "GET", "/health");
+    assert.equal(health.status, 200);
+
+    const denied = await request(port, "GET", "/usage");
+    assert.equal(denied.status, 401);
+
+    const bearer = await request(port, "GET", "/usage", undefined, {
+      Authorization: "Bearer reef-secret",
+    });
+    assert.equal(bearer.status, 200);
+
+    const query = await request(port, "GET", "/usage?token=reef-secret");
+    assert.equal(query.status, 200);
+  } finally {
+    await server.close();
+  }
+});
+
+test("M2 security: CORS defaults to loopback origins, never wildcard", async () => {
+  const server = new ReefServer();
+  const port = await server.listen(0);
+  try {
+    const evil = await request(port, "GET", "/usage", undefined, {
+      Origin: "https://evil.example",
+    });
+    assert.equal(evil.status, 200);
+    assert.equal(evil.headers["access-control-allow-origin"], undefined);
+
+    const loopback = await request(port, "GET", "/usage", undefined, {
+      Origin: `http://127.0.0.1:${port}`,
+    });
+    assert.equal(loopback.status, 200);
+    assert.equal(
+      loopback.headers["access-control-allow-origin"],
+      `http://127.0.0.1:${port}`,
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test("MCP security: custom stdio powers are explicit opt-in", async () => {
+  const body = {
+    name: "local command",
+    command: process.execPath,
+    args: ["-e", "process.exit(0)"],
+    tools: [{ name: "noop" }],
+  };
+
+  const locked = new ReefServer();
+  const lockedPort = await locked.listen(0);
+  try {
+    const rejected = await request(lockedPort, "POST", "/powers/custom", body);
+    assert.equal(rejected.status, 400);
+    assert.match(String(rejected.json.error), /disabled by default/);
+  } finally {
+    await locked.close();
+  }
+
+  const allowed = new ReefServer({ allowCustomMcpStdio: true });
+  const allowedPort = await allowed.listen(0);
+  try {
+    const installed = await request(
+      allowedPort,
+      "POST",
+      "/powers/custom",
+      body,
+    );
+    assert.equal(installed.status, 201);
+    assert.equal(installed.json.installed.transport.type, "stdio");
+  } finally {
+    await allowed.close();
+  }
+});
 
 /** Read an SSE stream to completion, returning its parsed frames. */
 function collectSSE(port: number, path: string): Promise<ServerEvent[]> {

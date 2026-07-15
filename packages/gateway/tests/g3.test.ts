@@ -67,8 +67,16 @@ test("G3: signup/login issue signed tokens and license revoke denies completion"
     assert.match(String(denied.body.evidenceId), /^ev_[a-f0-9]{64}$/);
 
     const records = await db.listLedgerRecords();
-    assert.ok(records.some((record) => record.evidence.kind === "reef.gateway.account.signup"));
-    assert.ok(records.some((record) => record.evidence.kind === "reef.gateway.license.revoke"));
+    assert.ok(
+      records.some(
+        (record) => record.evidence.kind === "reef.gateway.account.signup",
+      ),
+    );
+    assert.ok(
+      records.some(
+        (record) => record.evidence.kind === "reef.gateway.license.revoke",
+      ),
+    );
     assert.ok(
       records.some(
         (record) =>
@@ -109,9 +117,13 @@ async function fetchJson(
       ...(options.token !== undefined
         ? { authorization: `Bearer ${options.token}` }
         : {}),
-      ...(options.body !== undefined ? { "content-type": "application/json" } : {}),
+      ...(options.body !== undefined
+        ? { "content-type": "application/json" }
+        : {}),
     },
-    ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+    ...(options.body !== undefined
+      ? { body: JSON.stringify(options.body) }
+      : {}),
   });
   return { status: res.status, body: (await res.json()) as JsonObject };
 }

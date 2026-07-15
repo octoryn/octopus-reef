@@ -1,9 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import type {
@@ -47,8 +42,7 @@ const BUILT_INS: readonly StoredSteeringItem[] = [
     kind: "doc",
     content:
       "Before implementation, restate the goal as work items and make every state transition evidence-backed.",
-    mockEffect:
-      "N3 steering applied: produced a workstate-shaped quick spec.",
+    mockEffect: "N3 steering applied: produced a workstate-shaped quick spec.",
     updatedAt: BUILT_IN_UPDATED,
   },
   {
@@ -145,8 +139,7 @@ export class SteeringRegistry {
     if (this.#storePath === undefined || !existsSync(this.#storePath)) return;
     try {
       const stored = JSON.parse(readFileSync(this.#storePath, "utf8")) as
-        | StoredSteering
-        | undefined;
+        StoredSteering | undefined;
       this.#custom = Array.isArray(stored?.custom)
         ? stored.custom.filter(isStoredItem)
         : [];

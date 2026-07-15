@@ -1,5 +1,9 @@
 import type { ChainLink, Evidence, JsonValue } from "octopus-evidence";
-import type { CompletionRequest, CompletionResponse, ModelUsage } from "@octopus-reef/agent";
+import type {
+  CompletionRequest,
+  CompletionResponse,
+  ModelUsage,
+} from "@octopus-reef/agent";
 
 export type DbDriver = "sqlite" | "postgres";
 

@@ -63,7 +63,10 @@ export function chatModelChip(
 
   // A configured hosted gateway wins for "auto" too: commercial sessions
   // auto-provision a gateway token server-side, so this is the real provider.
-  if (requested === "gateway" || (requested === "auto" && gatewayUrl !== undefined)) {
+  if (
+    requested === "gateway" ||
+    (requested === "auto" && gatewayUrl !== undefined)
+  ) {
     return {
       label: `Gateway · ${modelName ?? "Hosted Claude"}`,
       provider: "gateway",

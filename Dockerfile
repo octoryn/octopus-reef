@@ -17,11 +17,14 @@ COPY package.json package-lock.json ./
 COPY packages/engine/package.json packages/engine/
 COPY packages/protocol/package.json packages/protocol/
 COPY packages/driver-claude/package.json packages/driver-claude/
+COPY packages/agent/package.json packages/agent/
 COPY packages/adapter-runtime/package.json packages/adapter-runtime/
 COPY packages/adapter-observe/package.json packages/adapter-observe/
 COPY packages/adapter-blackboard/package.json packages/adapter-blackboard/
 COPY packages/adapter-experience/package.json packages/adapter-experience/
 COPY packages/adapter-scout/package.json packages/adapter-scout/
+COPY packages/commercial/package.json packages/commercial/
+COPY packages/gateway/package.json packages/gateway/
 COPY packages/server/package.json packages/server/
 COPY packages/cli/package.json packages/cli/
 COPY packages/web/package.json packages/web/
@@ -41,11 +44,17 @@ WORKDIR /app
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=4300 \
+    REEF_ALLOW_UNAUTHENTICATED_REMOTE=1 \
+    REEF_ALLOWED_ORIGINS=http://localhost:4300,http://127.0.0.1:4300 \
     REEF_STATIC=/app/packages/web/dist
 
 # Runtime deps + compiled output only.
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/packages/agent/package.json ./packages/agent/package.json
+COPY --from=build /app/packages/agent/dist ./packages/agent/dist
+COPY --from=build /app/packages/commercial/package.json ./packages/commercial/package.json
+COPY --from=build /app/packages/commercial/dist ./packages/commercial/dist
 COPY --from=build /app/packages/engine/package.json ./packages/engine/package.json
 COPY --from=build /app/packages/engine/dist ./packages/engine/dist
 COPY --from=build /app/packages/protocol/package.json ./packages/protocol/package.json

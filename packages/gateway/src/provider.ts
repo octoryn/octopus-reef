@@ -7,10 +7,15 @@ import {
 import { BedrockIamProvider } from "./bedrock-iam.js";
 import type { GatewayConfig } from "./types.js";
 
-export function createGatewayModelProvider(config: GatewayConfig): ModelProvider {
-  const model = config.bedrockModel !== undefined ? { model: config.bedrockModel } : {};
+export function createGatewayModelProvider(
+  config: GatewayConfig,
+): ModelProvider {
+  const model =
+    config.bedrockModel !== undefined ? { model: config.bedrockModel } : {};
   // Same-account IAM (SigV4) path: no key — the AWS SDK resolves the task role.
-  if ((process.env.REEF_GATEWAY_BEDROCK_AUTH ?? "").trim().toLowerCase() === "iam") {
+  if (
+    (process.env.REEF_GATEWAY_BEDROCK_AUTH ?? "").trim().toLowerCase() === "iam"
+  ) {
     return new BedrockIamProvider({ ...model, region: config.awsRegion });
   }
   // Bearer-token path: a Bedrock API key in AWS_BEARER_TOKEN_BEDROCK.

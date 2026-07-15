@@ -60,6 +60,20 @@ what it can and cannot prove:
 - **BYOK.** Model keys are the operator's; Reef reads them from the environment
   and does not persist or transmit them anywhere but the model endpoint.
 
+### Daemon/API boundary
+
+`reef-serve` is local-first. By default it binds to `127.0.0.1`; binding to a
+non-loopback host without `REEF_DAEMON_TOKEN` is refused unless
+`REEF_ALLOW_UNAUTHENTICATED_REMOTE=1` is set for a trusted demo. When a daemon
+token is configured, API/SSE routes require `Authorization: Bearer <token>` (or
+`?token=<token>` for clients such as EventSource that cannot set headers).
+
+CORS no longer uses a wildcard. The default browser allowlist is loopback
+origins only; set `REEF_ALLOWED_ORIGINS` to a comma-separated list for a hosted
+UI. Custom stdio MCP powers are disabled by default because they can spawn local
+commands; set `REEF_ALLOW_CUSTOM_MCP_STDIO=1` only for trusted local
+development.
+
 ## Scope
 
 In scope: evidence forgery that verifies clean (keyed mode), sandbox escapes that
