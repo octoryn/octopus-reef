@@ -136,6 +136,7 @@ export class ControlPlaneWorker {
         ...scope,
         runId,
         projectRef: run.projectRef,
+        baselineRevisionRef: run.baselineRevisionRef,
         attempt: run.attempt,
         environment: { AWS_EC2_METADATA_DISABLED: "true" },
       } as const;
@@ -151,6 +152,7 @@ export class ControlPlaneWorker {
         scope,
         runId,
         run.projectRef,
+        run.baselineRevisionRef,
         sandbox.workspacePath,
       );
       run = await this.#enterRunning(scope, run, fence);
@@ -259,6 +261,7 @@ export class ControlPlaneWorker {
             acceptance,
             output: result.output,
             proof: result.proof,
+            resultRefs: result.resultRefs,
           },
           usage: { outputBytes: Buffer.byteLength(result.output, "utf8") },
         });
@@ -274,13 +277,18 @@ export class ControlPlaneWorker {
       } else if (run.status === "RUNNING") {
         run = await this.#transition(scope, runId, fence, "VERIFYING");
       }
+      let diffRef = result.resultRefs?.diffRef;
+      const testRef = result.resultRefs?.testRef;
+      const evidenceRefs = new Set(result.resultRefs?.evidenceRefs ?? []);
       if (this.#options.git !== undefined) {
         const committed = await this.#options.git.commit(
           scope,
           runId,
+          run.baselineRevisionRef,
           sandbox.workspacePath,
           `reef: complete AgentRun ${runId}`,
         );
+        diffRef ??= committed.diffRef;
         await this.#options.events.append(
           scope,
           runId,
@@ -298,6 +306,7 @@ export class ControlPlaneWorker {
           Buffer.from(JSON.stringify(result.proof ?? {}), "utf8"),
           "application/json",
         );
+        evidenceRefs.add(artifact.uri);
         await this.#options.events.append(
           scope,
           runId,
@@ -307,10 +316,16 @@ export class ControlPlaneWorker {
           `proof-artifact:${run.attempt}`,
         );
       }
+      const resultRefs = {
+        ...(diffRef !== undefined ? { diffRef } : {}),
+        ...(testRef !== undefined ? { testRef } : {}),
+        evidenceRefs: [...evidenceRefs],
+      };
       const now = this.#now();
       run = await this.#mutateFenced(scope, runId, fence, {
         status: "COMPLETED",
         output: result.output,
+        resultRefs,
         finishedAt: now,
         clearLease: true,
       });
@@ -318,7 +333,7 @@ export class ControlPlaneWorker {
         scope,
         runId,
         "run.completed",
-        { output: result.output, usage: run.usage },
+        { output: result.output, resultRefs, usage: run.usage },
         now,
         `completed:${run.attempt}`,
       );
@@ -732,6 +747,7 @@ function completedFromAcceptanceCheckpoint(
       readonly outcome: "COMPLETED";
       readonly output: string;
       readonly proof?: unknown;
+      readonly resultRefs?: Partial<import("./types.js").RunResultReferences>;
     }
   | undefined {
   const value = checkpoint?.payload;
@@ -751,5 +767,12 @@ function completedFromAcceptanceCheckpoint(
     outcome: "COMPLETED",
     output: record["output"],
     ...(record["proof"] !== undefined ? { proof: record["proof"] } : {}),
+    ...(record["resultRefs"] !== undefined
+      ? {
+          resultRefs: record["resultRefs"] as Partial<
+            import("./types.js").RunResultReferences
+          >,
+        }
+      : {}),
   };
 }

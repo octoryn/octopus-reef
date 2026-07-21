@@ -57,6 +57,7 @@ Example creation body:
   "task": "implement the accepted work item",
   "idempotencyKey": "builder-job-018f",
   "projectRef": "project://opaque/4d9b",
+  "baselineRevisionRef": "git-revision://opaque/923ea4",
   "workItemRef": "work-item://opaque/91e2",
   "acceptanceRef": "acceptance://opaque/31aa",
   "secretRefs": [
@@ -71,6 +72,12 @@ Example creation body:
   }
 }
 ```
+
+Every command body also carries an `idempotencyKey`; the supported client sends
+the same value in `Idempotency-Key`. Completed runs expose candidate-only
+`resultRefs` with optional `diffRef` and `testRef` plus `evidenceRefs`. These
+references are evidence for the caller's own review boundary, not authority to
+approve a deliverable or change an external project lifecycle.
 
 Plaintext `apiKey`, `password`, `secret`, access-token or credential fields in
 config/metadata are rejected.

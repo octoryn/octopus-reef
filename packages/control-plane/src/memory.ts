@@ -289,6 +289,18 @@ export class InMemoryControlPlaneStore
     );
   }
 
+  getEventByIdempotencyKey(
+    scope: TenantScope,
+    runId: string,
+    idempotencyKey: string,
+  ): Promise<RunEvent | undefined> {
+    return Promise.resolve(
+      cloneOptional(
+        this.#eventKeys.get(runScoped(scope, runId, idempotencyKey)),
+      ),
+    );
+  }
+
   save(
     scope: TenantScope,
     runId: string,
@@ -488,12 +500,16 @@ function applyMutation(
   delete next.clearReview;
   delete next.clearFinishedAt;
   delete next.clearOutput;
+  delete next.clearResultRefs;
   delete next.clearSandbox;
   if (mutation.clearLease === true) delete next.lease;
   if (mutation.clearFailure === true) delete next.failure;
   if (mutation.clearReview === true) delete next.reviewId;
   if (mutation.clearFinishedAt === true) delete next.finishedAt;
   if (mutation.clearOutput === true) delete next.output;
+  if (mutation.clearResultRefs === true) {
+    next.resultRefs = { evidenceRefs: [] };
+  }
   if (mutation.clearSandbox === true) delete next.sandboxId;
   return next as unknown as AgentRun;
 }

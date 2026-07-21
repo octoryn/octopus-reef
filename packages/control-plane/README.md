@@ -25,7 +25,8 @@ verification checkpoints. Semantic idempotency keys, step uniqueness and a
 monotonic repository fencing token make duplicate queue delivery harmless and
 let a new worker safely take an expired lease.
 
-PostgreSQL migration: `migrations/0001_control_plane.sql`.
+PostgreSQL migrations: `migrations/0001_control_plane.sql` and
+`migrations/0002_remote_contract.sql`.
 
 Reference adapters:
 
@@ -41,9 +42,12 @@ explicit subpaths: `@octopus-reef/control-plane/adapters/postgres`,
 AWS SDK or PostgreSQL modules.
 
 The published typed HTTP client is available at
-`@octopus-reef/control-plane/client`. It covers run creation and lookup,
-pause/approve/reject commands, tenant headers, exact decimal SSE cursors,
-reconnect/deduplication, and typed protocol/network/HTTP failures.
+`@octopus-reef/control-plane/client`. It covers create/get, pause, resume,
+retry, cancel, approve and reject; every mutation carries an idempotency key.
+It also preserves tenant headers, exact decimal SSE cursors,
+reconnect/deduplication, typed execution states, candidate
+`diffRef`/`testRef`/`evidenceRefs`, and typed protocol/network/HTTP failures.
+Creation pins an opaque immutable `baselineRevisionRef`.
 
 The service image uses `reef-control-plane serve` as its supported entrypoint.
 It requires `REEF_CONTROL_PLANE_DATABASE_URL`, listens on port 8080 by default,

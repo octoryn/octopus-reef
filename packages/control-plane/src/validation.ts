@@ -17,8 +17,9 @@ export function validateScope(scope: TenantScope): void {
 
 /** Enforces the Run API's secretRef-only credential boundary. */
 export function validateCreateRunRequest(request: CreateAgentRunRequest): void {
-  requireOpaque("idempotencyKey", request.idempotencyKey);
+  validateIdempotencyKey(request.idempotencyKey);
   requireOpaque("projectRef", request.projectRef);
+  requireOpaque("baselineRevisionRef", request.baselineRevisionRef);
   if (request.task.trim().length === 0) {
     throw new InvalidRunRequestError("task must not be empty");
   }
@@ -36,6 +37,10 @@ export function validateCreateRunRequest(request: CreateAgentRunRequest): void {
   }
   inspectForPlaintextCredentials(request, "request");
   validateBudget(request.budget ?? {});
+}
+
+export function validateIdempotencyKey(value: string): void {
+  requireOpaque("idempotencyKey", value);
 }
 
 function inspectForPlaintextCredentials(value: unknown, path: string): void {

@@ -53,9 +53,9 @@
   },
   "dependencies": {
     "@octopus-reef/adapter-runtime": "^0.1.0",
-    "@octopus-reef/agent": "^0.2.1",
-    "@octopus-reef/engine": "^0.2.0",
-    "@octopus-reef/protocol": "^0.1.0",
+    "@octopus-reef/agent": "^0.2.2",
+    "@octopus-reef/engine": "^0.2.1",
+    "@octopus-reef/protocol": "^0.1.1",
     "octopus-evidence": "^0.2.0",
     "octopus-runtime": "^0.7.0",
     "octopus-workstate": "^0.2.0"

@@ -5,6 +5,7 @@ import {
   ControlPlaneHttpError,
   ControlPlaneProtocolError,
   type AgentRun,
+  type AgentExecutionState,
   type RunEvent,
 } from "../src/index.js";
 
@@ -13,6 +14,7 @@ const RUN: AgentRun = {
   organisationId: "org-a",
   projectId: "project-a",
   projectRef: "project://opaque/a",
+  baselineRevisionRef: "git://revision/abc123",
   workItemRef: "work-item://opaque/a",
   task: "do the work",
   idempotencyKey: "builder-m3-a",
@@ -32,6 +34,11 @@ const RUN: AgentRun = {
   },
   config: {},
   metadata: {},
+  resultRefs: {
+    diffRef: "git-diff://abc123..def456",
+    testRef: "artifact://tests/junit.xml",
+    evidenceRefs: ["evidence://run/one"],
+  },
 };
 
 test("typed client sends tenant headers and secretRef-only credentials", async () => {
@@ -52,48 +59,78 @@ test("typed client sends tenant headers and secretRef-only credentials", async (
     task: "do the work",
     idempotencyKey: "builder-m3-a",
     projectRef: "project://opaque/a",
+    baselineRevisionRef: "git://revision/abc123",
     secretRefs: [{ name: "modelApiKey", secretRef: "vault://reef/model" }],
   });
 
   assert.equal(result.id, RUN.id);
+  const state: AgentExecutionState = result.status;
+  assert.equal(state, "QUEUED");
+  assert.equal(result.baselineRevisionRef, "git://revision/abc123");
+  assert.deepEqual(result.resultRefs, RUN.resultRefs);
   assert.equal(received?.url, "https://reef.example/control/v1/runs");
   const headers = new Headers(received?.init?.headers);
   assert.equal(headers.get("x-organisation-id"), "org-a");
   assert.equal(headers.get("x-project-id"), "project-a");
+  assert.equal(headers.get("idempotency-key"), "builder-m3-a");
   assert.deepEqual(JSON.parse(String(received?.init?.body)), {
     task: "do the work",
     idempotencyKey: "builder-m3-a",
     projectRef: "project://opaque/a",
+    baselineRevisionRef: "git://revision/abc123",
     secretRefs: [{ name: "modelApiKey", secretRef: "vault://reef/model" }],
   });
   assert.doesNotMatch(String(received?.init?.body), /api[_-]?key\s*:/i);
 });
 
-test("pause, approve and reject use the run command endpoints", async () => {
+test("resume, cancel and review commands use idempotent run endpoints", async () => {
   const calls: string[] = [];
+  const keys: string[] = [];
   const client = new ControlPlaneHttpClient({
     baseUrl: "https://reef.example/",
     tenant: { organisationId: "org-a", projectId: "project-a" },
-    fetchImpl: (input) => {
+    fetchImpl: (input, init) => {
       calls.push(String(input));
+      keys.push(new Headers(init?.headers).get("idempotency-key") ?? "");
       return Promise.resolve(jsonResponse(RUN));
     },
   });
 
-  await client.pause(RUN.id, { actorRef: "builder-runtime" });
-  await client.approve(RUN.id, { actorRef: "human://reviewer" });
+  await client.resume(RUN.id, { idempotencyKey: "resume-1" });
+  await client.cancel(RUN.id, {
+    idempotencyKey: "cancel-1",
+    reason: "operator cancelled",
+  });
+  await client.pause(RUN.id, {
+    idempotencyKey: "pause-1",
+    actorRef: "builder-runtime",
+  });
+  await client.approve(RUN.id, {
+    idempotencyKey: "approve-1",
+    actorRef: "human://reviewer",
+  });
   await client.reject(RUN.id, {
+    idempotencyKey: "reject-1",
     actorRef: "human://reviewer",
     reason: "needs changes",
   });
   assert.deepEqual(
     calls.map((url) => new URL(url).pathname),
     [
+      "/v1/runs/run%2Fone/resume",
+      "/v1/runs/run%2Fone/cancel",
       "/v1/runs/run%2Fone/pause",
       "/v1/runs/run%2Fone/approve",
       "/v1/runs/run%2Fone/reject",
     ],
   );
+  assert.deepEqual(keys, [
+    "resume-1",
+    "cancel-1",
+    "pause-1",
+    "approve-1",
+    "reject-1",
+  ]);
 });
 
 test("HTTP failures expose stable typed error details", async () => {

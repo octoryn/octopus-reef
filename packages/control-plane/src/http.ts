@@ -3,8 +3,11 @@ import type { ControlPlaneService } from "./service.js";
 import { encodeSseBatch, resolveSseCursor } from "./sse.js";
 import { isTerminal } from "./state-machine.js";
 import type { CreateAgentRunRequest, TenantScope } from "./types.js";
-import { InvalidRunRequestError } from "./validation.js";
-import { RunNotFoundError } from "./service.js";
+import {
+  InvalidRunRequestError,
+  validateIdempotencyKey,
+} from "./validation.js";
+import { RunIdempotencyConflictError, RunNotFoundError } from "./service.js";
 
 export interface ControlPlaneHttpOptions {
   readonly pollMs?: number;
@@ -27,7 +30,9 @@ export function createControlPlaneHttpHandler(
           ? 404
           : error instanceof InvalidRunRequestError
             ? 400
-            : 409;
+            : error instanceof RunIdempotencyConflictError
+              ? 409
+              : 409;
       json(response, status, {
         error: { code: errorCode(error), message: errorText(error) },
       });
@@ -50,6 +55,7 @@ async function route(
   const scope = tenantScope(request);
   if (request.method === "POST" && path.length === 2) {
     const body = await readJson(request, options.maxBodyBytes ?? 1_000_000);
+    assertMatchingIdempotencyHeader(request, body);
     const run = await service.createRun(
       scope,
       body as unknown as CreateAgentRunRequest,
@@ -92,30 +98,43 @@ async function route(
     return;
   }
   const body = await readJson(request, options.maxBodyBytes ?? 1_000_000);
+  const idempotencyKey = commandIdempotencyKey(request, body);
   const reason = stringField(body, "reason");
   const actorRef = stringField(body, "actorRef") ?? "operator";
   switch (path[3]) {
     case "pause":
-      json(response, 200, await service.pause(scope, runId, reason, actorRef));
+      json(
+        response,
+        200,
+        await service.pause(scope, runId, idempotencyKey, reason, actorRef),
+      );
       return;
     case "resume":
-      json(response, 200, await service.resume(scope, runId));
+      json(response, 200, await service.resume(scope, runId, idempotencyKey));
       return;
     case "retry":
-      json(response, 200, await service.retry(scope, runId));
+      json(response, 200, await service.retry(scope, runId, idempotencyKey));
       return;
     case "cancel":
-      json(response, 200, await service.cancel(scope, runId, reason));
+      json(
+        response,
+        200,
+        await service.cancel(scope, runId, idempotencyKey, reason),
+      );
       return;
     case "approve":
       json(
         response,
         200,
-        await service.approve(scope, runId, actorRef, reason),
+        await service.approve(scope, runId, idempotencyKey, actorRef, reason),
       );
       return;
     case "reject":
-      json(response, 200, await service.reject(scope, runId, actorRef, reason));
+      json(
+        response,
+        200,
+        await service.reject(scope, runId, idempotencyKey, actorRef, reason),
+      );
       return;
     default:
       json(response, 404, { error: "not found" });
@@ -214,6 +233,42 @@ function stringField(
   return typeof field === "string" && field !== "" ? field : undefined;
 }
 
+function commandIdempotencyKey(
+  request: IncomingMessage,
+  body: Record<string, unknown>,
+): string {
+  const bodyKey = stringField(body, "idempotencyKey");
+  const headerKey = header(request, "idempotency-key");
+  if (
+    bodyKey !== undefined &&
+    headerKey !== undefined &&
+    bodyKey !== headerKey
+  ) {
+    throw new RunIdempotencyConflictError(headerKey);
+  }
+  const key = bodyKey ?? headerKey;
+  if (key === undefined) {
+    throw new InvalidRunRequestError("idempotencyKey is required");
+  }
+  validateIdempotencyKey(key);
+  return key;
+}
+
+function assertMatchingIdempotencyHeader(
+  request: IncomingMessage,
+  body: Record<string, unknown>,
+): void {
+  const headerKey = header(request, "idempotency-key");
+  const bodyKey = stringField(body, "idempotencyKey");
+  if (
+    headerKey !== undefined &&
+    bodyKey !== undefined &&
+    headerKey !== bodyKey
+  ) {
+    throw new RunIdempotencyConflictError(headerKey);
+  }
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -225,5 +280,7 @@ function errorText(error: unknown): string {
 function errorCode(error: unknown): string {
   if (error instanceof RunNotFoundError) return "RUN_NOT_FOUND";
   if (error instanceof InvalidRunRequestError) return "INVALID_RUN_REQUEST";
+  if (error instanceof RunIdempotencyConflictError)
+    return "IDEMPOTENCY_CONFLICT";
   return "RUN_CONFLICT";
 }

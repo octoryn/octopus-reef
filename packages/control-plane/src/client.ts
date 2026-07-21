@@ -24,12 +24,25 @@ export interface RunEventStreamOptions {
 }
 
 export interface RunReviewCommand {
+  readonly idempotencyKey: string;
   readonly actorRef: string;
   readonly reason?: string;
 }
 
 export interface RunPauseCommand {
+  readonly idempotencyKey: string;
   readonly actorRef?: string;
+  readonly reason?: string;
+}
+
+export interface RunResumeCommand {
+  readonly idempotencyKey: string;
+}
+
+export type RunRetryCommand = RunResumeCommand;
+
+export interface RunCancelCommand {
+  readonly idempotencyKey: string;
   readonly reason?: string;
 }
 
@@ -88,18 +101,51 @@ export class ControlPlaneHttpClient {
   }
 
   createRun(request: CreateAgentRunRequest): Promise<AgentRun> {
-    return this.#json<AgentRun>("POST", "v1/runs", request);
+    return this.#json<AgentRun>(
+      "POST",
+      "v1/runs",
+      request,
+      request.idempotencyKey,
+    );
   }
 
   getRun(runId: string): Promise<AgentRun> {
     return this.#json<AgentRun>("GET", `v1/runs/${segment(runId)}`);
   }
 
-  pause(runId: string, command: RunPauseCommand = {}): Promise<AgentRun> {
+  pause(runId: string, command: RunPauseCommand): Promise<AgentRun> {
     return this.#json<AgentRun>(
       "POST",
       `v1/runs/${segment(runId)}/pause`,
       command,
+      command.idempotencyKey,
+    );
+  }
+
+  resume(runId: string, command: RunResumeCommand): Promise<AgentRun> {
+    return this.#json<AgentRun>(
+      "POST",
+      `v1/runs/${segment(runId)}/resume`,
+      command,
+      command.idempotencyKey,
+    );
+  }
+
+  cancel(runId: string, command: RunCancelCommand): Promise<AgentRun> {
+    return this.#json<AgentRun>(
+      "POST",
+      `v1/runs/${segment(runId)}/cancel`,
+      command,
+      command.idempotencyKey,
+    );
+  }
+
+  retry(runId: string, command: RunRetryCommand): Promise<AgentRun> {
+    return this.#json<AgentRun>(
+      "POST",
+      `v1/runs/${segment(runId)}/retry`,
+      command,
+      command.idempotencyKey,
     );
   }
 
@@ -108,6 +154,7 @@ export class ControlPlaneHttpClient {
       "POST",
       `v1/runs/${segment(runId)}/approve`,
       command,
+      command.idempotencyKey,
     );
   }
 
@@ -116,6 +163,7 @@ export class ControlPlaneHttpClient {
       "POST",
       `v1/runs/${segment(runId)}/reject`,
       command,
+      command.idempotencyKey,
     );
   }
 
@@ -186,14 +234,22 @@ export class ControlPlaneHttpClient {
     }
   }
 
-  async #json<T>(method: string, path: string, body?: unknown): Promise<T> {
+  async #json<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    idempotencyKey?: string,
+  ): Promise<T> {
     let response: Response;
     try {
       response = await this.#fetch(this.#url(path), {
         method,
-        headers: this.#requestHeaders(
-          body === undefined ? {} : { "Content-Type": "application/json" },
-        ),
+        headers: this.#requestHeaders({
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+          ...(idempotencyKey !== undefined
+            ? { "Idempotency-Key": idempotencyKey }
+            : {}),
+        }),
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
     } catch (error) {

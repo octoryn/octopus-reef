@@ -26,6 +26,11 @@ The package follows Semantic Versioning. While it is below 1.0:
   must ignore unknown fields and event types;
 - persisted decimal cursors are opaque integers. Never coerce a cursor to a
   JavaScript `number`; persist and return the exact string;
+- `projectRef`, `workItemRef`, `acceptanceRef` and `baselineRevisionRef` are
+  opaque. Reef persists and returns them without interpreting Builder state;
+- all mutating commands carry an `idempotencyKey`. Replaying the same command
+  returns the current Run, while reusing its key with a changed payload returns
+  `IDEMPOTENCY_CONFLICT`;
 - a client and server should use the same `0.y` line until 1.0. A newer patch
   client may connect to an older patch server only when it does not call a newly
   added endpoint.
@@ -35,9 +40,9 @@ kernel contracts:
 
 | Dependency | Compatible line |
 | --- | --- |
-| `@octopus-reef/agent` | `^0.2.1` |
-| `@octopus-reef/engine` | `^0.2.0` |
-| `@octopus-reef/protocol` | `^0.1.0` |
+| `@octopus-reef/agent` | `^0.2.2` (checkpoint/resume) |
+| `@octopus-reef/engine` | `^0.2.1` (tool idempotency) |
+| `@octopus-reef/protocol` | `^0.1.1` (decimal cursor events) |
 | `@octopus-reef/adapter-runtime` | `^0.1.0` |
 | `octopus-workstate` / `octopus-evidence` | `^0.2.0` |
 | `octopus-runtime` | `^0.7.0` |
@@ -74,10 +79,27 @@ const run = await reef.createRun({
   task: "implement the accepted work item",
   idempotencyKey: workItemExecutionId,
   projectRef,
+  baselineRevisionRef,
   workItemRef,
+  acceptanceRef,
   secretRefs: [
     { name: "modelApiKey", secretRef: "aws-secrets://reef/model-prod" },
   ],
+});
+
+await reef.resume(run.id, { idempotencyKey: `${workItemExecutionId}:resume` });
+await reef.cancel(run.id, {
+  idempotencyKey: `${workItemExecutionId}:cancel`,
+  reason: "cancelled by the operator",
+});
+await reef.approve(run.id, {
+  idempotencyKey: `${workItemExecutionId}:approve`,
+  actorRef: reviewerRef,
+});
+await reef.reject(run.id, {
+  idempotencyKey: `${workItemExecutionId}:reject`,
+  actorRef: reviewerRef,
+  reason: "candidate needs changes",
 });
 
 for await (const event of reef.streamEvents(run.id, {
@@ -85,13 +107,31 @@ for await (const event of reef.streamEvents(run.id, {
 })) {
   await saveCursor(event.cursor); // exact decimal string
 }
+
+const finished = await reef.getRun(run.id);
+finished.status; // AgentExecutionState, including WAITING_FOR_TOOL/BUDGET_EXCEEDED
+finished.resultRefs.diffRef;
+finished.resultRefs.testRef;
+finished.resultRefs.evidenceRefs;
 ```
 
 The client always projects `x-organisation-id` and `x-project-id`, reconnects
 SSE using both `cursor` and `Last-Event-ID`, suppresses duplicate events, and
 throws `ControlPlaneHttpError`, `ControlPlaneNetworkError`, or
-`ControlPlaneProtocolError`. Run credentials are references shaped exactly as
+`ControlPlaneProtocolError`. It sends `Idempotency-Key` as well as the typed
+JSON command field so gateways and the service enforce the same key. Run
+credentials are references shaped exactly as
 `{ name, secretRef }`; secret values and API keys are rejected by the Run API.
+
+Schema migration `0002_remote_contract` adds the immutable baseline and typed
+candidate result references. Apply `reef-control-plane migrate` before rolling
+out 0.1.1, or set `REEF_CONTROL_PLANE_AUTO_MIGRATE=true` for the reference
+single-service deployment.
+
+`AgentExecutionState` is the closed 0.1.1 union `QUEUED | PROVISIONING |
+PLANNING | RUNNING | WAITING_FOR_TOOL | VERIFYING | WAITING_FOR_REVIEW |
+COMPLETED | FAILED | CANCELLED | BUDGET_EXCEEDED`. Builder may project these
+into product wording, but must not treat an execution state as Project State.
 
 ## Minimal remote API deployment
 

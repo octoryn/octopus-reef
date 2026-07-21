@@ -83,6 +83,11 @@ export interface RunEventStore {
     afterCursor?: string,
     limit?: number,
   ): Promise<readonly RunEvent[]>;
+  getEventByIdempotencyKey(
+    scope: TenantScope,
+    runId: string,
+    idempotencyKey: string,
+  ): Promise<RunEvent | undefined>;
 }
 
 export interface RunCheckpointStore {
@@ -139,14 +144,16 @@ export interface GitWorkspace {
     scope: TenantScope,
     runId: string,
     projectRef: string,
+    baselineRevisionRef: string,
     workspacePath: string,
   ): Promise<{ readonly branch: string; readonly worktreePath: string }>;
   commit(
     scope: TenantScope,
     runId: string,
+    baselineRevisionRef: string,
     workspacePath: string,
     message: string,
-  ): Promise<{ readonly commit: string }>;
+  ): Promise<{ readonly commit: string; readonly diffRef: string }>;
   cleanup(
     scope: TenantScope,
     runId: string,

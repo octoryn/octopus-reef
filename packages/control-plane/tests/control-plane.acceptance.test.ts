@@ -160,6 +160,7 @@ test("worker killed after tool result resumes without executing the tool twice",
     task: "write a file",
     idempotencyKey: "run-crash",
     projectRef: "project://a",
+    baselineRevisionRef: "git://baseline/a",
   });
 
   await assert.rejects(app.worker("worker-1").runOnce(), WorkerProcessCrash);
@@ -182,20 +183,34 @@ test("duplicate SQS deliveries do not execute an AgentRun twice", async () => {
   const kernel: AgentKernel = {
     run: () => {
       executions++;
-      return Promise.resolve({ outcome: "COMPLETED", output: "once" });
+      return Promise.resolve({
+        outcome: "COMPLETED",
+        output: "once",
+        resultRefs: {
+          diffRef: "git-diff://base..candidate",
+          testRef: "artifact://tests/junit.xml",
+          evidenceRefs: ["evidence://run/sqs-duplicate"],
+        },
+      });
     },
   };
   const app = runtime(clock, kernel, { queue: duplicateQueue });
-  await app.service.createRun(SCOPE, {
+  const run = await app.service.createRun(SCOPE, {
     task: "deduplicate",
     idempotencyKey: "sqs-duplicate",
     projectRef: "project://a",
+    baselineRevisionRef: "git://baseline/a",
   });
 
   await app.worker("worker-a").runOnce();
   await app.worker("worker-b").runOnce();
   assert.equal(executions, 1);
   assert.equal(duplicateQueue.acks, 2);
+  assert.deepEqual((await app.service.getRun(SCOPE, run.id)).resultRefs, {
+    diffRef: "git-diff://base..candidate",
+    testRef: "artifact://tests/junit.xml",
+    evidenceRefs: ["evidence://run/sqs-duplicate"],
+  });
 });
 
 test("expired lease can be taken over and stale fencing token cannot commit", async () => {
@@ -207,6 +222,7 @@ test("expired lease can be taken over and stale fencing token cannot commit", as
     task: "lease",
     idempotencyKey: "lease",
     projectRef: "project://a",
+    baselineRevisionRef: "git://baseline/a",
   });
   const first = await app.store.acquireLease(SCOPE, created.id, {
     ownerId: "worker-1",
@@ -245,8 +261,15 @@ test("review pause survives service/worker restart until explicit approval", asy
     task: "review",
     idempotencyKey: "review",
     projectRef: "project://a",
+    baselineRevisionRef: "git://baseline/a",
   });
-  await app.service.pause(SCOPE, run.id, "human gate", "reviewer-1");
+  await app.service.pause(
+    SCOPE,
+    run.id,
+    "pause-review",
+    "human gate",
+    "reviewer-1",
+  );
 
   const restartedService = new ControlPlaneService({
     runs: app.store,
@@ -260,7 +283,13 @@ test("review pause survives service/worker restart until explicit approval", asy
     "WAITING_FOR_REVIEW",
   );
   assert.equal(executions, 0);
-  await restartedService.approve(SCOPE, run.id, "reviewer-2", "looks good");
+  await restartedService.approve(
+    SCOPE,
+    run.id,
+    "approve-review",
+    "reviewer-2",
+    "looks good",
+  );
   await app.worker("worker-after-restart").runOnce();
   assert.equal(executions, 1);
   assert.equal(
@@ -286,6 +315,7 @@ test("budget exhaustion terminates as BUDGET_EXCEEDED", async () => {
     task: "bounded",
     idempotencyKey: "budget",
     projectRef: "project://a",
+    baselineRevisionRef: "git://baseline/a",
     budget: { maxTokens: 10 },
   });
   await app.worker("budget-worker").runOnce();
@@ -304,6 +334,7 @@ test("Run API accepts secretRef and rejects plaintext credentials at any depth",
     task: "secret refs only",
     idempotencyKey: "secret-ref",
     projectRef: "project://a",
+    baselineRevisionRef: "git://baseline/a",
     secretRefs: [{ name: "model", secretRef: "vault://models/prod" }],
   });
   await assert.rejects(
@@ -311,6 +342,7 @@ test("Run API accepts secretRef and rejects plaintext credentials at any depth",
       task: "bad secret",
       idempotencyKey: "plaintext-secret",
       projectRef: "project://a",
+      baselineRevisionRef: "git://baseline/a",
       apiKey: "plaintext",
     } as never),
     /plaintext credential.*secretRefs/,
@@ -320,9 +352,54 @@ test("Run API accepts secretRef and rejects plaintext credentials at any depth",
       task: "nested bad secret",
       idempotencyKey: "nested-plaintext-secret",
       projectRef: "project://a",
+      baselineRevisionRef: "git://baseline/a",
       config: { provider: { authorization: "Bearer plaintext" } },
     }),
     /plaintext credential.*secretRefs/,
+  );
+});
+
+test("idempotency keys replay the same command and reject changed payloads", async () => {
+  const clock = new ManualClock();
+  const app = runtime(clock, {
+    run: () => Promise.resolve({ outcome: "COMPLETED", output: "unused" }),
+  });
+  const request = {
+    task: "idempotent command",
+    idempotencyKey: "create-idempotent",
+    projectRef: "project://idempotent",
+    baselineRevisionRef: "git://baseline/one",
+  } as const;
+  const run = await app.service.createRun(SCOPE, request);
+  assert.equal((await app.service.createRun(SCOPE, request)).id, run.id);
+  await assert.rejects(
+    app.service.createRun(SCOPE, {
+      ...request,
+      baselineRevisionRef: "git://baseline/two",
+    }),
+    /idempotency key was reused/,
+  );
+
+  const cancelled = await app.service.cancel(
+    SCOPE,
+    run.id,
+    "cancel-idempotent",
+    "operator cancelled",
+  );
+  assert.equal(
+    (
+      await app.service.cancel(
+        SCOPE,
+        run.id,
+        "cancel-idempotent",
+        "operator cancelled",
+      )
+    ).version,
+    cancelled.version,
+  );
+  await assert.rejects(
+    app.service.cancel(SCOPE, run.id, "cancel-idempotent", "different reason"),
+    /idempotency key was reused/,
   );
 });
 
@@ -345,11 +422,13 @@ test("organisation/project records and workspace paths are isolated", async () =
     task: "tenant A",
     idempotencyKey: "same-client-key",
     projectRef: "project://a",
+    baselineRevisionRef: "git://baseline/a",
   });
   const runB = await service.createRun(scopeB, {
     task: "tenant B",
     idempotencyKey: "same-client-key",
     projectRef: "project://b",
+    baselineRevisionRef: "git://baseline/b",
   });
   assert.equal(runA.id, runB.id);
   assert.equal((await service.getRun(SCOPE, runA.id)).task, "tenant A");
@@ -362,12 +441,14 @@ test("organisation/project records and workspace paths are isolated", async () =
     ...SCOPE,
     runId: runA.id,
     projectRef: runA.projectRef,
+    baselineRevisionRef: runA.baselineRevisionRef,
     attempt: 0,
   });
   const b = await sandbox.provision({
     ...scopeB,
     runId: runB.id,
     projectRef: runB.projectRef,
+    baselineRevisionRef: runB.baselineRevisionRef,
     attempt: 0,
   });
   assert.notEqual(a.workspacePath, b.workspacePath);
@@ -396,6 +477,7 @@ test("Docker sandbox denies host/workspace/IMDS access by construction", async (
     ...SCOPE,
     runId: "sandbox-run",
     projectRef: "opaque://project",
+    baselineRevisionRef: "git://baseline/sandbox",
     attempt: 0,
   });
   const create = calls[0]!;
@@ -437,6 +519,7 @@ test(
       task: "postgres durable execution",
       idempotencyKey: `postgres-${Date.now()}`,
       projectRef: "project://postgres",
+      baselineRevisionRef: "git://baseline/postgres",
     });
     const worker = new ControlPlaneWorker({
       workerId: "postgres-worker",
@@ -468,8 +551,14 @@ test(
         task: "postgres review persistence",
         idempotencyKey: `postgres-review-${Date.now()}`,
         projectRef: "project://postgres",
+        baselineRevisionRef: "git://baseline/postgres",
       });
-      const paused = await service.pause(SCOPE, reviewRun.id, "persist review");
+      const paused = await service.pause(
+        SCOPE,
+        reviewRun.id,
+        `pause-${Date.now()}`,
+        "persist review",
+      );
       assert.ok(paused.reviewId);
       const restartedReviews = new PostgresHumanReviewGateway(connectionString);
       assert.equal(
@@ -504,6 +593,7 @@ test(
         ...SCOPE,
         runId: "real-docker-isolation",
         projectRef: "project://docker",
+        baselineRevisionRef: "git://baseline/docker",
         attempt: 0,
       });
       const visibility = await handle.execute({

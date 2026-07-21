@@ -384,6 +384,7 @@ export class GitWorktreeWorkspace implements GitWorkspace {
     scope: TenantScope,
     runId: string,
     projectRef: string,
+    baselineRevisionRef: string,
     workspacePath: string,
   ): Promise<{ readonly branch: string; readonly worktreePath: string }> {
     if (!isAbsolute(projectRef)) {
@@ -404,7 +405,16 @@ export class GitWorktreeWorkspace implements GitWorkspace {
       };
     }
     const result = await this.#runner.run(
-      ["git", "worktree", "add", "-b", branch, workspacePath, "HEAD"],
+      [
+        "git",
+        "worktree",
+        "add",
+        "-b",
+        branch,
+        "--",
+        workspacePath,
+        baselineRevisionRef,
+      ],
       { cwd: projectRef },
     );
     if (result.exitCode !== 0)
@@ -416,9 +426,10 @@ export class GitWorktreeWorkspace implements GitWorkspace {
   async commit(
     _scope: TenantScope,
     _runId: string,
+    baselineRevisionRef: string,
     workspacePath: string,
     message: string,
-  ): Promise<{ readonly commit: string }> {
+  ): Promise<{ readonly commit: string; readonly diffRef: string }> {
     const env = {
       GIT_AUTHOR_NAME: this.#authorName,
       GIT_AUTHOR_EMAIL: this.#authorEmail,
@@ -441,7 +452,11 @@ export class GitWorktreeWorkspace implements GitWorkspace {
       });
       if (current.exitCode !== 0)
         throw new Error(`git rev-parse failed: ${current.stderr}`);
-      return { commit: current.stdout.trim() };
+      const commitRef = current.stdout.trim();
+      return {
+        commit: commitRef,
+        diffRef: `${baselineRevisionRef}..${commitRef}`,
+      };
     }
     const commit = await this.#runner.run(["git", "commit", "-m", message], {
       cwd: workspacePath,
@@ -454,7 +469,11 @@ export class GitWorktreeWorkspace implements GitWorkspace {
     });
     if (rev.exitCode !== 0)
       throw new Error(`git rev-parse failed: ${rev.stderr}`);
-    return { commit: rev.stdout.trim() };
+    const commitRef = rev.stdout.trim();
+    return {
+      commit: commitRef,
+      diffRef: `${baselineRevisionRef}..${commitRef}`,
+    };
   }
 
   async cleanup(

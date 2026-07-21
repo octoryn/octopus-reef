@@ -51,7 +51,26 @@ jobs:
       - name: Publish npm package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --workspace @octopus-reef/control-plane
+        run: |
+          set -euo pipefail
+          publish_if_missing() {
+            local package="$1"
+            local workspace="$2"
+            local version
+            version="$(node -p "require('./packages/${workspace}/package.json').version")"
+            if npm view "${package}@${version}" version >/dev/null 2>&1; then
+              echo "${package}@${version} is already immutable on npm; using it"
+              return
+            fi
+            npm publish --access public --workspace "${package}"
+          }
+
+          # These are the minimum registry versions containing the cursor,
+          # tool-idempotency and checkpoint/resume seams used by Control Plane.
+          publish_if_missing "@octopus-reef/engine" "engine"
+          publish_if_missing "@octopus-reef/protocol" "protocol"
+          publish_if_missing "@octopus-reef/agent" "agent"
+          npm publish --access public --workspace @octopus-reef/control-plane
       - name: Build and publish service image
         id: image
         uses: docker/build-push-action@v6
@@ -76,6 +95,15 @@ jobs:
         run: |
           cat > "$RUNNER_TEMP/release-notes.md" <<EOF
           Published @octopus-reef/control-plane ${VERSION} to npm.
+
+          Registry-compatible recovery prerequisites:
+          - @octopus-reef/engine 0.2.1
+          - @octopus-reef/protocol 0.1.1
+          - @octopus-reef/agent 0.2.2
+
+          HTTP v1 includes opaque baseline/project/work-item/acceptance refs,
+          idempotent commands, decimal-cursor SSE, typed execution states and
+          candidate diff/test/Evidence refs.
 
           Service image (pin this immutable digest):
 

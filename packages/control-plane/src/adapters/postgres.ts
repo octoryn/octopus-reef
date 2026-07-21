@@ -51,6 +51,7 @@ interface RunRow {
   readonly id: string;
   readonly idempotency_key: string;
   readonly project_ref: string;
+  readonly baseline_revision_ref: string;
   readonly work_item_ref: string | null;
   readonly acceptance_ref: string | null;
   readonly task: string;
@@ -66,6 +67,7 @@ interface RunRow {
   readonly usage: unknown;
   readonly config: unknown;
   readonly metadata: unknown;
+  readonly result_refs: unknown;
   readonly lease_owner: string | null;
   readonly lease_expires_at: unknown | null;
   readonly fencing_token: string | number;
@@ -140,6 +142,7 @@ const RUN_COLUMNS = [
   "id",
   "idempotency_key",
   "project_ref",
+  "baseline_revision_ref",
   "work_item_ref",
   "acceptance_ref",
   "task",
@@ -155,6 +158,7 @@ const RUN_COLUMNS = [
   "usage",
   "config",
   "metadata",
+  "result_refs",
   "lease_owner",
   "lease_expires_at",
   "fencing_token",
@@ -206,14 +210,15 @@ export class PostgresControlPlaneStore
     const result = await this.#pool.query<RunRow>(
       `INSERT INTO agent_runs (
         organisation_id, project_id, id, idempotency_key, project_ref,
-        work_item_ref, acceptance_ref, task, status, version, attempt,
+        baseline_revision_ref, work_item_ref, acceptance_ref, task, status,
+        version, attempt,
         created_at, updated_at, started_at, finished_at, secret_refs, budget,
-        usage, config, metadata, lease_owner, lease_expires_at, fencing_token,
-        sandbox_id, output, failure, review_id
+        usage, config, metadata, result_refs, lease_owner, lease_expires_at,
+        fencing_token, sandbox_id, output, failure, review_id
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,
-        $17::jsonb,$18::jsonb,$19::jsonb,$20::jsonb,$21,$22,$23,$24,$25,
-        $26::jsonb,$27
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,
+        $18::jsonb,$19::jsonb,$20::jsonb,$21::jsonb,$22::jsonb,$23,$24,$25,
+        $26,$27,$28::jsonb,$29
       ) ON CONFLICT (organisation_id, project_id, idempotency_key) DO NOTHING
       RETURNING ${RUN_COLUMNS}`,
       [
@@ -222,6 +227,7 @@ export class PostgresControlPlaneStore
         run.id,
         run.idempotencyKey,
         run.projectRef,
+        run.baselineRevisionRef,
         run.workItemRef ?? null,
         run.acceptanceRef ?? null,
         run.task,
@@ -237,6 +243,7 @@ export class PostgresControlPlaneStore
         json(run.usage),
         json(run.config),
         json(run.metadata),
+        json(run.resultRefs),
         run.lease?.ownerId ?? null,
         run.lease?.expiresAt ?? null,
         run.lease?.fencingToken ?? 0,
@@ -346,17 +353,19 @@ export class PostgresControlPlaneStore
       `UPDATE agent_runs SET
         status=COALESCE($5,status), attempt=COALESCE($6,attempt),
         usage=COALESCE($7::jsonb,usage),
-        sandbox_id=CASE WHEN $19 THEN NULL ELSE COALESCE($8,sandbox_id) END,
-        output=CASE WHEN $20 THEN NULL ELSE COALESCE($9,output) END,
-        failure=CASE WHEN $10 THEN NULL ELSE COALESCE($11::jsonb,failure) END,
-        review_id=CASE WHEN $12 THEN NULL ELSE COALESCE($13,review_id) END,
-        started_at=COALESCE($14,started_at),
-        finished_at=CASE WHEN $21 THEN NULL ELSE COALESCE($15,finished_at) END,
-        lease_owner=CASE WHEN $16 THEN NULL ELSE lease_owner END,
-        lease_expires_at=CASE WHEN $16 THEN NULL ELSE lease_expires_at END,
-        version=version+1, updated_at=$17
+        sandbox_id=CASE WHEN $20 THEN NULL ELSE COALESCE($8,sandbox_id) END,
+        output=CASE WHEN $21 THEN NULL ELSE COALESCE($9,output) END,
+        result_refs=CASE WHEN $23 THEN '{"evidenceRefs":[]}'::jsonb
+          ELSE COALESCE($10::jsonb,result_refs) END,
+        failure=CASE WHEN $11 THEN NULL ELSE COALESCE($12::jsonb,failure) END,
+        review_id=CASE WHEN $13 THEN NULL ELSE COALESCE($14,review_id) END,
+        started_at=COALESCE($15,started_at),
+        finished_at=CASE WHEN $22 THEN NULL ELSE COALESCE($16,finished_at) END,
+        lease_owner=CASE WHEN $17 THEN NULL ELSE lease_owner END,
+        lease_expires_at=CASE WHEN $17 THEN NULL ELSE lease_expires_at END,
+        version=version+1, updated_at=$18
        WHERE organisation_id=$1 AND project_id=$2 AND id=$3 AND version=$4
-         AND ($18::bigint IS NULL OR fencing_token=$18)
+         AND ($19::bigint IS NULL OR fencing_token=$19)
        RETURNING ${RUN_COLUMNS}`,
       [
         scope.organisationId,
@@ -368,6 +377,7 @@ export class PostgresControlPlaneStore
         mutation.usage === undefined ? null : json(mutation.usage),
         mutation.sandboxId ?? null,
         mutation.output ?? null,
+        mutation.resultRefs === undefined ? null : json(mutation.resultRefs),
         mutation.clearFailure === true,
         jsonNullable(mutation.failure),
         mutation.clearReview === true,
@@ -380,6 +390,7 @@ export class PostgresControlPlaneStore
         mutation.clearSandbox === true,
         mutation.clearOutput === true,
         mutation.clearFinishedAt === true,
+        mutation.clearResultRefs === true,
       ],
     );
     return optional(result.rows[0], runFromRow);
@@ -637,6 +648,20 @@ export class PostgresControlPlaneStore
       [scope.organisationId, scope.projectId, runId, afterCursor, limit],
     );
     return result.rows.map(eventFromRow);
+  }
+
+  async getEventByIdempotencyKey(
+    scope: TenantScope,
+    runId: string,
+    idempotencyKey: string,
+  ): Promise<RunEvent | undefined> {
+    const result = await this.#pool.query<EventRow>(
+      `SELECT organisation_id,project_id,run_id,id,cursor,type,data,created_at
+       FROM run_events WHERE organisation_id=$1 AND project_id=$2 AND run_id=$3
+         AND idempotency_key=$4`,
+      [scope.organisationId, scope.projectId, runId, idempotencyKey],
+    );
+    return optional(result.rows[0], eventFromRow);
   }
 
   async enqueue(
@@ -934,6 +959,7 @@ function runFromRow(row: RunRow): AgentRun {
     id: row.id,
     idempotencyKey: row.idempotency_key,
     projectRef: row.project_ref,
+    baselineRevisionRef: row.baseline_revision_ref,
     ...(row.work_item_ref !== null ? { workItemRef: row.work_item_ref } : {}),
     ...(row.acceptance_ref !== null
       ? { acceptanceRef: row.acceptance_ref }
@@ -951,6 +977,7 @@ function runFromRow(row: RunRow): AgentRun {
     usage: parse(row.usage) as AgentRun["usage"],
     config: parse(row.config) as AgentRun["config"],
     metadata: parse(row.metadata) as AgentRun["metadata"],
+    resultRefs: parse(row.result_refs) as AgentRun["resultRefs"],
     ...(row.lease_owner !== null && row.lease_expires_at !== null
       ? {
           lease: {

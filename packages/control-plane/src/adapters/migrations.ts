@@ -8,16 +8,16 @@ export interface ControlPlaneMigration {
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
-const migrationPath = resolve(
-  here,
-  process.env.NODE_ENV === "test" || here.endsWith("/src/adapters")
-    ? "../../migrations/0001_control_plane.sql"
-    : "../../migrations/0001_control_plane.sql",
-);
+const migration = (name: string): string =>
+  readFileSync(resolve(here, `../../migrations/${name}.sql`), "utf8");
 
 export const CONTROL_PLANE_MIGRATIONS: readonly ControlPlaneMigration[] = [
   {
     id: "0001_control_plane",
-    sql: readFileSync(migrationPath, "utf8"),
+    sql: migration("0001_control_plane"),
+  },
+  {
+    id: "0002_remote_contract",
+    sql: migration("0002_remote_contract"),
   },
 ];

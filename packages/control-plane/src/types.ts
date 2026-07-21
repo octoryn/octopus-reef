@@ -16,6 +16,8 @@ export const AGENT_RUN_STATUSES = [
 ] as const;
 
 export type AgentRunStatus = (typeof AGENT_RUN_STATUSES)[number];
+/** Public execution state returned by the HTTP client. */
+export type AgentExecutionState = AgentRunStatus;
 export type AgentStepStatus = AgentRunStatus;
 export type AgentRunState = AgentRunStatus;
 export type AgentStepState = AgentStepStatus;
@@ -36,8 +38,17 @@ export interface TenantScope {
 /** Builder and other callers remain outside the package and pass opaque refs. */
 export interface RunReferences {
   readonly projectRef: string;
+  /** Opaque immutable source revision used to create the candidate workspace. */
+  readonly baselineRevisionRef: string;
   readonly workItemRef?: string;
   readonly acceptanceRef?: string;
+}
+
+/** Candidate outputs only. Consumers decide whether they change product truth. */
+export interface RunResultReferences {
+  readonly diffRef?: string;
+  readonly testRef?: string;
+  readonly evidenceRefs: readonly string[];
 }
 
 export interface SecretReference {
@@ -104,6 +115,7 @@ export interface AgentRun extends TenantScope, RunReferences {
   readonly usage: RunUsage;
   readonly config: Readonly<Record<string, unknown>>;
   readonly metadata: Readonly<Record<string, unknown>>;
+  readonly resultRefs: RunResultReferences;
   readonly lease?: RunLease;
   readonly sandboxId?: string;
   readonly output?: string;
@@ -194,6 +206,7 @@ export interface QueueClaimOptions {
 export interface SandboxSpec extends TenantScope {
   readonly runId: string;
   readonly projectRef: string;
+  readonly baselineRevisionRef: string;
   readonly attempt: number;
   readonly environment?: Readonly<Record<string, string>>;
 }
@@ -276,6 +289,7 @@ export type KernelResult =
       readonly outcome: "COMPLETED";
       readonly output: string;
       readonly proof?: unknown;
+      readonly resultRefs?: Partial<RunResultReferences>;
     }
   | {
       readonly outcome: "FAILED";
@@ -306,6 +320,7 @@ export interface RunMutation {
   readonly usage?: RunUsage;
   readonly sandboxId?: string;
   readonly output?: string;
+  readonly resultRefs?: RunResultReferences;
   readonly failure?: RunFailure;
   readonly reviewId?: string;
   readonly startedAt?: string;
@@ -315,5 +330,6 @@ export interface RunMutation {
   readonly clearReview?: boolean;
   readonly clearFinishedAt?: boolean;
   readonly clearOutput?: boolean;
+  readonly clearResultRefs?: boolean;
   readonly clearSandbox?: boolean;
 }
