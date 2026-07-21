@@ -204,16 +204,6 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
             org.opencontainers.image.licenses=Apache-2.0
-      - name: Make release images public
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          for component in api worker sandbox; do
-            gh api --method PATCH \
-              "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/octopus-reef-control-plane-${component}" \
-              --field visibility=public
-          done
       - name: Verify published multi-architecture manifests and anonymous pulls
         env:
           VERSION: ${{ steps.version.outputs.version }}
