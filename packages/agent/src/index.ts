@@ -7,7 +7,11 @@
  * evidence-chained — a worker that does real work AND is independently provable.
  */
 export { AgentWorker } from "./worker.js";
-export type { AgentWorkerOptions } from "./worker.js";
+export type {
+  AgentWorkerCheckpoint,
+  AgentWorkerCheckpointPhase,
+  AgentWorkerOptions,
+} from "./worker.js";
 export {
   AnthropicProvider,
   BedrockProvider,

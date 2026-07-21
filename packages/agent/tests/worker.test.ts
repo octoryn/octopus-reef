@@ -28,6 +28,7 @@ import {
   AnthropicProvider,
   BedrockProvider,
   ProviderError,
+  type AgentWorkerCheckpoint,
   type CompletionRequest,
   type CompletionResponse,
   type ModelProvider,
@@ -196,6 +197,72 @@ test("worker calls a governed non-code tool (MCP/API) and feeds the result back"
     JSON.stringify(r.messages).includes("answer for capital of france"),
   );
   assert.ok(fedBack, "the tool output was fed back to the model");
+});
+
+test("worker resumes its existing loop after a durable tool result", async () => {
+  const provider = new ScriptedProvider([
+    use("call-1", "lookup", { q: "durable" }),
+    use("done-1", "done", { summary: "resumed without repeating lookup" }),
+  ]);
+  let calls = 0;
+  let receivedIdempotencyKey: string | undefined;
+  const tool: Tool = {
+    ...lookupTool,
+    run(input, context) {
+      calls++;
+      receivedIdempotencyKey = context?.idempotencyKey;
+      return lookupTool.run(input);
+    },
+  };
+  let durable: AgentWorkerCheckpoint | undefined;
+  const first = new GovernedSession({
+    id: "resume-1",
+    task: "resume a tool call",
+    driver: new AgentWorker({
+      provider,
+      tools: [
+        {
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        },
+      ],
+      onCheckpoint(checkpoint) {
+        if (checkpoint.phase === "tool_result") {
+          durable = checkpoint;
+          throw new Error("simulated process exit after durable write");
+        }
+      },
+    }),
+    authorizer: reefAllowlist({ tools: [tool.name] }),
+    executor: new ToolExecutor([tool]),
+    now: clock(),
+  });
+  assert.equal((await first.run()).outcome, "failed");
+  assert.equal(calls, 1);
+  assert.equal(receivedIdempotencyKey, "call-1");
+  assert.equal(durable?.phase, "tool_result");
+
+  const second = new GovernedSession({
+    id: "resume-2",
+    task: "resume a tool call",
+    driver: new AgentWorker({
+      provider,
+      tools: [
+        {
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        },
+      ],
+      resumeFrom: durable,
+    }),
+    authorizer: reefAllowlist({ tools: [tool.name] }),
+    executor: new ToolExecutor([tool]),
+    now: clock(),
+  });
+  assert.equal((await second.run()).outcome, "completed");
+  assert.equal(calls, 1, "durable tool result was not executed again");
 });
 
 test("an un-allowlisted tool is denied by governance", async () => {

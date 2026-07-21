@@ -22,11 +22,20 @@ export interface Tool {
   readonly description: string;
   /** JSON-schema for the tool's input (surfaced to the model by the worker). */
   readonly inputSchema: Record<string, unknown>;
-  run(input: JsonValue): Promise<ExecOutcome>;
+  run(input: JsonValue, context?: ToolExecutionContext): Promise<ExecOutcome>;
+}
+
+export interface ToolExecutionContext {
+  /** Stable model tool-use id; pass it to remote idempotency-key facilities. */
+  readonly idempotencyKey?: string;
 }
 
 /** Read the `{ tool, input }` payload of a `tool` action. */
-function toolCall(action: ActionRequest): { tool: string; input: JsonValue } {
+function toolCall(action: ActionRequest): {
+  tool: string;
+  input: JsonValue;
+  idempotencyKey?: string;
+} {
   const p = action.payload;
   const tool =
     p && typeof p === "object" && "tool" in p && typeof p.tool === "string"
@@ -34,7 +43,18 @@ function toolCall(action: ActionRequest): { tool: string; input: JsonValue } {
       : "";
   const input =
     p && typeof p === "object" && "input" in p ? (p.input as JsonValue) : null;
-  return { tool, input };
+  const idempotencyKey =
+    p &&
+    typeof p === "object" &&
+    "idempotencyKey" in p &&
+    typeof p.idempotencyKey === "string"
+      ? p.idempotencyKey
+      : undefined;
+  return {
+    tool,
+    input,
+    ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+  };
 }
 
 /**
@@ -73,13 +93,16 @@ export class ToolExecutor implements ActionExecutor {
       }
       return this.#base.execute(action);
     }
-    const { tool, input } = toolCall(action);
+    const { tool, input, idempotencyKey } = toolCall(action);
     const impl = this.#tools.get(tool);
     if (impl === undefined) {
       return { ok: false, error: `unknown tool: ${tool}` };
     }
     try {
-      return await impl.run(input);
+      return await impl.run(
+        input,
+        idempotencyKey !== undefined ? { idempotencyKey } : {},
+      );
     } catch (err) {
       return {
         ok: false,

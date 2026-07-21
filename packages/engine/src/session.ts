@@ -408,6 +408,14 @@ export class GovernedSession {
       "tool" in action.payload
         ? String((action.payload as { tool: unknown }).tool)
         : undefined;
+    const toolIdempotencyKey =
+      action.type === "tool" &&
+      action.payload !== null &&
+      typeof action.payload === "object" &&
+      !Array.isArray(action.payload) &&
+      "idempotencyKey" in action.payload
+        ? String((action.payload as { idempotencyKey: unknown }).idempotencyKey)
+        : undefined;
     const output =
       exec.output !== undefined
         ? {
@@ -419,7 +427,16 @@ export class GovernedSession {
       actionType: action.type,
       ...(action.target !== undefined ? { target: action.target } : {}),
       ...(command !== undefined ? { payload: { command } } : {}),
-      ...(tool !== undefined ? { payload: { tool } } : {}),
+      ...(tool !== undefined
+        ? {
+            payload: {
+              tool,
+              ...(toolIdempotencyKey !== undefined
+                ? { idempotencyKey: toolIdempotencyKey }
+                : {}),
+            },
+          }
+        : {}),
       executor: this.#executor.name,
       ok: exec.ok,
       result: { passed: exec.ok, ...(output !== undefined ? { output } : {}) },

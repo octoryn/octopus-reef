@@ -23,6 +23,7 @@ COPY packages/adapter-observe/package.json packages/adapter-observe/
 COPY packages/adapter-blackboard/package.json packages/adapter-blackboard/
 COPY packages/adapter-experience/package.json packages/adapter-experience/
 COPY packages/adapter-scout/package.json packages/adapter-scout/
+COPY packages/control-plane/package.json packages/control-plane/
 COPY packages/commercial/package.json packages/commercial/
 COPY packages/gateway/package.json packages/gateway/
 COPY packages/server/package.json packages/server/

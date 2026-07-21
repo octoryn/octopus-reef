@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../engine" },
+    { "path": "../protocol" },
+    { "path": "../agent" },
+    { "path": "../adapter-runtime" }
+  ],
+  "include": ["src/**/*.ts"]
+}

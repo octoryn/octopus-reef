@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16.4-alpine@sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c
+    environment:
+      POSTGRES_DB: reef
+      POSTGRES_USER: reef
+      POSTGRES_PASSWORD: local-example-only
+    volumes:
+      - reef-control-plane-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reef -d reef"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  control-plane:
+    image: ${REEF_CONTROL_PLANE_IMAGE:?set an immutable image digest from the GitHub Release}
+    command: ["serve"]
+    environment:
+      REEF_CONTROL_PLANE_DATABASE_URL: postgresql://reef:local-example-only@postgres:5432/reef
+      REEF_CONTROL_PLANE_AUTO_MIGRATE: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  reef-control-plane-postgres:

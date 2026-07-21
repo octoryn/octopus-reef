@@ -179,6 +179,7 @@ Reef is driver- and surface-agnostic; the governance lives in one engine
 | **Engine** (governance: evidence + workstate + gate + executor + replay) | `@octopus-reef/engine` | ✅ |
 | **CLI** (`run` · `verify` · `replay` · `serve`) | repo/Docker beta | ✅ |
 | **Conductor** (route + govern + prove a fleet of heterogeneous workers) | `@octopus-reef/agent` | ✅ |
+| **Execution control plane** (durable runs, recovery, leases, budgets, review) | `@octopus-reef/control-plane` | ✅ |
 | **Real agent driver** (Claude) | `@octopus-reef/driver-claude` | ✅ |
 | **Server** (daemon — one backend for all surfaces) | repo/Docker beta | ✅ |
 | **Web** (Vite + React) | repo/Docker beta | ✅ |
@@ -188,6 +189,7 @@ Reef is driver- and surface-agnostic; the governance lives in one engine
 
 Public npm beta publishes the open foundation packages only:
 `@octopus-reef/protocol`, `@octopus-reef/engine`, `@octopus-reef/agent`,
+`@octopus-reef/control-plane`,
 `@octopus-reef/driver-claude`, and the Octopus adapter packages. The server,
 CLI, web, and IDE surfaces remain repo/Docker beta while the commercial gateway
 seam is split out of the publishable server package.
@@ -205,7 +207,8 @@ npm test             # engine test suite
 npm run reef -- run "try me"   # run the CLI from source via tsx
 ```
 
-Node ≥ 22. Zero third-party runtime dependencies beyond the Octopus stack.
+Node ≥ 22. The neutral core stays on the Octopus stack; optional PostgreSQL/AWS
+adapters bring `pg` or the relevant AWS SDK clients only when selected.
 
 ## License
 
