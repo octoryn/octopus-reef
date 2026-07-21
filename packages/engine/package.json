@@ -1,6 +1,6 @@
 {
   "name": "@octopus-reef/engine",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "The governed session engine at the heart of Reef: wraps an agent driver and makes every turn, action, and state transition a tamper-evident, replayable, independently-verifiable evidence chain.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",

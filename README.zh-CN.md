@@ -110,6 +110,7 @@ Reef 与 driver、形态无关;治理集中在一个引擎(`@octopus-reef/engine
 | **引擎**(治理:evidence + workstate + gate + executor + replay) | `@octopus-reef/engine` | ✅ |
 | **CLI**(`run` · `verify` · `replay` · `serve`) | repo/Docker beta | ✅ |
 | **指挥官**(路由 + 治理 + 证明一支异构 worker 舰队) | `@octopus-reef/agent` | ✅ |
+| **执行控制平面**(持久运行、恢复、租约、预算、人工复核) | `@octopus-reef/control-plane` | ✅ |
 | **真实智能体 driver**(Claude) | `@octopus-reef/driver-claude` | ✅ |
 | **服务端**(守护进程 —— 所有形态的统一后端) | repo/Docker beta | ✅ |
 | **Web**(Vite + React) | repo/Docker beta | ✅ |
@@ -118,7 +119,7 @@ Reef 与 driver、形态无关;治理集中在一个引擎(`@octopus-reef/engine
 | 移动端 | — | 暂缓 |
 
 Public npm beta 只发布开放基础包:`@octopus-reef/protocol`、`@octopus-reef/engine`、
-`@octopus-reef/agent`、`@octopus-reef/driver-claude` 与 Octopus adapter 系列。
+`@octopus-reef/agent`、`@octopus-reef/control-plane`、`@octopus-reef/driver-claude` 与 Octopus adapter 系列。
 server、CLI、Web、IDE 先保持 repo/Docker beta,直到 commercial gateway 接缝从可发布的
 server 包里拆出。
 
@@ -132,7 +133,8 @@ npm test             # 引擎测试套件
 npm run reef -- run "试试我"   # 通过 tsx 从源码跑 CLI
 ```
 
-Node ≥ 22。除 Octopus 栈外,零第三方运行时依赖。贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+Node ≥ 22。中立 core 只依赖 Octopus 栈；选择 PostgreSQL/AWS adapter 时才引入
+`pg` 或相应 AWS SDK client。贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可
 

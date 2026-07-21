@@ -26,8 +26,11 @@ import {
 import {
   AgentWorker,
   AnthropicProvider,
+  BedrockIamProvider,
   BedrockProvider,
+  mapBedrockIamResponse,
   ProviderError,
+  type AgentWorkerCheckpoint,
   type CompletionRequest,
   type CompletionResponse,
   type ModelProvider,
@@ -198,6 +201,72 @@ test("worker calls a governed non-code tool (MCP/API) and feeds the result back"
   assert.ok(fedBack, "the tool output was fed back to the model");
 });
 
+test("worker resumes its existing loop after a durable tool result", async () => {
+  const provider = new ScriptedProvider([
+    use("call-1", "lookup", { q: "durable" }),
+    use("done-1", "done", { summary: "resumed without repeating lookup" }),
+  ]);
+  let calls = 0;
+  let receivedIdempotencyKey: string | undefined;
+  const tool: Tool = {
+    ...lookupTool,
+    run(input, context) {
+      calls++;
+      receivedIdempotencyKey = context?.idempotencyKey;
+      return lookupTool.run(input);
+    },
+  };
+  let durable: AgentWorkerCheckpoint | undefined;
+  const first = new GovernedSession({
+    id: "resume-1",
+    task: "resume a tool call",
+    driver: new AgentWorker({
+      provider,
+      tools: [
+        {
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        },
+      ],
+      onCheckpoint(checkpoint) {
+        if (checkpoint.phase === "tool_result") {
+          durable = checkpoint;
+          throw new Error("simulated process exit after durable write");
+        }
+      },
+    }),
+    authorizer: reefAllowlist({ tools: [tool.name] }),
+    executor: new ToolExecutor([tool]),
+    now: clock(),
+  });
+  assert.equal((await first.run()).outcome, "failed");
+  assert.equal(calls, 1);
+  assert.equal(receivedIdempotencyKey, "call-1");
+  assert.equal(durable?.phase, "tool_result");
+
+  const second = new GovernedSession({
+    id: "resume-2",
+    task: "resume a tool call",
+    driver: new AgentWorker({
+      provider,
+      tools: [
+        {
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        },
+      ],
+      resumeFrom: durable,
+    }),
+    authorizer: reefAllowlist({ tools: [tool.name] }),
+    executor: new ToolExecutor([tool]),
+    now: clock(),
+  });
+  assert.equal((await second.run()).outcome, "completed");
+  assert.equal(calls, 1, "durable tool result was not executed again");
+});
+
 test("an un-allowlisted tool is denied by governance", async () => {
   const provider = new ScriptedProvider([
     use("1", "lookup", { q: "x" }),
@@ -316,6 +385,28 @@ test("BedrockProvider builds an Anthropic-on-Bedrock request and parses tool_use
   };
   assert.equal(body.anthropic_version, "bedrock-2023-05-31");
   assert.deepEqual(body.tools[0]?.input_schema, { type: "object" });
+});
+
+test("BedrockIamProvider shares the normalized provider seam without a token", () => {
+  const provider = new BedrockIamProvider({
+    model: "us.example.model",
+    region: "us-west-2",
+  });
+  assert.equal(provider.name, "bedrock-iam");
+  const response = mapBedrockIamResponse(
+    {
+      content: [
+        { type: "text", text: "ok" },
+        { type: "tool_use", id: "tool", name: "read_file", input: {} },
+      ],
+      stop_reason: "tool_use",
+      usage: { input_tokens: 7, output_tokens: 11 },
+    },
+    "us.example.model",
+  );
+  assert.equal(response.content.length, 2);
+  assert.equal(response.usage?.provider, "bedrock-iam");
+  assert.equal(response.usage?.totalTokens, 18);
 });
 
 test("AnthropicProvider builds a Messages request and normalizes token usage (injected fetch)", async () => {

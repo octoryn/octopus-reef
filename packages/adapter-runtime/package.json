@@ -1,6 +1,6 @@
 {
   "name": "@octopus-reef/adapter-runtime",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Drops octopus-runtime in as Reef's authorization gate. The engine's Authorizer/Principal ports are structurally identical to octopus-runtime's, so a real RBAC/OIDC authorizer governs a session with the engine still offline — this package is where that dependency lives.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",
@@ -19,7 +19,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@octopus-reef/engine": "^0.2.0",
+    "@octopus-reef/engine": "^0.2.1",
     "octopus-runtime": "^0.7.0"
   }
 }

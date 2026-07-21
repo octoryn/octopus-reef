@@ -1,6 +1,6 @@
 {
   "name": "@octopus-reef/protocol",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The Reef wire protocol: the shared request/response and event-stream contract every surface (CLI, IDE, Web) speaks to the server. Transport-agnostic types, no runtime dependencies.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",
@@ -19,6 +19,6 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@octopus-reef/engine": "^0.2.0"
+    "@octopus-reef/engine": "^0.2.1"
   }
 }

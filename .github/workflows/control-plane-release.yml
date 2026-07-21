@@ -1,0 +1,259 @@
+name: control-plane-release
+
+on:
+  push:
+    tags: ["control-plane-v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: reef
+          POSTGRES_USER: reef
+          POSTGRES_PASSWORD: reef-release-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U reef -d reef"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+      - name: Verify immutable release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p 'require("./packages/control-plane/package.json").version')"
+          test "$GITHUB_REF_NAME" = "control-plane-v$VERSION"
+          if npm view "@octopus-reef/control-plane@$VERSION" version >/dev/null 2>&1; then
+            echo "npm version already exists; refusing to replace an immutable release" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - name: Prepare hardened Docker sandbox acceptance image
+        run: |
+          set -euo pipefail
+          docker pull node:22.17.1-bookworm-slim
+          docker tag node:22.17.1-bookworm-slim reef-agent:release-acceptance
+      - name: Real PostgreSQL, Docker and recovery acceptance gate
+        env:
+          REEF_TEST_POSTGRES_URL: postgresql://reef:reef-release-test@127.0.0.1:5432/reef
+          REEF_TEST_DOCKER_IMAGE: reef-agent:release-acceptance
+        run: npm run verify:all
+      - run: npm pack --dry-run --workspace @octopus-reef/control-plane
+      - name: Build and run API, Worker and sandbox images before publication
+        env:
+          DATABASE_URL: postgresql://reef:reef-release-test@127.0.0.1:5432/reef
+        run: |
+          set -euo pipefail
+          docker build --target api -f packages/control-plane/Dockerfile -t reef-control-plane-api:release-test .
+          docker build --target worker -f packages/control-plane/Dockerfile -t reef-control-plane-worker:release-test .
+          docker build --target sandbox -f packages/control-plane/Dockerfile -t reef-control-plane-sandbox:release-test .
+          for image in reef-control-plane-api:release-test reef-control-plane-worker:release-test reef-control-plane-sandbox:release-test; do
+            test "$(docker run --rm --entrypoint sha256sum "$image" /etc/ssl/certs/aws-rds-global-bundle.pem | awk '{print $1}')" = \
+              "e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3"
+          done
+          docker run --detach --rm --network host --name reef-control-plane-api-release-test \
+            --env REEF_CONTROL_PLANE_DATABASE_URL="$DATABASE_URL" \
+            --env REEF_CONTROL_PLANE_DATABASE_SSL_MODE=disable \
+            reef-control-plane-api:release-test
+          trap 'docker stop reef-control-plane-api-release-test >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/readyz >/dev/null; then
+              break
+            fi
+            if [ "$attempt" = 30 ]; then
+              docker logs reef-control-plane-api-release-test
+              exit 1
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8080/readyz | \
+            jq -e '.ready == true and .schemaVersion == "0.1.3"'
+          docker run --rm --network host \
+            --env REEF_CONTROL_PLANE_DATABASE_URL="$DATABASE_URL" \
+            --env REEF_CONTROL_PLANE_DATABASE_SSL_MODE=disable \
+            --env REEF_WORKER_ONCE=true \
+            --env REEF_WORKSPACE_ROOT=/tmp/reef-workspaces \
+            reef-control-plane-worker:release-test
+          docker run --detach --rm --name reef-control-plane-sandbox-release-test \
+            --publish 127.0.0.1:18081:8081 \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            --tmpfs /workspace:rw,nosuid,nodev,size=128m \
+            --env REEF_SANDBOX_AUTH_TOKEN=release-test-runner-token-at-least-32-bytes \
+            reef-control-plane-sandbox:release-test
+          trap 'docker stop reef-control-plane-api-release-test reef-control-plane-sandbox-release-test >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:18081/readyz >/dev/null && break
+            test "$attempt" != 30 || exit 1
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:18081/v1/execute \
+            --header 'authorization: Bearer release-test-runner-token-at-least-32-bytes' \
+            --header 'content-type: application/json' \
+            --data '{"command":{"argv":["node","-e","process.stdout.write(\"sandbox-ok\")"]}}' | \
+            jq -e '.exitCode == 0 and .stdout == "sandbox-ok"'
+          docker stop reef-control-plane-api-release-test
+          docker stop reef-control-plane-sandbox-release-test
+          trap - EXIT
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to replace existing API, Worker or sandbox image tags
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          for component in api worker sandbox; do
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/octopus-reef-control-plane-${component}:${VERSION}"
+            if docker manifest inspect "$image" >/dev/null 2>&1; then
+              echo "$image already exists; refusing to replace an immutable release" >&2
+              exit 1
+            fi
+          done
+      - name: Publish npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          publish_if_missing() {
+            local package="$1"
+            local workspace="$2"
+            local version
+            version="$(node -p "require('./packages/${workspace}/package.json').version")"
+            if npm view "${package}@${version}" version >/dev/null 2>&1; then
+              echo "${package}@${version} is already immutable on npm; using it"
+              return
+            fi
+            npm publish --access public --workspace "${package}"
+          }
+
+          publish_if_missing "@octopus-reef/engine" "engine"
+          publish_if_missing "@octopus-reef/protocol" "protocol"
+          publish_if_missing "@octopus-reef/agent" "agent"
+          publish_if_missing "@octopus-reef/adapter-runtime" "adapter-runtime"
+          npm publish --access public --workspace @octopus-reef/control-plane
+      - name: Build and publish immutable API image
+        id: api_image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/control-plane/Dockerfile
+          target: api
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/octopus-reef-control-plane-api:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/octopus-reef-control-plane-api:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+      - name: Build and publish immutable Worker image
+        id: worker_image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/control-plane/Dockerfile
+          target: worker
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/octopus-reef-control-plane-worker:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/octopus-reef-control-plane-worker:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+      - name: Build and publish immutable sandbox image
+        id: sandbox_image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/control-plane/Dockerfile
+          target: sandbox
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/octopus-reef-control-plane-sandbox:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/octopus-reef-control-plane-sandbox:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+      - name: Verify published multi-architecture manifests and anonymous pulls
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          for component in api worker sandbox; do
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/octopus-reef-control-plane-${component}:${VERSION}"
+            docker buildx imagetools inspect --raw "$image" | jq -e '
+              [.manifests[].platform.architecture] as $architectures |
+              ($architectures | index("amd64")) != null and
+              ($architectures | index("arm64")) != null
+            '
+          done
+          docker logout ghcr.io
+          for component in api worker sandbox; do
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/octopus-reef-control-plane-${component}:${VERSION}"
+            docker manifest inspect "$image" >/dev/null
+          done
+      - name: Create immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          API_DIGEST: ${{ steps.api_image.outputs.digest }}
+          WORKER_DIGEST: ${{ steps.worker_image.outputs.digest }}
+          SANDBOX_DIGEST: ${{ steps.sandbox_image.outputs.digest }}
+        run: |
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF
+          Published @octopus-reef/control-plane ${VERSION} to npm.
+
+          Transactional dispatch/outbox, retryable infrastructure errors,
+          RDS CA readiness, and production AWS/Git/model-provider wiring are
+          covered by the real PostgreSQL/Docker/recovery release gate.
+
+          API image (pin this immutable digest):
+
+          \`ghcr.io/${GITHUB_REPOSITORY_OWNER}/octopus-reef-control-plane-api@${API_DIGEST}\`
+
+          Worker image (pin this immutable digest):
+
+          \`ghcr.io/${GITHUB_REPOSITORY_OWNER}/octopus-reef-control-plane-worker@${WORKER_DIGEST}\`
+
+          Isolated Fargate sandbox runner image (pin this immutable digest):
+
+          \`ghcr.io/${GITHUB_REPOSITORY_OWNER}/octopus-reef-control-plane-sandbox@${SANDBOX_DIGEST}\`
+
+          Supported entrypoints: \`reef-control-plane api\`,
+          \`reef-control-plane worker\`, \`reef-control-plane migrate\`, and
+          \`reef-sandbox-runner\`.
+          EOF
+          gh release create "$GITHUB_REF_NAME" \
+            --title "@octopus-reef/control-plane ${VERSION}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --verify-tag

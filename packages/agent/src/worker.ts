@@ -48,7 +48,47 @@ export interface AgentWorkerOptions {
    * The worker only needs the SPECS here — the executor holds the implementations.
    */
   readonly tools?: readonly ToolSpec[];
+  /**
+   * Resume the existing AgentWorker loop from a durable boundary. The control
+   * plane persists this opaque value; it does not reproduce the agent loop.
+   */
+  readonly resumeFrom?: AgentWorkerCheckpoint;
+  /**
+   * Called at every externally durable boundary. The callback is awaited before
+   * the loop advances, so a stored tool result is never followed by another
+   * model turn until the checkpoint is durable.
+   */
+  readonly onCheckpoint?: (
+    checkpoint: AgentWorkerCheckpoint,
+  ) => Promise<void> | void;
 }
+
+export type AgentWorkerCheckpointPhase =
+  "model_response" | "tool_intent" | "tool_result";
+
+/** JSON-serialisable state needed to resume the existing AgentWorker loop. */
+export interface AgentWorkerCheckpoint {
+  readonly version: 1;
+  readonly phase: AgentWorkerCheckpointPhase;
+  /** Current zero-based model turn. */
+  readonly turn: number;
+  /** Conversation through the assistant response for the current turn. */
+  readonly messages: readonly ModelMessage[];
+  /** Tool calls in that response, retained until all have durable results. */
+  readonly pendingToolUses: readonly ToolUseBlock[];
+  /** Results already produced for pendingToolUses. */
+  readonly toolResults: readonly ToolResultBlock[];
+  /** First pending tool that has not produced a durable result. */
+  readonly nextToolIndex: number;
+  /** The tool at the current boundary, when applicable. */
+  readonly tool?: ToolUseBlock;
+  /** Normalized usage for a newly received model response. */
+  readonly modelUsage?: CompletionResponseUsage;
+}
+
+type CompletionResponseUsage = NonNullable<
+  Awaited<ReturnType<ModelProvider["complete"]>>["usage"]
+>;
 
 const DEFAULT_SYSTEM = [
   "You are a coding agent working inside a CONFINED, sandboxed workspace.",
@@ -150,7 +190,13 @@ function actionFor(
         return {
           type: "tool",
           summary: `tool: ${tool.name}`,
-          payload: { tool: tool.name, input },
+          payload: {
+            tool: tool.name,
+            input,
+            // Stable across crash/resume so a remote tool can deduplicate an
+            // ambiguous retry before the TOOL_RESULT checkpoint is durable.
+            idempotencyKey: tool.id,
+          },
         };
       }
       return null;
@@ -187,6 +233,9 @@ export class AgentWorker implements Driver {
   readonly #maxObservation: number;
   readonly #tools: readonly ToolSpec[];
   readonly #extraNames: ReadonlySet<string>;
+  readonly #resumeFrom: AgentWorkerCheckpoint | undefined;
+  readonly #onCheckpoint:
+    ((checkpoint: AgentWorkerCheckpoint) => Promise<void> | void) | undefined;
 
   constructor(options: AgentWorkerOptions) {
     this.#provider = options.provider;
@@ -197,54 +246,95 @@ export class AgentWorker implements Driver {
     const extra = options.tools ?? [];
     this.#tools = [...TOOLS, ...extra];
     this.#extraNames = new Set(extra.map((t) => t.name));
+    this.#resumeFrom = options.resumeFrom;
+    this.#onCheckpoint = options.onCheckpoint;
   }
 
   async *run(ctx: DriverContext): AsyncIterable<DriverStep> {
-    const messages: ModelMessage[] = [
-      {
-        role: "user",
-        content: `Task: ${ctx.task}\n\nBegin by reading the relevant files, then fix and verify.`,
-      },
-    ];
-    yield { type: "observe", summary: `agent started on "${ctx.task}"` };
+    const resumed = this.#resumeFrom;
+    const messages: ModelMessage[] = resumed
+      ? cloneMessages(resumed.messages)
+      : [
+          {
+            role: "user",
+            content: `Task: ${ctx.task}\n\nBegin by reading the relevant files, then fix and verify.`,
+          },
+        ];
+    yield {
+      type: "observe",
+      summary: resumed
+        ? `agent resumed at turn ${resumed.turn}`
+        : `agent started on "${ctx.task}"`,
+    };
 
-    for (let turn = 0; turn < this.#maxTurns; turn++) {
-      let response;
-      try {
-        response = await this.#provider.complete({
-          system: this.#system,
-          messages,
-          tools: this.#tools,
-          maxTokens: this.#maxTokens,
+    let resumeBoundary = resumed;
+    for (let turn = resumed?.turn ?? 0; turn < this.#maxTurns; turn++) {
+      let toolUses: readonly ToolUseBlock[];
+      let results: ToolResultBlock[];
+      let nextToolIndex: number;
+
+      if (resumeBoundary !== undefined) {
+        toolUses = cloneTools(resumeBoundary.pendingToolUses);
+        results = cloneToolResults(resumeBoundary.toolResults);
+        nextToolIndex = resumeBoundary.nextToolIndex;
+        resumeBoundary = undefined;
+      } else {
+        let response;
+        try {
+          response = await this.#provider.complete({
+            system: this.#system,
+            messages,
+            tools: this.#tools,
+            maxTokens: this.#maxTokens,
+          });
+        } catch (err) {
+          yield {
+            type: "fail",
+            summary: `provider error: ${err instanceof Error ? err.message : String(err)}`,
+          };
+          return;
+        }
+        if (response.usage !== undefined) {
+          const input = response.usage.inputTokens ?? 0;
+          const output = response.usage.outputTokens ?? 0;
+          const total = response.usage.totalTokens ?? input + output;
+          yield {
+            type: "observe",
+            summary: `model usage: ${total} tokens (${input} input, ${output} output)`,
+            data: { modelUsage: response.usage, turn },
+          };
+        }
+        messages.push({ role: "assistant", content: response.content });
+
+        toolUses = response.content.filter(
+          (b): b is ToolUseBlock => b.type === "tool_use",
+        );
+        results = [];
+        nextToolIndex = 0;
+        await this.#checkpoint({
+          version: 1,
+          phase: "model_response",
+          turn,
+          messages: cloneMessages(messages),
+          pendingToolUses: cloneTools(toolUses),
+          toolResults: [],
+          nextToolIndex: 0,
+          ...(response.usage !== undefined
+            ? { modelUsage: response.usage }
+            : {}),
         });
-      } catch (err) {
-        yield {
-          type: "fail",
-          summary: `provider error: ${err instanceof Error ? err.message : String(err)}`,
-        };
-        return;
-      }
-      if (response.usage !== undefined) {
-        const input = response.usage.inputTokens ?? 0;
-        const output = response.usage.outputTokens ?? 0;
-        const total = response.usage.totalTokens ?? input + output;
-        yield {
-          type: "observe",
-          summary: `model usage: ${total} tokens (${input} input, ${output} output)`,
-          data: { modelUsage: response.usage, turn },
-        };
-      }
-      messages.push({ role: "assistant", content: response.content });
 
-      const toolUses = response.content.filter(
-        (b): b is ToolUseBlock => b.type === "tool_use",
-      );
-      const said = response.content
-        .filter((b): b is ContentBlock & { type: "text" } => b.type === "text")
-        .map((b) => b.text)
-        .join("")
-        .trim();
-      if (said.length > 0) yield { type: "message", text: said.slice(0, 500) };
+        const said = response.content
+          .filter(
+            (b): b is ContentBlock & { type: "text" } => b.type === "text",
+          )
+          .map((b) => b.text)
+          .join("")
+          .trim();
+        if (said.length > 0) {
+          yield { type: "message", text: said.slice(0, 500) };
+        }
+      }
 
       if (toolUses.length === 0) {
         yield {
@@ -254,8 +344,18 @@ export class AgentWorker implements Driver {
         return;
       }
 
-      const results: ToolResultBlock[] = [];
-      for (const tool of toolUses) {
+      for (let index = nextToolIndex; index < toolUses.length; index++) {
+        const tool = toolUses[index]!;
+        await this.#checkpoint({
+          version: 1,
+          phase: "tool_intent",
+          turn,
+          messages: cloneMessages(messages),
+          pendingToolUses: cloneTools(toolUses),
+          toolResults: cloneToolResults(results),
+          nextToolIndex: index,
+          tool: cloneTool(tool),
+        });
         if (tool.name === "done") {
           yield {
             type: "done",
@@ -278,6 +378,16 @@ export class AgentWorker implements Driver {
             content: `unknown tool: ${tool.name}`,
             is_error: true,
           });
+          await this.#checkpoint({
+            version: 1,
+            phase: "tool_result",
+            turn,
+            messages: cloneMessages(messages),
+            pendingToolUses: cloneTools(toolUses),
+            toolResults: cloneToolResults(results),
+            nextToolIndex: index + 1,
+            tool: cloneTool(tool),
+          });
           continue;
         }
         // The session gates + executes the action and hands back the outcome.
@@ -290,6 +400,16 @@ export class AgentWorker implements Driver {
           content: obs,
           ...(isError ? { is_error: true } : {}),
         });
+        await this.#checkpoint({
+          version: 1,
+          phase: "tool_result",
+          turn,
+          messages: cloneMessages(messages),
+          pendingToolUses: cloneTools(toolUses),
+          toolResults: cloneToolResults(results),
+          nextToolIndex: index + 1,
+          tool: cloneTool(tool),
+        });
       }
       messages.push({ role: "user", content: results });
     }
@@ -298,9 +418,31 @@ export class AgentWorker implements Driver {
       summary: `stopped after ${this.#maxTurns} turns without a passing test`,
     };
   }
+
+  async #checkpoint(checkpoint: AgentWorkerCheckpoint): Promise<void> {
+    await this.#onCheckpoint?.(checkpoint);
+  }
 }
 
 function text(tool: ToolUseBlock, key: string): string {
   const v = tool.input[key];
   return typeof v === "string" ? v : "";
+}
+
+function cloneMessages(messages: readonly ModelMessage[]): ModelMessage[] {
+  return structuredClone(messages) as ModelMessage[];
+}
+
+function cloneTools(tools: readonly ToolUseBlock[]): ToolUseBlock[] {
+  return structuredClone(tools) as ToolUseBlock[];
+}
+
+function cloneTool(tool: ToolUseBlock): ToolUseBlock {
+  return structuredClone(tool) as ToolUseBlock;
+}
+
+function cloneToolResults(
+  results: readonly ToolResultBlock[],
+): ToolResultBlock[] {
+  return structuredClone(results) as ToolResultBlock[];
 }

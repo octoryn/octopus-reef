@@ -7,7 +7,11 @@
  * evidence-chained — a worker that does real work AND is independently provable.
  */
 export { AgentWorker } from "./worker.js";
-export type { AgentWorkerOptions } from "./worker.js";
+export type {
+  AgentWorkerCheckpoint,
+  AgentWorkerCheckpointPhase,
+  AgentWorkerOptions,
+} from "./worker.js";
 export {
   AnthropicProvider,
   BedrockProvider,
@@ -15,6 +19,8 @@ export {
   ProviderError,
   DEFAULT_BEDROCK_MODEL,
 } from "./provider.js";
+export { BedrockIamProvider, mapBedrockIamResponse } from "./bedrock-iam.js";
+export type { BedrockIamProviderOptions } from "./bedrock-iam.js";
 
 // The conductor: govern + route + prove a fleet of heterogeneous workers.
 export {

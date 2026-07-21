@@ -1,0 +1,60 @@
+{
+  "family": "reef-control-plane-sandbox",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT:role/REEF_SANDBOX_EXECUTION_ROLE",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "ephemeralStorage": {
+    "sizeInGiB": 40
+  },
+  "containerDefinitions": [
+    {
+      "name": "agent",
+      "image": "ghcr.io/octoryn/octopus-reef-control-plane-sandbox@sha256:RELEASE_DIGEST",
+      "essential": true,
+      "readonlyRootFilesystem": false,
+      "portMappings": [
+        {
+          "name": "runner",
+          "containerPort": 8081,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "linuxParameters": {
+        "initProcessEnabled": true,
+        "capabilities": {
+          "drop": ["ALL"]
+        }
+      },
+      "environment": [
+        { "name": "AWS_EC2_METADATA_DISABLED", "value": "true" },
+        { "name": "REEF_SANDBOX_PORT", "value": "8081" },
+        { "name": "REEF_SANDBOX_WORKSPACE", "value": "/workspace" }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:8081/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+        ],
+        "interval": 15,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 10
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/reef/control-plane/sandbox",
+          "awslogs-region": "REGION",
+          "awslogs-stream-prefix": "runner"
+        }
+      }
+    }
+  ]
+}

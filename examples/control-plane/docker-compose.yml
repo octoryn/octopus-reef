@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: postgres:16.4-alpine@sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c
+    environment:
+      POSTGRES_DB: reef
+      POSTGRES_USER: reef
+      POSTGRES_PASSWORD: local-example-only
+    volumes:
+      - reef-control-plane-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reef -d reef"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  api:
+    image: ${REEF_CONTROL_PLANE_API_IMAGE:?set the immutable API digest from the GitHub Release}
+    command: ["api"]
+    environment:
+      REEF_CONTROL_PLANE_DATABASE_URL: postgresql://reef:local-example-only@postgres:5432/reef
+      REEF_CONTROL_PLANE_AUTO_MIGRATE: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+
+  worker:
+    image: ${REEF_CONTROL_PLANE_WORKER_IMAGE:?set the immutable Worker digest from the GitHub Release}
+    command: ["worker"]
+    environment:
+      REEF_CONTROL_PLANE_DATABASE_URL: postgresql://reef:local-example-only@postgres:5432/reef
+      REEF_RUN_QUEUE_ADAPTER: postgres
+      REEF_SANDBOX_ADAPTER: local
+      REEF_WORKSPACE_ROOT: /tmp/reef-workspaces
+      REEF_SECRET_RESOLVER: env
+      REEF_MODEL_PROVIDER: anthropic
+      # Run requests should reference env://ANTHROPIC_API_KEY; never send its value.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set only in the Worker environment}
+    depends_on:
+      api:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  reef-control-plane-postgres:

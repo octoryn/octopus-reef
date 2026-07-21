@@ -27,7 +27,7 @@ export { NoopExecutor, WorkspaceExecutor, canonicalRoot } from "./executor.js";
 export type { ActionExecutor, ExecOutcome } from "./executor.js";
 
 export { ToolExecutor } from "./tools.js";
-export type { Tool } from "./tools.js";
+export type { Tool, ToolExecutionContext } from "./tools.js";
 
 export {
   SandboxExecutor,

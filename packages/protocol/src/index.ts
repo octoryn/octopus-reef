@@ -23,6 +23,15 @@ export type { ReefEvent, SessionOutcome, SessionSnapshot, WorkState };
 /** Bumped when the wire shapes below change incompatibly. */
 export const REEF_PROTOCOL_VERSION = "0.1.0";
 
+/** Transport-neutral cursor envelope shared by local sessions and durable runs. */
+export interface ReefCursorEvent<Data = unknown> {
+  /** Monotonic decimal cursor, suitable for SSE Last-Event-ID. */
+  readonly cursor: string;
+  readonly type: string;
+  readonly data: Data;
+  readonly createdAt: string;
+}
+
 export type ReefEdition = "community" | "commercial";
 
 export interface EditionResponse {
