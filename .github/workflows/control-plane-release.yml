@@ -48,10 +48,10 @@ jobs:
             echo "image tag already exists; refusing to replace an immutable release" >&2
             exit 1
           fi
-      - name: Publish npm package with provenance
+      - name: Publish npm package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance --workspace @octopus-reef/control-plane
+        run: npm publish --access public --workspace @octopus-reef/control-plane
       - name: Build and publish service image
         id: image
         uses: docker/build-push-action@v6
@@ -75,7 +75,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           cat > "$RUNNER_TEMP/release-notes.md" <<EOF
-          Published @octopus-reef/control-plane ${VERSION} to npm with provenance.
+          Published @octopus-reef/control-plane ${VERSION} to npm.
 
           Service image (pin this immutable digest):
 

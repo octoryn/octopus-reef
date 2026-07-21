@@ -1,14 +1,22 @@
 {
   "name": "@octopus-reef/control-plane",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deployment-neutral, durable and horizontally scalable execution control plane for the Octopus Reef Agent Kernel.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/octoryn/octopus-reef.git",
+    "directory": "packages/control-plane"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "reef-control-plane": "./dist/bin.js"
+    "reef-control-plane": "dist/bin.js"
   },
   "exports": {
     ".": {

@@ -2,7 +2,7 @@
 
 ## Published contract
 
-`@octopus-reef/control-plane` 0.1.0 is the first public execution-control-plane
+`@octopus-reef/control-plane` 0.1.1 is the first public execution-control-plane
 release. It publishes three independent contracts:
 
 - the deployment-neutral ports, state machine, worker and typed HTTP client;
@@ -11,8 +11,8 @@ release. It publishes three independent contracts:
   entrypoint is `reef-control-plane serve`.
 
 Pin npm to an exact version in production. Pin the service image by the
-`sha256:` digest recorded in the `control-plane-v0.1.0` GitHub Release, not only
-by its human-readable `0.1.0` tag. npm versions and release image tags are never
+`sha256:` digest recorded in the `control-plane-v0.1.1` GitHub Release, not only
+by its human-readable `0.1.1` tag. npm versions and release image tags are never
 overwritten by the release workflow.
 
 ## Versioning
