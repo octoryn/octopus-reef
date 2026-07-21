@@ -1,7 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ControlPlaneService } from "./service.js";
 import { encodeSseBatch, resolveSseCursor } from "./sse.js";
-import { isTerminal } from "./state-machine.js";
+import { InvalidRunTransitionError, isTerminal } from "./state-machine.js";
+import {
+  InfrastructureError,
+  RunConflictError,
+  infrastructureHttpStatus,
+} from "./errors.js";
 import type { CreateAgentRunRequest, TenantScope } from "./types.js";
 import {
   InvalidRunRequestError,
@@ -25,16 +30,22 @@ export function createControlPlaneHttpHandler(
         response.end();
         return;
       }
-      const status =
+      const status: number =
         error instanceof RunNotFoundError
           ? 404
           : error instanceof InvalidRunRequestError
             ? 400
-            : error instanceof RunIdempotencyConflictError
+            : error instanceof RunConflictError ||
+                error instanceof RunIdempotencyConflictError ||
+                error instanceof InvalidRunTransitionError
               ? 409
-              : 409;
+              : infrastructureHttpStatus(error);
       json(response, status, {
-        error: { code: errorCode(error), message: errorText(error) },
+        error: {
+          code: errorCode(error),
+          message: errorMessage(error, status),
+          retryable: status === 500 || status === 503,
+        },
       });
     });
   };
@@ -273,8 +284,13 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function errorMessage(error: unknown, status: number): string {
+  if (status < 500 || error instanceof InfrastructureError) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return status === 503
+    ? "control-plane infrastructure is temporarily unavailable"
+    : "control-plane infrastructure request failed";
 }
 
 function errorCode(error: unknown): string {
@@ -282,5 +298,14 @@ function errorCode(error: unknown): string {
   if (error instanceof InvalidRunRequestError) return "INVALID_RUN_REQUEST";
   if (error instanceof RunIdempotencyConflictError)
     return "IDEMPOTENCY_CONFLICT";
-  return "RUN_CONFLICT";
+  if (
+    error instanceof RunConflictError ||
+    error instanceof InvalidRunTransitionError
+  ) {
+    return "RUN_CONFLICT";
+  }
+  if (error instanceof InfrastructureError) return error.code;
+  return infrastructureHttpStatus(error) === 503
+    ? "INFRASTRUCTURE_UNAVAILABLE"
+    : "INFRASTRUCTURE_FAILURE";
 }

@@ -8,6 +8,7 @@ import {
   InMemoryControlPlaneStore,
   InMemoryHumanReviewGateway,
   InMemoryRunQueue,
+  RunDispatchPublisher,
   WorkerProcessCrash,
   type AcceptanceVerifier,
   type AgentKernel,
@@ -29,6 +30,7 @@ import {
 } from "../src/adapters/local.js";
 import {
   PostgresControlPlaneStore,
+  PostgresDispatchOutbox,
   PostgresHumanReviewGateway,
   PostgresOutbox,
 } from "../src/adapters/postgres.js";
@@ -509,11 +511,13 @@ test(
     const store = new PostgresControlPlaneStore(connectionString);
     await store.migrate();
     const reviews = new PostgresHumanReviewGateway(connectionString);
+    const dispatchOutbox = new PostgresDispatchOutbox(connectionString);
     const service = new ControlPlaneService({
       runs: store,
       events: store,
       queue: store,
       reviews,
+      dispatch: store,
     });
     const run = await service.createRun(SCOPE, {
       task: "postgres durable execution",
@@ -537,6 +541,12 @@ test(
       },
     });
     try {
+      const publisher = new RunDispatchPublisher({
+        ownerId: "postgres-api",
+        outbox: dispatchOutbox,
+        queue: store,
+      });
+      assert.equal(await publisher.drainOnce(), 1);
       assert.equal(await worker.runOnce(), true);
       assert.equal((await service.getRun(SCOPE, run.id)).status, "COMPLETED");
       assert.ok((await store.listEvents(SCOPE, run.id)).length > 0);
@@ -566,9 +576,284 @@ test(
         "persist review",
       );
       await restartedReviews.close();
+      assert.ok((await publisher.drainOnce()) >= 1);
+      const pausedDelivery = await store.claim({
+        workerId: "paused-delivery-cleanup",
+        leaseMs: 30_000,
+        now: new Date().toISOString(),
+      });
+      assert.ok(pausedDelivery);
+      await store.ack(pausedDelivery);
     } finally {
+      await dispatchOutbox.close();
       await reviews.close();
       await store.close();
+    }
+  },
+);
+
+test(
+  "PostgreSQL restart recovery, duplicate delivery, fencing and tenant isolation",
+  { skip: process.env.REEF_TEST_POSTGRES_URL === undefined },
+  async () => {
+    const connectionString = process.env.REEF_TEST_POSTGRES_URL!;
+    const clock = new ManualClock();
+    const suffix = `${process.pid}-${Date.now()}`;
+    const scope = {
+      organisationId: `org-recovery-${suffix}`,
+      projectId: `project-recovery-${suffix}`,
+    };
+    let toolExecutions = 0;
+    let crash = true;
+    const kernel: AgentKernel = {
+      async run(context): Promise<KernelResult> {
+        if (context.resumeFrom?.idempotencyKey.endsWith("tool-result:tool-1")) {
+          return { outcome: "COMPLETED", output: "resumed from PostgreSQL" };
+        }
+        await context.checkpoint({
+          kind: "TOOL_INTENT",
+          idempotencyKey: "tool-intent:tool-1",
+          payload: { tool: "write" },
+          step: { id: "tool-1", kind: "write", input: { path: "a.txt" } },
+        });
+        toolExecutions++;
+        await context.checkpoint({
+          kind: "TOOL_RESULT",
+          idempotencyKey: "tool-result:tool-1",
+          payload: { result: "ok" },
+          usage: { toolCalls: 1 },
+          step: { id: "tool-1", kind: "write", output: "ok" },
+        });
+        return { outcome: "COMPLETED", output: "first process" };
+      },
+    };
+
+    const store1 = new PostgresControlPlaneStore(connectionString, {
+      now: clock.now,
+    });
+    const reviews1 = new PostgresHumanReviewGateway(connectionString);
+    const dispatch1 = new PostgresDispatchOutbox(connectionString, clock.now);
+    await store1.migrate();
+    const service1 = new ControlPlaneService({
+      runs: store1,
+      events: store1,
+      queue: store1,
+      reviews: reviews1,
+      dispatch: store1,
+      now: clock.now,
+    });
+    const run = await service1.createRun(scope, {
+      task: "recover after durable tool result",
+      idempotencyKey: `restart-${suffix}`,
+      projectRef: "project://postgres-recovery",
+      baselineRevisionRef: "git://baseline/recovery",
+    });
+    const publisher1 = new RunDispatchPublisher({
+      ownerId: "api-before-restart",
+      outbox: dispatch1,
+      queue: store1,
+      now: clock.now,
+    });
+    assert.equal(await publisher1.drainOnce(), 1);
+    const worker1 = new ControlPlaneWorker({
+      workerId: "worker-before-restart",
+      runs: store1,
+      events: store1,
+      checkpoints: store1,
+      queue: store1,
+      sandboxes: new FakeSandboxProvisioner(),
+      secrets: new StaticSecretResolver({}),
+      reviews: reviews1,
+      acceptance: passAcceptance,
+      kernel,
+      leaseMs: 1_000,
+      retryBaseMs: 0,
+      now: clock.now,
+      afterCheckpoint(checkpoint) {
+        if (crash && checkpoint.kind === "TOOL_RESULT") {
+          crash = false;
+          throw new WorkerProcessCrash();
+        }
+      },
+    });
+    await assert.rejects(worker1.runOnce(), WorkerProcessCrash);
+    assert.equal(toolExecutions, 1);
+    await Promise.all([dispatch1.close(), reviews1.close(), store1.close()]);
+
+    clock.advance(1_001);
+    const store2 = new PostgresControlPlaneStore(connectionString, {
+      now: clock.now,
+    });
+    const reviews2 = new PostgresHumanReviewGateway(connectionString);
+    const dispatch2 = new PostgresDispatchOutbox(connectionString, clock.now);
+    try {
+      const worker2 = new ControlPlaneWorker({
+        workerId: "worker-after-restart",
+        runs: store2,
+        events: store2,
+        checkpoints: store2,
+        queue: store2,
+        sandboxes: new FakeSandboxProvisioner(),
+        secrets: new StaticSecretResolver({}),
+        reviews: reviews2,
+        acceptance: passAcceptance,
+        kernel,
+        leaseMs: 1_000,
+        retryBaseMs: 0,
+        now: clock.now,
+      });
+      assert.equal(await worker2.runOnce(), true);
+      assert.equal(toolExecutions, 1);
+      assert.equal((await store2.get(scope, run.id))?.status, "COMPLETED");
+
+      const service2 = new ControlPlaneService({
+        runs: store2,
+        events: store2,
+        queue: store2,
+        reviews: reviews2,
+        dispatch: store2,
+        now: clock.now,
+      });
+      const fenceRun = await service2.createRun(scope, {
+        task: "fencing",
+        idempotencyKey: `fencing-${suffix}`,
+        projectRef: "project://postgres-fencing",
+        baselineRevisionRef: "git://baseline/fencing",
+      });
+      const publisher2 = new RunDispatchPublisher({
+        ownerId: "api-after-restart",
+        outbox: dispatch2,
+        queue: store2,
+        now: clock.now,
+      });
+      assert.equal(await publisher2.drainOnce(), 1);
+      const first = await store2.acquireLease(scope, fenceRun.id, {
+        ownerId: "fence-worker-1",
+        leaseMs: 1_000,
+        now: clock.now(),
+      });
+      assert.ok(first?.lease);
+      clock.advance(1_001);
+      const second = await store2.acquireLease(scope, fenceRun.id, {
+        ownerId: "fence-worker-2",
+        leaseMs: 1_000,
+        now: clock.now(),
+      });
+      assert.ok(second?.lease);
+      assert.equal(
+        await store2.mutate(
+          scope,
+          fenceRun.id,
+          second.version,
+          { status: "PROVISIONING" },
+          first.lease.fencingToken,
+        ),
+        undefined,
+      );
+      const fenceDelivery = await store2.claim({
+        workerId: "fence-queue-cleanup",
+        leaseMs: 1_000,
+        now: clock.now(),
+      });
+      assert.ok(fenceDelivery);
+      await store2.ack(fenceDelivery);
+
+      const duplicateQueue = new SqsDuplicateQueueFake(clock.now);
+      const duplicateService = new ControlPlaneService({
+        runs: store2,
+        events: store2,
+        queue: duplicateQueue,
+        reviews: reviews2,
+        dispatch: store2,
+        now: clock.now,
+      });
+      let duplicateExecutions = 0;
+      const duplicateRun = await duplicateService.createRun(scope, {
+        task: "duplicate PostgreSQL delivery",
+        idempotencyKey: `duplicate-${suffix}`,
+        projectRef: "project://postgres-duplicate",
+        baselineRevisionRef: "git://baseline/duplicate",
+      });
+      const duplicatePublisher = new RunDispatchPublisher({
+        ownerId: "sqs-publisher",
+        outbox: dispatch2,
+        queue: duplicateQueue,
+        now: clock.now,
+      });
+      assert.equal(await duplicatePublisher.drainOnce(), 1);
+      const makeDuplicateWorker = (workerId: string): ControlPlaneWorker =>
+        new ControlPlaneWorker({
+          workerId,
+          runs: store2,
+          events: store2,
+          checkpoints: store2,
+          queue: duplicateQueue,
+          sandboxes: new FakeSandboxProvisioner(),
+          secrets: new StaticSecretResolver({}),
+          reviews: reviews2,
+          acceptance: passAcceptance,
+          kernel: {
+            run: () => {
+              duplicateExecutions++;
+              return Promise.resolve({ outcome: "COMPLETED", output: "once" });
+            },
+          },
+          leaseMs: 1_000,
+          now: clock.now,
+        });
+      await makeDuplicateWorker("duplicate-a").runOnce();
+      await makeDuplicateWorker("duplicate-b").runOnce();
+      assert.equal(duplicateExecutions, 1);
+      assert.equal(
+        (await store2.get(scope, duplicateRun.id))?.status,
+        "COMPLETED",
+      );
+
+      const sharedId = `shared-run-${suffix}`;
+      const tenantService = new ControlPlaneService({
+        runs: store2,
+        events: store2,
+        queue: store2,
+        reviews: reviews2,
+        dispatch: store2,
+        now: clock.now,
+        id: () => sharedId,
+      });
+      const tenantA = {
+        organisationId: `tenant-a-${suffix}`,
+        projectId: "project",
+      };
+      const tenantB = {
+        organisationId: `tenant-b-${suffix}`,
+        projectId: "project",
+      };
+      await tenantService.createRun(tenantA, {
+        task: "tenant A",
+        idempotencyKey: "same-key",
+        projectRef: "project://tenant-a",
+        baselineRevisionRef: "git://baseline/a",
+      });
+      await tenantService.createRun(tenantB, {
+        task: "tenant B",
+        idempotencyKey: "same-key",
+        projectRef: "project://tenant-b",
+        baselineRevisionRef: "git://baseline/b",
+      });
+      assert.equal((await store2.get(tenantA, sharedId))?.task, "tenant A");
+      assert.equal((await store2.get(tenantB, sharedId))?.task, "tenant B");
+      assert.equal(await store2.get(tenantA, duplicateRun.id), undefined);
+      assert.equal(await publisher2.drainOnce(), 2);
+      for (let index = 0; index < 2; index++) {
+        const delivery = await store2.claim({
+          workerId: `tenant-cleanup-${index}`,
+          leaseMs: 1_000,
+          now: clock.now(),
+        });
+        assert.ok(delivery);
+        await store2.ack(delivery);
+      }
+    } finally {
+      await Promise.all([dispatch2.close(), reviews2.close(), store2.close()]);
     }
   },
 );

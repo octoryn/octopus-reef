@@ -25,13 +25,15 @@ verification checkpoints. Semantic idempotency keys, step uniqueness and a
 monotonic repository fencing token make duplicate queue delivery harmless and
 let a new worker safely take an expired lease.
 
-PostgreSQL migrations: `migrations/0001_control_plane.sql` and
-`migrations/0002_remote_contract.sql`.
+PostgreSQL migrations: `migrations/0001_control_plane.sql` through
+`migrations/0003_transactional_dispatch.sql`.
 
 Reference adapters:
 
-- PostgreSQL run/step/checkpoint/event/outbox and `SKIP LOCKED` queue
-- AWS SQS queue, S3 artifacts and ECS/Fargate sandbox provisioning
+- PostgreSQL run/step/checkpoint/event/outbox, transactional dispatch outbox and
+  `SKIP LOCKED` queue
+- AWS SQS queue, Secrets Manager, S3 artifacts and ECS/Fargate sandbox
+  provisioning
 - Local and hardened Docker sandbox provisioning
 - Git branch/worktree/commit workspace
 
@@ -49,11 +51,17 @@ reconnect/deduplication, typed execution states, candidate
 `diffRef`/`testRef`/`evidenceRefs`, and typed protocol/network/HTTP failures.
 Creation pins an opaque immutable `baselineRevisionRef`.
 
-The service image uses `reef-control-plane serve` as its supported entrypoint.
-It requires `REEF_CONTROL_PLANE_DATABASE_URL`, listens on port 8080 by default,
-and exposes `/healthz`. `reef-control-plane migrate` applies schema migrations
-without starting HTTP. Pin the image by the digest in the matching GitHub
-Release.
+The immutable API and Worker images use `reef-control-plane api` and
+`reef-control-plane worker`; `serve` remains an API alias.
+`reef-control-plane migrate` applies schema migrations without starting HTTP.
+The API exposes liveness at `/healthz` and database/schema readiness at
+`/readyz`. Pin each image by its separate digest in the matching GitHub Release.
+
+The Worker entrypoint wires PostgreSQL/SQS queues, env/Secrets Manager secrets,
+local/S3 artifacts, local/Docker/ECS sandboxes, Git worktrees, and the existing
+Anthropic/Bedrock `ModelProvider` implementations. PostgreSQL accepts an RDS CA
+bundle with `REEF_CONTROL_PLANE_DATABASE_SSL_MODE=verify-full` and
+`REEF_CONTROL_PLANE_DATABASE_CA_FILE` or `_CA_BASE64`.
 
 Compatibility and a remote deployment example are documented in
 `docs/CONTROL-PLANE-COMPATIBILITY.md`.

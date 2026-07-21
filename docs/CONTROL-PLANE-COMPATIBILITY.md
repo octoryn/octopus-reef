@@ -2,17 +2,17 @@
 
 ## Published contract
 
-`@octopus-reef/control-plane` 0.1.1 is the first public execution-control-plane
-release. It publishes three independent contracts:
+`@octopus-reef/control-plane` 0.1.2 is the current compatible patch release. It
+publishes three independent contracts:
 
 - the deployment-neutral ports, state machine, worker and typed HTTP client;
 - HTTP Run API v1 at `/v1/runs` and cursor-based SSE events;
-- `ghcr.io/octoryn/octopus-reef-control-plane`, whose default supported
-  entrypoint is `reef-control-plane serve`.
+- immutable API and Worker images. Their supported entrypoints are
+  `reef-control-plane api` and `reef-control-plane worker`.
 
 Pin npm to an exact version in production. Pin the service image by the
-`sha256:` digest recorded in the `control-plane-v0.1.1` GitHub Release, not only
-by its human-readable `0.1.1` tag. npm versions and release image tags are never
+`sha256:` digests recorded in the `control-plane-v0.1.2` GitHub Release, not only
+by their human-readable `0.1.2` tags. npm versions and release image tags are never
 overwritten by the release workflow.
 
 ## Versioning
@@ -43,7 +43,7 @@ kernel contracts:
 | `@octopus-reef/agent` | `^0.2.2` (checkpoint/resume) |
 | `@octopus-reef/engine` | `^0.2.1` (tool idempotency) |
 | `@octopus-reef/protocol` | `^0.1.1` (decimal cursor events) |
-| `@octopus-reef/adapter-runtime` | `^0.1.0` |
+| `@octopus-reef/adapter-runtime` | `^0.1.1` (uses engine `^0.2.1`) |
 | `octopus-workstate` / `octopus-evidence` | `^0.2.0` |
 | `octopus-runtime` | `^0.7.0` |
 
@@ -123,31 +123,44 @@ JSON command field so gateways and the service enforce the same key. Run
 credentials are references shaped exactly as
 `{ name, secretRef }`; secret values and API keys are rejected by the Run API.
 
-Schema migration `0002_remote_contract` adds the immutable baseline and typed
-candidate result references. Apply `reef-control-plane migrate` before rolling
-out 0.1.1, or set `REEF_CONTROL_PLANE_AUTO_MIGRATE=true` for the reference
-single-service deployment.
+Schema migration `0003_transactional_dispatch` adds the leased dispatch outbox.
+Run `reef-control-plane migrate` before rolling out 0.1.2, or set
+`REEF_CONTROL_PLANE_AUTO_MIGRATE=true` on the API reference deployment. Run
+creation/resume/retry now commit the run mutation, event/event-outbox and
+dispatch-outbox atomically. A publisher crash may create a duplicate queue
+delivery but cannot lose the dispatch; worker fencing and semantic checkpoint
+keys make the duplicate safe.
 
-`AgentExecutionState` is the closed 0.1.1 union `QUEUED | PROVISIONING |
+`AgentExecutionState` remains the closed 0.1.x union `QUEUED | PROVISIONING |
 PLANNING | RUNNING | WAITING_FOR_TOOL | VERIFYING | WAITING_FOR_REVIEW |
 COMPLETED | FAILED | CANCELLED | BUDGET_EXCEEDED`. Builder may project these
 into product wording, but must not treat an execution state as Project State.
 
 ## Minimal remote API deployment
 
-The reference Compose file starts PostgreSQL and the official API image. Read
-the exact digest from the GitHub Release, then run:
+The reference Compose file starts PostgreSQL plus the official API and Worker
+images. Read both exact digests from the GitHub Release, then run:
 
 ```sh
-export REEF_CONTROL_PLANE_IMAGE='ghcr.io/octoryn/octopus-reef-control-plane@sha256:<release-digest>'
+export REEF_CONTROL_PLANE_API_IMAGE='ghcr.io/octoryn/octopus-reef-control-plane-api@sha256:<api-digest>'
+export REEF_CONTROL_PLANE_WORKER_IMAGE='ghcr.io/octoryn/octopus-reef-control-plane-worker@sha256:<worker-digest>'
+export ANTHROPIC_API_KEY='<worker-only-secret>'
 docker compose -f examples/control-plane/docker-compose.yml up -d
-curl --fail http://127.0.0.1:8080/healthz
+curl --fail http://127.0.0.1:8080/readyz
 ```
 
-The image contains the deployment-neutral HTTP service and PostgreSQL adapter.
-Horizontally scaled workers are separate processes composed from the published
-`ControlPlaneWorker` with the chosen queue, sandbox, artifact, Git, secret and
-model-provider adapters. This separation keeps provider credentials and sandbox
-privileges out of the public API process. For production, place the API behind
+The API image owns HTTP, PostgreSQL persistence and dispatch publication. The
+Worker image wires PostgreSQL/SQS, local/Docker/ECS sandbox, local/S3 artifacts,
+Git worktrees, env/Secrets Manager resolution, and Anthropic/Bedrock providers.
+This separation keeps provider credentials and sandbox privileges out of the
+public API process. `/healthz` is liveness only; `/readyz` verifies database
+connectivity and the complete 0.1.2 schema. For Amazon RDS use
+`REEF_CONTROL_PLANE_DATABASE_SSL_MODE=verify-full` plus exactly one of
+`REEF_CONTROL_PLANE_DATABASE_CA_FILE` or
+`REEF_CONTROL_PLANE_DATABASE_CA_BASE64`. For production, place the API behind
 TLS and authentication that derives the two tenant headers from the verified
 identity; never trust tenant headers supplied directly by an Internet client.
+
+Infrastructure failures return typed retryable `500` or `503` responses. Retry
+mutations with the original idempotency key; never manufacture a new key after
+an ambiguous timeout.

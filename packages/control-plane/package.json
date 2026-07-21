@@ -1,6 +1,6 @@
 {
   "name": "@octopus-reef/control-plane",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Deployment-neutral, durable and horizontally scalable execution control plane for the Octopus Reef Agent Kernel.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",
@@ -38,6 +38,10 @@
     "./client": {
       "types": "./dist/client.d.ts",
       "default": "./dist/client.js"
+    },
+    "./production": {
+      "types": "./dist/production.d.ts",
+      "default": "./dist/production.js"
     }
   },
   "files": [
@@ -52,7 +56,7 @@
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
-    "@octopus-reef/adapter-runtime": "^0.1.0",
+    "@octopus-reef/adapter-runtime": "^0.1.1",
     "@octopus-reef/agent": "^0.2.2",
     "@octopus-reef/engine": "^0.2.1",
     "@octopus-reef/protocol": "^0.1.1",
@@ -63,13 +67,9 @@
   "optionalDependencies": {
     "@aws-sdk/client-ecs": "^3.850.0",
     "@aws-sdk/client-s3": "^3.850.0",
+    "@aws-sdk/client-secrets-manager": "^3.850.0",
     "@aws-sdk/client-sqs": "^3.850.0",
     "pg": "^8.16.3"
-  },
-  "devDependencies": {
-    "@aws-sdk/client-ecs": "^3.850.0",
-    "@aws-sdk/client-s3": "^3.850.0",
-    "@aws-sdk/client-sqs": "^3.850.0"
   },
   "engines": {
     "node": ">=22"

@@ -37,11 +37,16 @@ COPY packages/control-plane/README.md packages/control-plane/README.md
 RUN npx tsc -b packages/engine packages/protocol packages/agent packages/adapter-runtime packages/control-plane
 RUN npm prune --omit=dev
 
-FROM node:22.17.1-bookworm-slim AS runtime
+FROM node:22.17.1-bookworm-slim AS runtime-base
 WORKDIR /app
 ENV NODE_ENV=production \
     REEF_CONTROL_PLANE_HOST=0.0.0.0 \
     REEF_CONTROL_PLANE_PORT=8080
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && apt-get clean \
+    && find /var/lib/apt/lists -mindepth 1 -delete
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
@@ -59,8 +64,14 @@ COPY --from=build /app/packages/control-plane/migrations ./packages/control-plan
 COPY --from=build /app/packages/control-plane/README.md ./packages/control-plane/README.md
 
 USER node
+ENTRYPOINT ["node", "/app/packages/control-plane/dist/bin.js"]
+
+FROM runtime-base AS api
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.REEF_CONTROL_PLANE_PORT||8080)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-ENTRYPOINT ["node", "/app/packages/control-plane/dist/bin.js"]
-CMD ["serve"]
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.REEF_CONTROL_PLANE_PORT||8080)+'/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["api"]
+
+FROM runtime-base AS worker
+HEALTHCHECK NONE
+CMD ["worker"]

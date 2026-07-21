@@ -17,7 +17,16 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import type { ArtifactStore, RunQueue, SandboxProvisioner } from "../ports.js";
+import {
+  GetSecretValueCommand,
+  SecretsManagerClient,
+} from "@aws-sdk/client-secrets-manager";
+import type {
+  ArtifactStore,
+  RunQueue,
+  SandboxProvisioner,
+  SecretResolver,
+} from "../ports.js";
 import type {
   ArtifactRef,
   QueueClaimOptions,
@@ -242,11 +251,108 @@ export class AwsS3ArtifactStore implements ArtifactStore {
   }
 }
 
+export interface AwsSecretsManagerResolverOptions {
+  readonly client?: SecretsManagerClient;
+}
+
+/**
+ * Resolves `aws-secretsmanager://<encoded-secret-id>[#json-field]` only after a
+ * worker owns the fenced run lease. Secret values never enter run persistence.
+ */
+export class AwsSecretsManagerSecretResolver implements SecretResolver {
+  readonly #client: SecretsManagerClient;
+
+  constructor(options: AwsSecretsManagerResolverOptions = {}) {
+    this.#client = options.client ?? new SecretsManagerClient({});
+  }
+
+  async resolve(
+    _scope: TenantScope,
+    refs: readonly { readonly name: string; readonly secretRef: string }[],
+  ): Promise<Readonly<Record<string, string>>> {
+    const fetched = new Map<string, string>();
+    const resolved: Record<string, string> = {};
+    for (const ref of refs) {
+      const parsed = parseSecretsManagerRef(ref.secretRef);
+      let secret = fetched.get(parsed.secretId);
+      if (secret === undefined) {
+        const result = await this.#client.send(
+          new GetSecretValueCommand({ SecretId: parsed.secretId }),
+        );
+        secret =
+          result.SecretString ??
+          (result.SecretBinary === undefined
+            ? undefined
+            : Buffer.from(result.SecretBinary).toString("utf8"));
+        if (secret === undefined) {
+          throw new Error(`Secrets Manager value is empty: ${ref.secretRef}`);
+        }
+        fetched.set(parsed.secretId, secret);
+      }
+      resolved[ref.name] =
+        parsed.field === undefined
+          ? secret
+          : jsonSecretField(secret, parsed.field, ref.secretRef);
+    }
+    return resolved;
+  }
+}
+
 export interface EcsSandboxCommandExecutor {
   execute(
     taskArn: string,
     command: SandboxExecution,
   ): Promise<SandboxExecutionResult>;
+}
+
+export interface HttpEcsSandboxCommandExecutorOptions {
+  /** Private command bridge accepting `{ taskArn, command }`. */
+  readonly endpoint: string;
+  readonly bearerToken?: string;
+  readonly fetchImpl?: typeof fetch;
+}
+
+/** Reference bridge for ECS Exec/SSM sidecars or a private task command API. */
+export class HttpEcsSandboxCommandExecutor implements EcsSandboxCommandExecutor {
+  readonly #options: HttpEcsSandboxCommandExecutorOptions;
+
+  constructor(options: HttpEcsSandboxCommandExecutorOptions) {
+    this.#options = options;
+  }
+
+  async execute(
+    taskArn: string,
+    command: SandboxExecution,
+  ): Promise<SandboxExecutionResult> {
+    const response = await (this.#options.fetchImpl ?? fetch)(
+      this.#options.endpoint,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(this.#options.bearerToken !== undefined
+            ? { Authorization: `Bearer ${this.#options.bearerToken}` }
+            : {}),
+        },
+        body: JSON.stringify({ taskArn, command }),
+        ...(command.timeoutMs !== undefined
+          ? { signal: AbortSignal.timeout(command.timeoutMs) }
+          : {}),
+      },
+    );
+    const body = (await response.json()) as Partial<SandboxExecutionResult>;
+    if (
+      !response.ok ||
+      typeof body.exitCode !== "number" ||
+      typeof body.stdout !== "string" ||
+      typeof body.stderr !== "string"
+    ) {
+      throw new Error(
+        `ECS sandbox command bridge failed: ${response.status} ${JSON.stringify(body).slice(0, 500)}`,
+      );
+    }
+    return body as SandboxExecutionResult;
+  }
 }
 
 export interface AwsEcsSandboxOptions {
@@ -260,13 +366,14 @@ export interface AwsEcsSandboxOptions {
   readonly platformVersion?: string;
   readonly launchTimeoutMs?: number;
   readonly pollMs?: number;
+  /** Shared EFS mount path visible to both worker and sandbox tasks. */
+  readonly workspaceRoot?: string;
 }
 
 class EcsSandboxHandle implements SandboxHandle {
-  readonly workspacePath = "/workspace";
-
   constructor(
     readonly id: string,
+    readonly workspacePath: string,
     private readonly executor: EcsSandboxCommandExecutor,
   ) {}
 
@@ -294,6 +401,10 @@ export class AwsEcsFargateSandboxProvisioner implements SandboxProvisioner {
   }
 
   async provision(spec: SandboxSpec): Promise<SandboxHandle> {
+    const workspacePath = ecsWorkspacePath(
+      this.#options.workspaceRoot ?? "/workspace",
+      spec,
+    );
     const started = await this.#client.send(
       new RunTaskCommand({
         cluster: this.#options.cluster,
@@ -319,6 +430,7 @@ export class AwsEcsFargateSandboxProvisioner implements SandboxProvisioner {
                 { name: "REEF_PROJECT_ID", value: spec.projectId },
                 { name: "REEF_RUN_ID", value: spec.runId },
                 { name: "REEF_PROJECT_REF", value: spec.projectRef },
+                { name: "REEF_WORKSPACE_PATH", value: workspacePath },
               ],
             },
           ],
@@ -337,7 +449,11 @@ export class AwsEcsFargateSandboxProvisioner implements SandboxProvisioner {
       );
     }
     await this.#waitUntilRunning(taskArn);
-    return new EcsSandboxHandle(taskArn, this.#options.commandExecutor);
+    return new EcsSandboxHandle(
+      taskArn,
+      workspacePath,
+      this.#options.commandExecutor,
+    );
   }
 
   async restore(
@@ -351,7 +467,11 @@ export class AwsEcsFargateSandboxProvisioner implements SandboxProvisioner {
       }),
     );
     if (result.tasks?.[0]?.lastStatus !== "RUNNING") return undefined;
-    return new EcsSandboxHandle(sandboxId, this.#options.commandExecutor);
+    return new EcsSandboxHandle(
+      sandboxId,
+      ecsWorkspacePath(this.#options.workspaceRoot ?? "/workspace", _spec),
+      this.#options.commandExecutor,
+    );
   }
 
   async destroy(handle: SandboxHandle): Promise<void> {
@@ -413,4 +533,53 @@ function seconds(milliseconds: number): number {
 
 function tenantHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 24);
+}
+
+function ecsWorkspacePath(root: string, spec: SandboxSpec): string {
+  const cleanRoot = root.replace(/\/+$/, "");
+  const safeRun = encodeURIComponent(spec.runId).replaceAll("%", "_");
+  return `${cleanRoot}/org-${tenantHash(spec.organisationId)}/project-${tenantHash(spec.projectId)}/run-${safeRun}`;
+}
+
+function parseSecretsManagerRef(secretRef: string): {
+  readonly secretId: string;
+  readonly field?: string;
+} {
+  const prefixes = ["aws-secretsmanager://", "aws-secrets://"];
+  const prefix = prefixes.find((candidate) => secretRef.startsWith(candidate));
+  if (prefix === undefined) {
+    throw new Error(`unsupported Secrets Manager secretRef: ${secretRef}`);
+  }
+  const raw = secretRef.slice(prefix.length);
+  const hash = raw.indexOf("#");
+  const secretId = decodeURIComponent(hash < 0 ? raw : raw.slice(0, hash));
+  const field = hash < 0 ? undefined : decodeURIComponent(raw.slice(hash + 1));
+  if (secretId === "" || field === "") {
+    throw new Error(`invalid Secrets Manager secretRef: ${secretRef}`);
+  }
+  return {
+    secretId,
+    ...(field !== undefined ? { field } : {}),
+  };
+}
+
+function jsonSecretField(
+  secret: string,
+  field: string,
+  secretRef: string,
+): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(secret) as unknown;
+  } catch {
+    throw new Error(`Secrets Manager value is not JSON: ${secretRef}`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Secrets Manager value is not an object: ${secretRef}`);
+  }
+  const value = (parsed as Record<string, unknown>)[field];
+  if (typeof value !== "string") {
+    throw new Error(`Secrets Manager JSON field is not a string: ${secretRef}`);
+  }
+  return value;
 }

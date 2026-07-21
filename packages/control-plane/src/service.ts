@@ -6,7 +6,9 @@ import type {
   HumanReviewGateway,
   RunEventStore,
   RunQueue,
+  TransactionalRunDispatchStore,
 } from "./ports.js";
+import { RunConflictError } from "./errors.js";
 import { isTerminal } from "./state-machine.js";
 import type {
   AgentRun,
@@ -17,6 +19,7 @@ import type {
   TenantScope,
 } from "./types.js";
 import {
+  InvalidRunRequestError,
   validateCreateRunRequest,
   validateIdempotencyKey,
   validateScope,
@@ -27,6 +30,8 @@ export interface ControlPlaneServiceOptions {
   readonly events: RunEventStore;
   readonly queue: RunQueue;
   readonly reviews: HumanReviewGateway;
+  /** Production store used to atomically persist run/event/dispatch changes. */
+  readonly dispatch?: TransactionalRunDispatchStore;
   readonly now?: () => string;
   readonly id?: () => string;
 }
@@ -38,7 +43,7 @@ export class RunNotFoundError extends Error {
   }
 }
 
-export class RunIdempotencyConflictError extends Error {
+export class RunIdempotencyConflictError extends RunConflictError {
   constructor(idempotencyKey: string) {
     super(
       `idempotency key was reused with a different command: ${idempotencyKey}`,
@@ -53,6 +58,7 @@ export class ControlPlaneService {
   readonly #events: RunEventStore;
   readonly #queue: RunQueue;
   readonly #reviews: HumanReviewGateway;
+  readonly #dispatch: TransactionalRunDispatchStore | undefined;
   readonly #now: () => string;
   readonly #id: () => string;
 
@@ -61,6 +67,7 @@ export class ControlPlaneService {
     this.#events = options.events;
     this.#queue = options.queue;
     this.#reviews = options.reviews;
+    this.#dispatch = options.dispatch;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#id = options.id ?? randomUUID;
   }
@@ -107,22 +114,41 @@ export class ControlPlaneService {
       metadata: structuredClone(request.metadata ?? {}),
       resultRefs: { evidenceRefs: [] },
     };
-    const stored = await this.#runs.create(scope, run);
+    const stored =
+      this.#dispatch === undefined
+        ? await this.#runs.create(scope, run)
+        : await this.#dispatch.createRunAndDispatch(
+            scope,
+            run,
+            {
+              type: "run.queued",
+              data: { status: "QUEUED", attempt: 0 },
+              createdAt: now,
+              idempotencyKey: "run-created",
+            },
+            {
+              idempotencyKey: `create:${request.idempotencyKey}`,
+              attempt: 0,
+              availableAt: now,
+            },
+          );
     if (!stored.created) {
       if (!sameCreateRequest(stored.run, request)) {
         throw new RunIdempotencyConflictError(request.idempotencyKey);
       }
       return stored.run;
     }
-    await this.#events.append(
-      scope,
-      run.id,
-      "run.queued",
-      { status: "QUEUED", attempt: 0 },
-      now,
-      "run-created",
-    );
-    await this.#queue.enqueue(scope, run.id);
+    if (this.#dispatch === undefined) {
+      await this.#events.append(
+        scope,
+        run.id,
+        "run.queued",
+        { status: "QUEUED", attempt: 0 },
+        now,
+        "run-created",
+      );
+      await this.#queue.enqueue(scope, run.id);
+    }
     return stored.run;
   }
 
@@ -140,7 +166,9 @@ export class ControlPlaneService {
     limit = 100,
   ): Promise<readonly RunEvent[]> {
     await this.getRun(scope, runId);
-    if (!/^\d+$/.test(cursor)) throw new Error("event cursor must be decimal");
+    if (!/^\d+$/.test(cursor)) {
+      throw new InvalidRunRequestError("event cursor must be decimal");
+    }
     return this.#events.listEvents(scope, runId, cursor, limit);
   }
 
@@ -154,7 +182,9 @@ export class ControlPlaneService {
     validateIdempotencyKey(idempotencyKey);
     const current = await this.getRun(scope, runId);
     if (isTerminal(current.status)) {
-      throw new Error(`cannot pause terminal run in ${current.status}`);
+      throw new RunConflictError(
+        `cannot pause terminal run in ${current.status}`,
+      );
     }
     if (current.status === "WAITING_FOR_REVIEW") {
       const existing = await this.#events.getEventByIdempotencyKey(
@@ -162,13 +192,14 @@ export class ControlPlaneService {
         runId,
         commandEventKey("pause", idempotencyKey),
       );
-      if (existing !== undefined) {
-        await this.#markCommand(scope, runId, "pause", idempotencyKey, {
-          actorRef,
-          reason,
-          reviewId: commandString(existing.data, "reviewId"),
-        });
+      if (existing === undefined) {
+        throw new RunConflictError("run is already waiting for review");
       }
+      await this.#markCommand(scope, runId, "pause", idempotencyKey, {
+        actorRef,
+        reason,
+        reviewId: commandString(existing.data, "reviewId"),
+      });
       return current;
     }
     const now = this.#now();
@@ -228,35 +259,41 @@ export class ControlPlaneService {
     const current = await this.getRun(scope, runId);
     if (current.status !== "WAITING_FOR_REVIEW") {
       if (replay) {
-        if (current.status === "QUEUED") {
+        if (current.status === "QUEUED" && this.#dispatch === undefined) {
           await this.#queue.enqueue(scope, runId, { attempt: current.attempt });
         }
         return current;
       }
-      throw new Error(`run is not paused: ${current.status}`);
+      throw new RunConflictError(`run is not paused: ${current.status}`);
     }
     await this.#markCommand(scope, runId, "resume", idempotencyKey, {});
     let run: AgentRun;
     try {
-      run = await this.#mutate(scope, runId, {
-        status: "QUEUED",
-        clearLease: true,
-        clearReview: true,
-      });
+      run = await this.#mutateAndDispatch(
+        scope,
+        runId,
+        {
+          status: "QUEUED",
+          clearLease: true,
+          clearReview: true,
+        },
+        {
+          type: "run.resumed",
+          data: { attempt: current.attempt },
+          createdAt: this.#now(),
+          idempotencyKey: `resume:${idempotencyKey}`,
+        },
+        {
+          idempotencyKey: `resume:${idempotencyKey}`,
+          attempt: current.attempt,
+          availableAt: this.#now(),
+        },
+      );
     } catch (error) {
       const latest = await this.getRun(scope, runId);
       if (latest.status === "WAITING_FOR_REVIEW") throw error;
       run = latest;
     }
-    await this.#events.append(
-      scope,
-      runId,
-      "run.resumed",
-      { attempt: run.attempt },
-      this.#now(),
-      `resume:${idempotencyKey}`,
-    );
-    await this.#queue.enqueue(scope, runId, { attempt: run.attempt });
     return run;
   }
 
@@ -277,43 +314,52 @@ export class ControlPlaneService {
       current.status !== "BUDGET_EXCEEDED"
     ) {
       if (replay) {
-        if (current.status === "QUEUED") {
+        if (current.status === "QUEUED" && this.#dispatch === undefined) {
           await this.#queue.enqueue(scope, runId, { attempt: current.attempt });
         }
         return current;
       }
-      throw new Error(`run cannot be retried from ${current.status}`);
+      throw new RunConflictError(
+        `run cannot be retried from ${current.status}`,
+      );
     }
     await this.#markCommand(scope, runId, "retry", idempotencyKey, {});
     let run: AgentRun;
     try {
-      run = await this.#mutate(scope, runId, {
-        status: "QUEUED",
-        attempt: current.attempt + 1,
-        usage: emptyUsage(),
-        startedAt: this.#now(),
-        clearLease: true,
-        clearFailure: true,
-        clearReview: true,
-        clearFinishedAt: true,
-        clearOutput: true,
-        clearResultRefs: true,
-        clearSandbox: true,
-      });
+      const retriedAt = this.#now();
+      run = await this.#mutateAndDispatch(
+        scope,
+        runId,
+        {
+          status: "QUEUED",
+          attempt: current.attempt + 1,
+          usage: emptyUsage(),
+          startedAt: retriedAt,
+          clearLease: true,
+          clearFailure: true,
+          clearReview: true,
+          clearFinishedAt: true,
+          clearOutput: true,
+          clearResultRefs: true,
+          clearSandbox: true,
+        },
+        {
+          type: "run.retried",
+          data: { attempt: current.attempt + 1 },
+          createdAt: retriedAt,
+          idempotencyKey: `retry:${idempotencyKey}`,
+        },
+        {
+          idempotencyKey: `retry:${idempotencyKey}`,
+          attempt: current.attempt + 1,
+          availableAt: retriedAt,
+        },
+      );
     } catch (error) {
       const latest = await this.getRun(scope, runId);
       if (latest.status !== "QUEUED") throw error;
       run = latest;
     }
-    await this.#events.append(
-      scope,
-      runId,
-      "run.retried",
-      { attempt: run.attempt },
-      this.#now(),
-      `retry:${idempotencyKey}`,
-    );
-    await this.#queue.enqueue(scope, runId, { attempt: run.attempt });
     return run;
   }
 
@@ -330,16 +376,19 @@ export class ControlPlaneService {
       undefined;
     const current = await this.getRun(scope, runId);
     if (current.status === "CANCELLED") {
-      if (replay) {
-        await this.#markCommand(scope, runId, "cancel", idempotencyKey, {
-          reason,
-        });
+      if (!replay) {
+        throw new RunConflictError("run is already cancelled");
       }
+      await this.#markCommand(scope, runId, "cancel", idempotencyKey, {
+        reason,
+      });
       return current;
     }
     if (replay && isTerminal(current.status)) return current;
     if (isTerminal(current.status)) {
-      throw new Error(`cannot cancel terminal run in ${current.status}`);
+      throw new RunConflictError(
+        `cannot cancel terminal run in ${current.status}`,
+      );
     }
     await this.#markCommand(scope, runId, "cancel", idempotencyKey, { reason });
     const now = this.#now();
@@ -427,7 +476,9 @@ export class ControlPlaneService {
         });
         return current;
       }
-      throw new Error(`run has no pending review: ${current.status}`);
+      throw new RunConflictError(
+        `run has no pending review: ${current.status}`,
+      );
     }
     await this.#markCommand(scope, runId, action, idempotencyKey, {
       actorRef,
@@ -522,7 +573,61 @@ export class ControlPlaneService {
       );
       if (next !== undefined) return next;
     }
-    throw new Error(`concurrent updates prevented mutation of run ${runId}`);
+    throw new RunConflictError(
+      `concurrent updates prevented mutation of run ${runId}`,
+    );
+  }
+
+  async #mutateAndDispatch(
+    scope: TenantScope,
+    runId: string,
+    mutation: RunMutation,
+    event: {
+      readonly type: string;
+      readonly data: unknown;
+      readonly createdAt: string;
+      readonly idempotencyKey: string;
+    },
+    dispatch: {
+      readonly idempotencyKey: string;
+      readonly attempt: number;
+      readonly availableAt: string;
+    },
+  ): Promise<AgentRun> {
+    if (this.#dispatch === undefined) {
+      const run = await this.#mutate(scope, runId, mutation);
+      await this.#events.append(
+        scope,
+        runId,
+        event.type,
+        event.data,
+        event.createdAt,
+        event.idempotencyKey,
+      );
+      await this.#queue.enqueue(scope, runId, {
+        attempt: dispatch.attempt,
+        delayMs: Math.max(
+          0,
+          Date.parse(dispatch.availableAt) - Date.parse(this.#now()),
+        ),
+      });
+      return run;
+    }
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const current = await this.getRun(scope, runId);
+      const next = await this.#dispatch.mutateRunAndDispatch(
+        scope,
+        runId,
+        current.version,
+        mutation,
+        event,
+        dispatch,
+      );
+      if (next !== undefined) return next;
+    }
+    throw new RunConflictError(
+      `concurrent updates prevented dispatch of run ${runId}`,
+    );
   }
 }
 

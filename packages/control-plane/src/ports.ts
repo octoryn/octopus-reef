@@ -20,6 +20,64 @@ import type {
   UsageDelta,
 } from "./types.js";
 
+export interface RunEventInput {
+  readonly type: string;
+  readonly data: unknown;
+  readonly createdAt: string;
+  readonly idempotencyKey: string;
+}
+
+export interface RunDispatchInput {
+  /** Stable semantic key, independent of an at-least-once queue receipt. */
+  readonly idempotencyKey: string;
+  readonly attempt: number;
+  readonly availableAt: string;
+}
+
+export interface RunDispatchRecord extends RunDispatchInput, TenantScope {
+  readonly id: string;
+  readonly runId: string;
+  readonly deliveryAttempts: number;
+}
+
+/**
+ * Atomic command seam used by production persistence. A successful call makes
+ * the run mutation, event/event-outbox and dispatch-outbox durable together.
+ */
+export interface TransactionalRunDispatchStore {
+  createRunAndDispatch(
+    scope: TenantScope,
+    run: AgentRun,
+    event: RunEventInput,
+    dispatch: RunDispatchInput,
+  ): Promise<{ readonly run: AgentRun; readonly created: boolean }>;
+  mutateRunAndDispatch(
+    scope: TenantScope,
+    runId: string,
+    expectedVersion: number,
+    mutation: RunMutation,
+    event: RunEventInput,
+    dispatch: RunDispatchInput,
+    fencingToken?: number,
+  ): Promise<AgentRun | undefined>;
+}
+
+/** Durable publisher lease for dispatching PostgreSQL outbox rows to a queue. */
+export interface RunDispatchOutbox {
+  claim(
+    ownerId: string,
+    leaseMs: number,
+    limit?: number,
+  ): Promise<readonly RunDispatchRecord[]>;
+  published(id: string, ownerId: string): Promise<void>;
+  retry(
+    id: string,
+    ownerId: string,
+    availableAt: string,
+    error: string,
+  ): Promise<void>;
+}
+
 export interface AgentRunRepository {
   create(
     scope: TenantScope,

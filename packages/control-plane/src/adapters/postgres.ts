@@ -1,12 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
+import { isDeepStrictEqual } from "node:util";
 import type {
   AgentRunRepository,
   HumanReviewGateway,
   RunCheckpointStore,
   RunEventStore,
   RunQueue,
+  RunDispatchInput,
+  RunDispatchOutbox,
+  RunDispatchRecord,
+  RunEventInput,
+  TransactionalRunDispatchStore,
 } from "../ports.js";
+import { PersistenceIdempotencyConflictError } from "../errors.js";
 import { assertRunTransition } from "../state-machine.js";
 import type {
   AgentRun,
@@ -43,7 +50,23 @@ export interface PgPoolLike extends PgClientLike {
   end?(): Promise<void>;
 }
 
-type PgPoolCtor = new (options: { connectionString: string }) => PgPoolLike;
+export interface PostgresConnectionOptions {
+  readonly connectionString: string;
+  readonly ssl?:
+    | boolean
+    | {
+        readonly ca?: string;
+        readonly rejectUnauthorized: boolean;
+      };
+  readonly max?: number;
+  readonly connectionTimeoutMillis?: number;
+  readonly idleTimeoutMillis?: number;
+}
+
+export type PostgresConnection =
+  string | PostgresConnectionOptions | PgPoolLike;
+
+type PgPoolCtor = new (options: PostgresConnectionOptions) => PgPoolLike;
 
 interface RunRow {
   readonly organisation_id: string;
@@ -136,6 +159,17 @@ interface QueueRow {
   readonly receipt: string;
 }
 
+interface DispatchRow {
+  readonly id: string | number;
+  readonly organisation_id: string;
+  readonly project_id: string;
+  readonly run_id: string;
+  readonly idempotency_key: string;
+  readonly attempt: number;
+  readonly available_at: unknown;
+  readonly delivery_attempts: number;
+}
+
 const RUN_COLUMNS = [
   "organisation_id",
   "project_id",
@@ -170,19 +204,23 @@ const RUN_COLUMNS = [
 
 /** PostgreSQL implementation for runs, steps, checkpoints, events/outbox and queue. */
 export class PostgresControlPlaneStore
-  implements AgentRunRepository, RunEventStore, RunCheckpointStore, RunQueue
+  implements
+    AgentRunRepository,
+    RunEventStore,
+    RunCheckpointStore,
+    RunQueue,
+    TransactionalRunDispatchStore
 {
   readonly #pool: PgPoolLike;
   readonly #ownsPool: boolean;
   readonly #now: () => string;
 
   constructor(
-    connection: string | PgPoolLike,
+    connection: PostgresConnection,
     options: { readonly now?: () => string } = {},
   ) {
-    if (typeof connection === "string") {
-      const Pool = loadPgPool();
-      this.#pool = new Pool({ connectionString: connection });
+    if (!isPgPool(connection)) {
+      this.#pool = createPgPool(connection);
       this.#ownsPool = true;
     } else {
       this.#pool = connection;
@@ -207,59 +245,28 @@ export class PostgresControlPlaneStore
     scope: TenantScope,
     run: AgentRun,
   ): Promise<{ readonly run: AgentRun; readonly created: boolean }> {
-    const result = await this.#pool.query<RunRow>(
-      `INSERT INTO agent_runs (
-        organisation_id, project_id, id, idempotency_key, project_ref,
-        baseline_revision_ref, work_item_ref, acceptance_ref, task, status,
-        version, attempt,
-        created_at, updated_at, started_at, finished_at, secret_refs, budget,
-        usage, config, metadata, result_refs, lease_owner, lease_expires_at,
-        fencing_token, sandbox_id, output, failure, review_id
-      ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,
-        $18::jsonb,$19::jsonb,$20::jsonb,$21::jsonb,$22::jsonb,$23,$24,$25,
-        $26,$27,$28::jsonb,$29
-      ) ON CONFLICT (organisation_id, project_id, idempotency_key) DO NOTHING
-      RETURNING ${RUN_COLUMNS}`,
-      [
-        scope.organisationId,
-        scope.projectId,
+    return this.#createWithClient(this.#pool, scope, run);
+  }
+
+  async createRunAndDispatch(
+    scope: TenantScope,
+    run: AgentRun,
+    event: RunEventInput,
+    dispatch: RunDispatchInput,
+  ): Promise<{ readonly run: AgentRun; readonly created: boolean }> {
+    return this.#transaction(async (client) => {
+      const stored = await this.#createWithClient(client, scope, run);
+      if (!stored.created) return stored;
+      await this.#appendWithClient(client, scope, run.id, event);
+      await this.#insertDispatch(
+        client,
+        scope,
         run.id,
-        run.idempotencyKey,
-        run.projectRef,
-        run.baselineRevisionRef,
-        run.workItemRef ?? null,
-        run.acceptanceRef ?? null,
-        run.task,
-        run.status,
-        run.version,
-        run.attempt,
+        dispatch,
         run.createdAt,
-        run.updatedAt,
-        run.startedAt ?? null,
-        run.finishedAt ?? null,
-        json(run.secretRefs),
-        json(run.budget),
-        json(run.usage),
-        json(run.config),
-        json(run.metadata),
-        json(run.resultRefs),
-        run.lease?.ownerId ?? null,
-        run.lease?.expiresAt ?? null,
-        run.lease?.fencingToken ?? 0,
-        run.sandboxId ?? null,
-        run.output ?? null,
-        jsonNullable(run.failure),
-        run.reviewId ?? null,
-      ],
-    );
-    const inserted = result.rows[0];
-    if (inserted !== undefined)
-      return { run: runFromRow(inserted), created: true };
-    const existing = await this.getByIdempotencyKey(scope, run.idempotencyKey);
-    if (existing === undefined)
-      throw new Error("run insert conflicted but row was not found");
-    return { run: existing, created: false };
+      );
+      return stored;
+    });
   }
 
   async get(scope: TenantScope, runId: string): Promise<AgentRun | undefined> {
@@ -349,51 +356,57 @@ export class PostgresControlPlaneStore
     if (mutation.status !== undefined) {
       assertRunTransition(current.status, mutation.status);
     }
-    const result = await this.#pool.query<RunRow>(
-      `UPDATE agent_runs SET
-        status=COALESCE($5,status), attempt=COALESCE($6,attempt),
-        usage=COALESCE($7::jsonb,usage),
-        sandbox_id=CASE WHEN $20 THEN NULL ELSE COALESCE($8,sandbox_id) END,
-        output=CASE WHEN $21 THEN NULL ELSE COALESCE($9,output) END,
-        result_refs=CASE WHEN $23 THEN '{"evidenceRefs":[]}'::jsonb
-          ELSE COALESCE($10::jsonb,result_refs) END,
-        failure=CASE WHEN $11 THEN NULL ELSE COALESCE($12::jsonb,failure) END,
-        review_id=CASE WHEN $13 THEN NULL ELSE COALESCE($14,review_id) END,
-        started_at=COALESCE($15,started_at),
-        finished_at=CASE WHEN $22 THEN NULL ELSE COALESCE($16,finished_at) END,
-        lease_owner=CASE WHEN $17 THEN NULL ELSE lease_owner END,
-        lease_expires_at=CASE WHEN $17 THEN NULL ELSE lease_expires_at END,
-        version=version+1, updated_at=$18
-       WHERE organisation_id=$1 AND project_id=$2 AND id=$3 AND version=$4
-         AND ($19::bigint IS NULL OR fencing_token=$19)
-       RETURNING ${RUN_COLUMNS}`,
-      [
-        scope.organisationId,
-        scope.projectId,
+    return this.#mutateWithClient(
+      this.#pool,
+      scope,
+      runId,
+      expectedVersion,
+      mutation,
+      fencingToken,
+    );
+  }
+
+  async mutateRunAndDispatch(
+    scope: TenantScope,
+    runId: string,
+    expectedVersion: number,
+    mutation: RunMutation,
+    event: RunEventInput,
+    dispatch: RunDispatchInput,
+    fencingToken?: number,
+  ): Promise<AgentRun | undefined> {
+    return this.#transaction(async (client) => {
+      const locked = await client.query<RunRow>(
+        `SELECT ${RUN_COLUMNS} FROM agent_runs
+         WHERE organisation_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`,
+        [scope.organisationId, scope.projectId, runId],
+      );
+      const current = optional(locked.rows[0], runFromRow);
+      if (current === undefined || current.version !== expectedVersion) {
+        return undefined;
+      }
+      if (mutation.status !== undefined) {
+        assertRunTransition(current.status, mutation.status);
+      }
+      const updated = await this.#mutateWithClient(
+        client,
+        scope,
         runId,
         expectedVersion,
-        mutation.status ?? null,
-        mutation.attempt ?? null,
-        mutation.usage === undefined ? null : json(mutation.usage),
-        mutation.sandboxId ?? null,
-        mutation.output ?? null,
-        mutation.resultRefs === undefined ? null : json(mutation.resultRefs),
-        mutation.clearFailure === true,
-        jsonNullable(mutation.failure),
-        mutation.clearReview === true,
-        mutation.reviewId ?? null,
-        mutation.startedAt ?? null,
-        mutation.finishedAt ?? null,
-        mutation.clearLease === true,
-        this.#now(),
-        fencingToken ?? null,
-        mutation.clearSandbox === true,
-        mutation.clearOutput === true,
-        mutation.clearFinishedAt === true,
-        mutation.clearResultRefs === true,
-      ],
-    );
-    return optional(result.rows[0], runFromRow);
+        mutation,
+        fencingToken,
+      );
+      if (updated === undefined) return undefined;
+      await this.#appendWithClient(client, scope, runId, event);
+      await this.#insertDispatch(
+        client,
+        scope,
+        runId,
+        dispatch,
+        event.createdAt,
+      );
+      return updated;
+    });
   }
 
   async createStep(
@@ -587,52 +600,14 @@ export class PostgresControlPlaneStore
     createdAt: string,
     idempotencyKey?: string,
   ): Promise<RunEvent> {
-    return this.#transaction(async (client) => {
-      if (idempotencyKey !== undefined) {
-        const existing = await client.query<EventRow>(
-          `SELECT organisation_id,project_id,run_id,id,cursor,type,data,created_at
-           FROM run_events WHERE organisation_id=$1 AND project_id=$2
-             AND run_id=$3 AND idempotency_key=$4`,
-          [scope.organisationId, scope.projectId, runId, idempotencyKey],
-        );
-        if (existing.rows[0] !== undefined)
-          return eventFromRow(existing.rows[0]);
-      }
-      const id = randomUUID();
-      const inserted = await client.query<EventRow>(
-        `INSERT INTO run_events (
-          id,organisation_id,project_id,run_id,idempotency_key,type,data,created_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)
-        ON CONFLICT (organisation_id,project_id,run_id,idempotency_key) DO UPDATE
-          SET idempotency_key=excluded.idempotency_key
-        RETURNING organisation_id,project_id,run_id,id,cursor,type,data,created_at`,
-        [
-          id,
-          scope.organisationId,
-          scope.projectId,
-          runId,
-          idempotencyKey ?? null,
-          type,
-          json(data),
-          createdAt,
-        ],
-      );
-      const event = eventFromRow(inserted.rows[0]!);
-      await client.query(
-        `INSERT INTO run_outbox (
-          event_id,organisation_id,project_id,run_id,payload,created_at
-        ) VALUES ($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT(event_id) DO NOTHING`,
-        [
-          event.id,
-          scope.organisationId,
-          scope.projectId,
-          runId,
-          json(event),
-          createdAt,
-        ],
-      );
-      return event;
-    });
+    return this.#transaction((client) =>
+      this.#appendWithClient(client, scope, runId, {
+        type,
+        data,
+        createdAt,
+        ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+      }),
+    );
   }
 
   async listEvents(
@@ -761,6 +736,240 @@ export class PostgresControlPlaneStore
     );
   }
 
+  /** Database connectivity plus the complete 0.1.2 schema, not process liveness. */
+  async readiness(): Promise<{
+    readonly ready: boolean;
+    readonly database: string;
+    readonly schemaVersion: "0.1.2";
+  }> {
+    const result = await this.#pool.query<{
+      readonly database: string;
+      readonly runs: string | null;
+      readonly checkpoints: string | null;
+      readonly events: string | null;
+      readonly dispatch: string | null;
+    }>(
+      `SELECT current_database() AS database,
+        to_regclass('public.agent_runs')::text AS runs,
+        to_regclass('public.run_checkpoints')::text AS checkpoints,
+        to_regclass('public.run_events')::text AS events,
+        to_regclass('public.run_dispatch_outbox')::text AS dispatch`,
+    );
+    const row = result.rows[0];
+    return {
+      ready:
+        row !== undefined &&
+        row.runs !== null &&
+        row.checkpoints !== null &&
+        row.events !== null &&
+        row.dispatch !== null,
+      database: row?.database ?? "unknown",
+      schemaVersion: "0.1.2",
+    };
+  }
+
+  async #createWithClient(
+    client: PgClientLike,
+    scope: TenantScope,
+    run: AgentRun,
+  ): Promise<{ readonly run: AgentRun; readonly created: boolean }> {
+    const result = await client.query<RunRow>(
+      `INSERT INTO agent_runs (
+        organisation_id, project_id, id, idempotency_key, project_ref,
+        baseline_revision_ref, work_item_ref, acceptance_ref, task, status,
+        version, attempt,
+        created_at, updated_at, started_at, finished_at, secret_refs, budget,
+        usage, config, metadata, result_refs, lease_owner, lease_expires_at,
+        fencing_token, sandbox_id, output, failure, review_id
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,
+        $18::jsonb,$19::jsonb,$20::jsonb,$21::jsonb,$22::jsonb,$23,$24,$25,
+        $26,$27,$28::jsonb,$29
+      ) ON CONFLICT (organisation_id, project_id, idempotency_key) DO NOTHING
+      RETURNING ${RUN_COLUMNS}`,
+      [
+        scope.organisationId,
+        scope.projectId,
+        run.id,
+        run.idempotencyKey,
+        run.projectRef,
+        run.baselineRevisionRef,
+        run.workItemRef ?? null,
+        run.acceptanceRef ?? null,
+        run.task,
+        run.status,
+        run.version,
+        run.attempt,
+        run.createdAt,
+        run.updatedAt,
+        run.startedAt ?? null,
+        run.finishedAt ?? null,
+        json(run.secretRefs),
+        json(run.budget),
+        json(run.usage),
+        json(run.config),
+        json(run.metadata),
+        json(run.resultRefs),
+        run.lease?.ownerId ?? null,
+        run.lease?.expiresAt ?? null,
+        run.lease?.fencingToken ?? 0,
+        run.sandboxId ?? null,
+        run.output ?? null,
+        jsonNullable(run.failure),
+        run.reviewId ?? null,
+      ],
+    );
+    const inserted = result.rows[0];
+    if (inserted !== undefined) {
+      return { run: runFromRow(inserted), created: true };
+    }
+    const existing = await client.query<RunRow>(
+      `SELECT ${RUN_COLUMNS} FROM agent_runs
+       WHERE organisation_id=$1 AND project_id=$2 AND idempotency_key=$3`,
+      [scope.organisationId, scope.projectId, run.idempotencyKey],
+    );
+    if (existing.rows[0] === undefined) {
+      throw new Error("run insert conflicted but row was not found");
+    }
+    return { run: runFromRow(existing.rows[0]), created: false };
+  }
+
+  async #mutateWithClient(
+    client: PgClientLike,
+    scope: TenantScope,
+    runId: string,
+    expectedVersion: number,
+    mutation: RunMutation,
+    fencingToken?: number,
+  ): Promise<AgentRun | undefined> {
+    const result = await client.query<RunRow>(
+      `UPDATE agent_runs SET
+        status=COALESCE($5,status), attempt=COALESCE($6,attempt),
+        usage=COALESCE($7::jsonb,usage),
+        sandbox_id=CASE WHEN $20 THEN NULL ELSE COALESCE($8,sandbox_id) END,
+        output=CASE WHEN $21 THEN NULL ELSE COALESCE($9,output) END,
+        result_refs=CASE WHEN $23 THEN '{"evidenceRefs":[]}'::jsonb
+          ELSE COALESCE($10::jsonb,result_refs) END,
+        failure=CASE WHEN $11 THEN NULL ELSE COALESCE($12::jsonb,failure) END,
+        review_id=CASE WHEN $13 THEN NULL ELSE COALESCE($14,review_id) END,
+        started_at=COALESCE($15,started_at),
+        finished_at=CASE WHEN $22 THEN NULL ELSE COALESCE($16,finished_at) END,
+        lease_owner=CASE WHEN $17 THEN NULL ELSE lease_owner END,
+        lease_expires_at=CASE WHEN $17 THEN NULL ELSE lease_expires_at END,
+        version=version+1, updated_at=$18
+       WHERE organisation_id=$1 AND project_id=$2 AND id=$3 AND version=$4
+         AND ($19::bigint IS NULL OR fencing_token=$19)
+       RETURNING ${RUN_COLUMNS}`,
+      [
+        scope.organisationId,
+        scope.projectId,
+        runId,
+        expectedVersion,
+        mutation.status ?? null,
+        mutation.attempt ?? null,
+        mutation.usage === undefined ? null : json(mutation.usage),
+        mutation.sandboxId ?? null,
+        mutation.output ?? null,
+        mutation.resultRefs === undefined ? null : json(mutation.resultRefs),
+        mutation.clearFailure === true,
+        jsonNullable(mutation.failure),
+        mutation.clearReview === true,
+        mutation.reviewId ?? null,
+        mutation.startedAt ?? null,
+        mutation.finishedAt ?? null,
+        mutation.clearLease === true,
+        this.#now(),
+        fencingToken ?? null,
+        mutation.clearSandbox === true,
+        mutation.clearOutput === true,
+        mutation.clearFinishedAt === true,
+        mutation.clearResultRefs === true,
+      ],
+    );
+    return optional(result.rows[0], runFromRow);
+  }
+
+  async #appendWithClient(
+    client: PgClientLike,
+    scope: TenantScope,
+    runId: string,
+    input: Omit<RunEventInput, "idempotencyKey"> & {
+      readonly idempotencyKey?: string;
+    },
+  ): Promise<RunEvent> {
+    const id = randomUUID();
+    const inserted = await client.query<EventRow>(
+      `INSERT INTO run_events (
+        id,organisation_id,project_id,run_id,idempotency_key,type,data,created_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)
+      ON CONFLICT (organisation_id,project_id,run_id,idempotency_key) DO UPDATE
+        SET idempotency_key=excluded.idempotency_key
+      RETURNING organisation_id,project_id,run_id,id,cursor,type,data,created_at`,
+      [
+        id,
+        scope.organisationId,
+        scope.projectId,
+        runId,
+        input.idempotencyKey ?? null,
+        input.type,
+        json(input.data),
+        input.createdAt,
+      ],
+    );
+    const event = eventFromRow(inserted.rows[0]!);
+    if (
+      input.idempotencyKey !== undefined &&
+      (event.type !== input.type || !isDeepStrictEqual(event.data, input.data))
+    ) {
+      throw new PersistenceIdempotencyConflictError(input.idempotencyKey);
+    }
+    await client.query(
+      `INSERT INTO run_outbox (
+        event_id,organisation_id,project_id,run_id,payload,created_at
+      ) VALUES ($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT(event_id) DO NOTHING`,
+      [
+        event.id,
+        scope.organisationId,
+        scope.projectId,
+        runId,
+        json(event),
+        event.createdAt,
+      ],
+    );
+    return event;
+  }
+
+  async #insertDispatch(
+    client: PgClientLike,
+    scope: TenantScope,
+    runId: string,
+    input: RunDispatchInput,
+    createdAt: string,
+  ): Promise<void> {
+    const result = await client.query<DispatchRow>(
+      `INSERT INTO run_dispatch_outbox (
+        organisation_id,project_id,run_id,idempotency_key,attempt,
+        available_at,created_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+      ON CONFLICT (organisation_id,project_id,run_id,idempotency_key) DO UPDATE
+        SET idempotency_key=excluded.idempotency_key
+      RETURNING id,organisation_id,project_id,run_id,idempotency_key,attempt,
+        available_at,delivery_attempts`,
+      [
+        scope.organisationId,
+        scope.projectId,
+        runId,
+        input.idempotencyKey,
+        input.attempt,
+        input.availableAt,
+        createdAt,
+      ],
+    );
+    if (result.rows[0]?.attempt !== input.attempt) {
+      throw new PersistenceIdempotencyConflictError(input.idempotencyKey);
+    }
+  }
+
   async #transaction<T>(
     work: (client: PgClientLike) => Promise<T>,
   ): Promise<T> {
@@ -783,10 +992,9 @@ export class PostgresHumanReviewGateway implements HumanReviewGateway {
   readonly #pool: PgPoolLike;
   readonly #ownsPool: boolean;
 
-  constructor(connection: string | PgPoolLike) {
-    if (typeof connection === "string") {
-      const Pool = loadPgPool();
-      this.#pool = new Pool({ connectionString: connection });
+  constructor(connection: PostgresConnection) {
+    if (!isPgPool(connection)) {
+      this.#pool = createPgPool(connection);
       this.#ownsPool = true;
     } else {
       this.#pool = connection;
@@ -901,12 +1109,11 @@ export class PostgresOutbox {
   readonly #now: () => string;
 
   constructor(
-    connection: string | PgPoolLike,
+    connection: PostgresConnection,
     now: () => string = () => new Date().toISOString(),
   ) {
-    if (typeof connection === "string") {
-      const Pool = loadPgPool();
-      this.#pool = new Pool({ connectionString: connection });
+    if (!isPgPool(connection)) {
+      this.#pool = createPgPool(connection);
       this.#ownsPool = true;
     } else {
       this.#pool = connection;
@@ -948,6 +1155,78 @@ export class PostgresOutbox {
       `UPDATE run_outbox SET published_at=$3,lease_owner=NULL,lease_expires_at=NULL
        WHERE id=$1::bigint AND lease_owner=$2`,
       [id, ownerId, this.#now()],
+    );
+  }
+}
+
+/** Lease-based dispatcher for the transactional queue outbox. */
+export class PostgresDispatchOutbox implements RunDispatchOutbox {
+  readonly #pool: PgPoolLike;
+  readonly #ownsPool: boolean;
+  readonly #now: () => string;
+
+  constructor(
+    connection: PostgresConnection,
+    now: () => string = () => new Date().toISOString(),
+  ) {
+    if (!isPgPool(connection)) {
+      this.#pool = createPgPool(connection);
+      this.#ownsPool = true;
+    } else {
+      this.#pool = connection;
+      this.#ownsPool = false;
+    }
+    this.#now = now;
+  }
+
+  async close(): Promise<void> {
+    if (this.#ownsPool) await this.#pool.end?.();
+  }
+
+  async claim(
+    ownerId: string,
+    leaseMs: number,
+    limit = 100,
+  ): Promise<readonly RunDispatchRecord[]> {
+    const now = this.#now();
+    const expiresAt = new Date(Date.parse(now) + leaseMs).toISOString();
+    const result = await this.#pool.query<DispatchRow>(
+      `WITH candidates AS (
+        SELECT id FROM run_dispatch_outbox
+        WHERE dispatched_at IS NULL AND available_at <= $1
+          AND (lease_owner IS NULL OR lease_expires_at <= $1)
+        ORDER BY id FOR UPDATE SKIP LOCKED LIMIT $2
+      ) UPDATE run_dispatch_outbox o SET
+        lease_owner=$3,lease_expires_at=$4,
+        delivery_attempts=delivery_attempts+1,last_error=NULL
+      FROM candidates c WHERE o.id=c.id
+      RETURNING o.id,o.organisation_id,o.project_id,o.run_id,
+        o.idempotency_key,o.attempt,o.available_at,o.delivery_attempts`,
+      [now, limit, ownerId, expiresAt],
+    );
+    return result.rows.map(dispatchFromRow);
+  }
+
+  async published(id: string, ownerId: string): Promise<void> {
+    await this.#pool.query(
+      `UPDATE run_dispatch_outbox SET
+        dispatched_at=$3,lease_owner=NULL,lease_expires_at=NULL,last_error=NULL
+       WHERE id=$1::bigint AND lease_owner=$2 AND dispatched_at IS NULL`,
+      [id, ownerId, this.#now()],
+    );
+  }
+
+  async retry(
+    id: string,
+    ownerId: string,
+    availableAt: string,
+    error: string,
+  ): Promise<void> {
+    await this.#pool.query(
+      `UPDATE run_dispatch_outbox SET
+        available_at=$3,lease_owner=NULL,lease_expires_at=NULL,last_error=$4
+       WHERE id=$1::bigint AND lease_owner=$2 AND dispatched_at IS NULL`,
+      [id, ownerId, availableAt, error.slice(0, 4_000)],
     );
   }
 }
@@ -1078,11 +1357,39 @@ function queueLeaseFromRow(row: QueueRow): QueueLease {
   };
 }
 
+function dispatchFromRow(row: DispatchRow): RunDispatchRecord {
+  return {
+    id: String(row.id),
+    organisationId: row.organisation_id,
+    projectId: row.project_id,
+    runId: row.run_id,
+    idempotencyKey: row.idempotency_key,
+    attempt: row.attempt,
+    availableAt: iso(row.available_at),
+    deliveryAttempts: row.delivery_attempts,
+  };
+}
+
 function loadPgPool(): PgPoolCtor {
   const require = createRequire(import.meta.url);
   const loaded = require("pg") as { Pool?: PgPoolCtor };
   if (loaded.Pool === undefined) throw new Error("pg Pool is unavailable");
   return loaded.Pool;
+}
+
+function createPgPool(
+  connection: string | PostgresConnectionOptions,
+): PgPoolLike {
+  const Pool = loadPgPool();
+  return new Pool(
+    typeof connection === "string"
+      ? { connectionString: connection }
+      : connection,
+  );
+}
+
+function isPgPool(connection: PostgresConnection): connection is PgPoolLike {
+  return typeof connection === "object" && "query" in connection;
 }
 
 function iso(value: unknown): string {
@@ -1091,7 +1398,21 @@ function iso(value: unknown): string {
 }
 
 function parse(value: unknown): unknown {
-  return typeof value === "string" ? JSON.parse(value) : value;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (
+    !trimmed.startsWith("{") &&
+    !trimmed.startsWith("[") &&
+    !trimmed.startsWith('"') &&
+    trimmed !== "null" &&
+    trimmed !== "true" &&
+    trimmed !== "false" &&
+    !/^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(trimmed)
+  ) {
+    // pg has already decoded a JSONB string scalar.
+    return value;
+  }
+  return JSON.parse(value) as unknown;
 }
 
 function json(value: unknown): string {
