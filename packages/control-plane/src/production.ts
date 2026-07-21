@@ -1,5 +1,10 @@
-import { readFileSync } from "node:fs";
-import { AnthropicProvider, BedrockProvider } from "@octopus-reef/agent";
+import { existsSync, readFileSync } from "node:fs";
+import {
+  AnthropicProvider,
+  BedrockIamProvider,
+  BedrockProvider,
+} from "@octopus-reef/agent";
+import { ECSClient } from "@aws-sdk/client-ecs";
 import type {
   ArtifactStore,
   GitWorkspace,
@@ -12,6 +17,7 @@ import { ReefAgentKernel } from "./reef-kernel.js";
 import { SandboxActionExecutor } from "./sandbox-executor.js";
 import {
   AwsEcsFargateSandboxProvisioner,
+  AwsEcsTaskHttpCommandExecutor,
   AwsS3ArtifactStore,
   AwsSecretsManagerSecretResolver,
   AwsSqsRunQueue,
@@ -29,6 +35,10 @@ import type {
   PostgresControlPlaneStore,
 } from "./adapters/postgres.js";
 
+/** Checksum-pinned into every official API/Worker image. */
+export const AWS_RDS_GLOBAL_CA_BUNDLE_PATH =
+  "/etc/ssl/certs/aws-rds-global-bundle.pem";
+
 export function postgresConnectionFromEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
 ): PostgresConnectionOptions {
@@ -36,28 +46,38 @@ export function postgresConnectionFromEnvironment(
     environment,
     "REEF_CONTROL_PLANE_DATABASE_URL",
   );
-  const caFile = optional(environment, "REEF_CONTROL_PLANE_DATABASE_CA_FILE");
+  const explicitCaFile = optional(
+    environment,
+    "REEF_CONTROL_PLANE_DATABASE_CA_FILE",
+  );
   const caBase64 = optional(
     environment,
     "REEF_CONTROL_PLANE_DATABASE_CA_BASE64",
   );
-  if (caFile !== undefined && caBase64 !== undefined) {
+  if (explicitCaFile !== undefined && caBase64 !== undefined) {
     throw new Error("configure only one PostgreSQL CA source");
   }
+  const mode =
+    optional(environment, "REEF_CONTROL_PLANE_DATABASE_SSL_MODE") ??
+    (explicitCaFile === undefined && caBase64 === undefined
+      ? "disable"
+      : "verify-full");
+  if (!new Set(["disable", "require", "verify-full"]).has(mode)) {
+    throw new Error(
+      "REEF_CONTROL_PLANE_DATABASE_SSL_MODE must be disable, require, or verify-full",
+    );
+  }
+  const caFile =
+    explicitCaFile ??
+    (mode === "verify-full" && existsSync(AWS_RDS_GLOBAL_CA_BUNDLE_PATH)
+      ? AWS_RDS_GLOBAL_CA_BUNDLE_PATH
+      : undefined);
   const ca =
     caFile !== undefined
       ? readFileSync(caFile, "utf8")
       : caBase64 !== undefined
         ? Buffer.from(caBase64, "base64").toString("utf8")
         : undefined;
-  const mode =
-    optional(environment, "REEF_CONTROL_PLANE_DATABASE_SSL_MODE") ??
-    (ca === undefined ? "disable" : "verify-full");
-  if (!new Set(["disable", "require", "verify-full"]).has(mode)) {
-    throw new Error(
-      "REEF_CONTROL_PLANE_DATABASE_SSL_MODE must be disable, require, or verify-full",
-    );
-  }
   if (mode === "verify-full" && ca === undefined) {
     throw new Error("verify-full requires the RDS/PostgreSQL CA bundle");
   }
@@ -114,8 +134,43 @@ export function createProductionSandbox(
     });
   }
   if (adapter === "ecs") {
+    const cluster = required(environment, "REEF_ECS_CLUSTER");
+    const client = new ECSClient({});
+    const legacyEndpoint = optional(environment, "REEF_ECS_COMMAND_ENDPOINT");
+    const runnerSharedSecret = optional(
+      environment,
+      "REEF_ECS_RUNNER_SHARED_SECRET",
+    );
+    const commandExecutor =
+      legacyEndpoint === undefined
+        ? new AwsEcsTaskHttpCommandExecutor({
+            cluster,
+            client,
+            port: integer(environment, "REEF_ECS_RUNNER_PORT", 8081),
+            scheme:
+              optional(environment, "REEF_ECS_RUNNER_SCHEME") === "https"
+                ? "https"
+                : "http",
+          })
+        : new HttpEcsSandboxCommandExecutor({
+            endpoint: legacyEndpoint,
+            ...(optional(environment, "REEF_ECS_COMMAND_BEARER_TOKEN") !==
+            undefined
+              ? {
+                  bearerToken: optional(
+                    environment,
+                    "REEF_ECS_COMMAND_BEARER_TOKEN",
+                  )!,
+                }
+              : {}),
+          });
+    if (legacyEndpoint === undefined && runnerSharedSecret === undefined) {
+      throw new Error(
+        "REEF_ECS_RUNNER_SHARED_SECRET is required for the per-task ECS sandbox runner",
+      );
+    }
     return new AwsEcsFargateSandboxProvisioner({
-      cluster: required(environment, "REEF_ECS_CLUSTER"),
+      cluster,
       taskDefinition: required(environment, "REEF_ECS_TASK_DEFINITION"),
       subnets: csv(required(environment, "REEF_ECS_SUBNETS")),
       securityGroups: csv(required(environment, "REEF_ECS_SECURITY_GROUPS")),
@@ -124,17 +179,12 @@ export function createProductionSandbox(
       platformVersion:
         optional(environment, "REEF_ECS_PLATFORM_VERSION") ?? "LATEST",
       workspaceRoot: root,
-      commandExecutor: new HttpEcsSandboxCommandExecutor({
-        endpoint: required(environment, "REEF_ECS_COMMAND_ENDPOINT"),
-        ...(optional(environment, "REEF_ECS_COMMAND_BEARER_TOKEN") !== undefined
-          ? {
-              bearerToken: optional(
-                environment,
-                "REEF_ECS_COMMAND_BEARER_TOKEN",
-              )!,
-            }
-          : {}),
-      }),
+      runnerWorkspacePath:
+        optional(environment, "REEF_ECS_RUNNER_WORKSPACE") ?? "/workspace",
+      ...(runnerSharedSecret !== undefined ? { runnerSharedSecret } : {}),
+      enableExecuteCommand: legacyEndpoint !== undefined,
+      commandExecutor,
+      client,
     });
   }
   throw new Error(`unsupported REEF_SANDBOX_ADAPTER: ${adapter}`);
@@ -209,6 +259,12 @@ export function createProductionKernel(
           optional(environment, "REEF_BEDROCK_SECRET_NAME") ?? "bedrockToken";
         return new BedrockProvider({
           token: requiredSecret(secrets, secretName),
+          region: optional(environment, "AWS_REGION") ?? "us-west-2",
+          ...(model !== undefined ? { model } : {}),
+        });
+      }
+      if (provider === "bedrock-iam") {
+        return new BedrockIamProvider({
           region: optional(environment, "AWS_REGION") ?? "us-west-2",
           ...(model !== undefined ? { model } : {}),
         });

@@ -740,7 +740,7 @@ export class PostgresControlPlaneStore
   async readiness(): Promise<{
     readonly ready: boolean;
     readonly database: string;
-    readonly schemaVersion: "0.1.2";
+    readonly schemaVersion: "0.1.3";
   }> {
     const result = await this.#pool.query<{
       readonly database: string;
@@ -764,7 +764,7 @@ export class PostgresControlPlaneStore
         row.events !== null &&
         row.dispatch !== null,
       database: row?.database ?? "unknown",
-      schemaVersion: "0.1.2",
+      schemaVersion: "0.1.3",
     };
   }
 

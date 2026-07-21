@@ -2,17 +2,18 @@
 
 ## Published contract
 
-`@octopus-reef/control-plane` 0.1.2 is the current compatible patch release. It
+`@octopus-reef/control-plane` 0.1.3 is the current compatible patch release. It
 publishes three independent contracts:
 
 - the deployment-neutral ports, state machine, worker and typed HTTP client;
 - HTTP Run API v1 at `/v1/runs` and cursor-based SSE events;
-- immutable API and Worker images. Their supported entrypoints are
-  `reef-control-plane api` and `reef-control-plane worker`.
+- immutable API, Worker and isolated sandbox-runner images. Their supported
+  entrypoints are `reef-control-plane api`, `reef-control-plane worker`, and
+  `reef-sandbox-runner`.
 
 Pin npm to an exact version in production. Pin the service image by the
-`sha256:` digests recorded in the `control-plane-v0.1.2` GitHub Release, not only
-by their human-readable `0.1.2` tags. npm versions and release image tags are never
+`sha256:` digests recorded in the `control-plane-v0.1.3` GitHub Release, not only
+by their human-readable `0.1.3` tags. npm versions and release image tags are never
 overwritten by the release workflow.
 
 ## Versioning
@@ -38,14 +39,14 @@ The package follows Semantic Versioning. While it is below 1.0:
 The 0.1 line is built for Node.js 22+, PostgreSQL 15+, and these existing Reef
 kernel contracts:
 
-| Dependency | Compatible line |
-| --- | --- |
-| `@octopus-reef/agent` | `^0.2.2` (checkpoint/resume) |
-| `@octopus-reef/engine` | `^0.2.1` (tool idempotency) |
-| `@octopus-reef/protocol` | `^0.1.1` (decimal cursor events) |
-| `@octopus-reef/adapter-runtime` | `^0.1.1` (uses engine `^0.2.1`) |
-| `octopus-workstate` / `octopus-evidence` | `^0.2.0` |
-| `octopus-runtime` | `^0.7.0` |
+| Dependency                               | Compatible line                            |
+| ---------------------------------------- | ------------------------------------------ |
+| `@octopus-reef/agent`                    | `^0.2.3` (checkpoint/resume + Bedrock IAM) |
+| `@octopus-reef/engine`                   | `^0.2.1` (tool idempotency)                |
+| `@octopus-reef/protocol`                 | `^0.1.1` (decimal cursor events)           |
+| `@octopus-reef/adapter-runtime`          | `^0.1.1` (uses engine `^0.2.1`)            |
+| `octopus-workstate` / `octopus-evidence` | `^0.2.0`                                   |
+| `octopus-runtime`                        | `^0.7.0`                                   |
 
 `OctopusIntentAcceptanceVerifier` accepts the official `checkContract`
 function through a typed injection seam. This deliberately avoids a sibling
@@ -124,7 +125,7 @@ credentials are references shaped exactly as
 `{ name, secretRef }`; secret values and API keys are rejected by the Run API.
 
 Schema migration `0003_transactional_dispatch` adds the leased dispatch outbox.
-Run `reef-control-plane migrate` before rolling out 0.1.2, or set
+Run `reef-control-plane migrate` before rolling out 0.1.3, or set
 `REEF_CONTROL_PLANE_AUTO_MIGRATE=true` on the API reference deployment. Run
 creation/resume/retry now commit the run mutation, event/event-outbox and
 dispatch-outbox atomically. A publisher crash may create a duplicate queue
@@ -154,13 +155,23 @@ Worker image wires PostgreSQL/SQS, local/Docker/ECS sandbox, local/S3 artifacts,
 Git worktrees, env/Secrets Manager resolution, and Anthropic/Bedrock providers.
 This separation keeps provider credentials and sandbox privileges out of the
 public API process. `/healthz` is liveness only; `/readyz` verifies database
-connectivity and the complete 0.1.2 schema. For Amazon RDS use
-`REEF_CONTROL_PLANE_DATABASE_SSL_MODE=verify-full` plus exactly one of
-`REEF_CONTROL_PLANE_DATABASE_CA_FILE` or
-`REEF_CONTROL_PLANE_DATABASE_CA_BASE64`. For production, place the API behind
+connectivity and the complete 0.1.3 schema. For Amazon RDS set
+`REEF_CONTROL_PLANE_DATABASE_SSL_MODE=verify-full`; the official image reads its
+checksum-pinned global CA bundle from
+`/etc/ssl/certs/aws-rds-global-bundle.pem`. An explicit
+`REEF_CONTROL_PLANE_DATABASE_CA_FILE` or `_CA_BASE64` may override it. For
+production, place the API behind
 TLS and authentication that derives the two tenant headers from the verified
 identity; never trust tenant headers supplied directly by an Internet client.
 
 Infrastructure failures return typed retryable `500` or `503` responses. Retry
 mutations with the original idempotency key; never manufacture a new key after
 an ambiguous timeout.
+
+The 0.1.3 HTTP routes, payloads, execution-state union, decimal cursor handling
+and typed client signatures are unchanged from 0.1.2. The added
+`bedrock-iam` provider and ECS task-local runner are Worker deployment options;
+they add no Builder-visible contract and do not interpret opaque references.
+
+For the supported Fargate runner, minimum IAM and network layout, see
+`docs/CONTROL-PLANE-AWS.md`.

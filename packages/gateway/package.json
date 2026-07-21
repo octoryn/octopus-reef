@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1085.0",
-    "@octopus-reef/agent": "^0.2.1",
+    "@octopus-reef/agent": "^0.2.3",
     "@octopus-reef/commercial": "^0.1.0",
     "octopus-evidence": "^0.2.0",
     "pg": "^8.16.3"

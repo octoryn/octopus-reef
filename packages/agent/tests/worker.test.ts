@@ -26,7 +26,9 @@ import {
 import {
   AgentWorker,
   AnthropicProvider,
+  BedrockIamProvider,
   BedrockProvider,
+  mapBedrockIamResponse,
   ProviderError,
   type AgentWorkerCheckpoint,
   type CompletionRequest,
@@ -383,6 +385,28 @@ test("BedrockProvider builds an Anthropic-on-Bedrock request and parses tool_use
   };
   assert.equal(body.anthropic_version, "bedrock-2023-05-31");
   assert.deepEqual(body.tools[0]?.input_schema, { type: "object" });
+});
+
+test("BedrockIamProvider shares the normalized provider seam without a token", () => {
+  const provider = new BedrockIamProvider({
+    model: "us.example.model",
+    region: "us-west-2",
+  });
+  assert.equal(provider.name, "bedrock-iam");
+  const response = mapBedrockIamResponse(
+    {
+      content: [
+        { type: "text", text: "ok" },
+        { type: "tool_use", id: "tool", name: "read_file", input: {} },
+      ],
+      stop_reason: "tool_use",
+      usage: { input_tokens: 7, output_tokens: 11 },
+    },
+    "us.example.model",
+  );
+  assert.equal(response.content.length, 2);
+  assert.equal(response.usage?.provider, "bedrock-iam");
+  assert.equal(response.usage?.totalTokens, 18);
 });
 
 test("AnthropicProvider builds a Messages request and normalizes token usage (injected fetch)", async () => {

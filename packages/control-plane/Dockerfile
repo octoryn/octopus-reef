@@ -44,7 +44,14 @@ ENV NODE_ENV=production \
     REEF_CONTROL_PLANE_PORT=8080
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git \
+    && apt-get install -y --no-install-recommends ca-certificates curl git \
+    && curl --fail --silent --show-error --location \
+      https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+      --output /etc/ssl/certs/aws-rds-global-bundle.pem \
+    && echo "e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3  /etc/ssl/certs/aws-rds-global-bundle.pem" | sha256sum --check --strict \
+    && chmod 0444 /etc/ssl/certs/aws-rds-global-bundle.pem \
+    && mkdir -p /workspace \
+    && chown node:node /workspace \
     && apt-get clean \
     && find /var/lib/apt/lists -mindepth 1 -delete
 
@@ -75,3 +82,12 @@ CMD ["api"]
 FROM runtime-base AS worker
 HEALTHCHECK NONE
 CMD ["worker"]
+
+FROM runtime-base AS sandbox
+ENV REEF_SANDBOX_HOST=0.0.0.0 \
+    REEF_SANDBOX_PORT=8081 \
+    REEF_SANDBOX_WORKSPACE=/workspace
+EXPOSE 8081
+ENTRYPOINT ["node", "/app/packages/control-plane/dist/sandbox-runner.js"]
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.REEF_SANDBOX_PORT||8081)+'/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

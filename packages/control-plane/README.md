@@ -51,17 +51,28 @@ reconnect/deduplication, typed execution states, candidate
 `diffRef`/`testRef`/`evidenceRefs`, and typed protocol/network/HTTP failures.
 Creation pins an opaque immutable `baselineRevisionRef`.
 
-The immutable API and Worker images use `reef-control-plane api` and
-`reef-control-plane worker`; `serve` remains an API alias.
+The immutable API, Worker and sandbox images use `reef-control-plane api`,
+`reef-control-plane worker`, and `reef-sandbox-runner`; `serve` remains an API
+alias.
 `reef-control-plane migrate` applies schema migrations without starting HTTP.
 The API exposes liveness at `/healthz` and database/schema readiness at
 `/readyz`. Pin each image by its separate digest in the matching GitHub Release.
 
 The Worker entrypoint wires PostgreSQL/SQS queues, env/Secrets Manager secrets,
 local/S3 artifacts, local/Docker/ECS sandboxes, Git worktrees, and the existing
-Anthropic/Bedrock `ModelProvider` implementations. PostgreSQL accepts an RDS CA
-bundle with `REEF_CONTROL_PLANE_DATABASE_SSL_MODE=verify-full` and
-`REEF_CONTROL_PLANE_DATABASE_CA_FILE` or `_CA_BASE64`.
+Anthropic, Bedrock bearer-token and Bedrock IAM/SigV4 `ModelProvider`
+implementations. `bedrock-iam` uses the Fargate task role and requires no model
+credential `secretRef`. Every official image includes the checksum-pinned AWS
+RDS global CA bundle at `/etc/ssl/certs/aws-rds-global-bundle.pem`; setting
+`REEF_CONTROL_PLANE_DATABASE_SSL_MODE=verify-full` uses that fixed path unless
+an explicit CA file/base64 override is supplied.
+
+The ECS adapter defaults to the private HTTP runner inside each sandbox task;
+it no longer requires `REEF_ECS_COMMAND_ENDPOINT`. Configure a Worker-only
+`REEF_ECS_RUNNER_SHARED_SECRET`, task definition, private subnets and sandbox
+security group. The legacy external bridge endpoint remains supported for
+existing deployments. See `docs/CONTROL-PLANE-AWS.md` for the task definition,
+network isolation and minimum IAM policy.
 
 Compatibility and a remote deployment example are documented in
 `docs/CONTROL-PLANE-COMPATIBILITY.md`.

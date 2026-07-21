@@ -1,6 +1,6 @@
 {
   "name": "@octopus-reef/agent",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Reef's own agentic coding worker: the read/edit/run-tests/iterate loop is ours, the LLM is rented through a swappable provider seam (Bedrock included, no SDK lock-in). A worker that does real work AND is independently provable.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",
@@ -21,5 +21,8 @@
   "dependencies": {
     "@octopus-reef/engine": "^0.2.1",
     "octopus-evidence": "^0.2.0"
+  },
+  "optionalDependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1085.0"
   }
 }

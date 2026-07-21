@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import {
   ChangeMessageVisibilityCommand,
   DeleteMessageCommand,
@@ -11,6 +11,7 @@ import {
   ECSClient,
   RunTaskCommand,
   StopTaskCommand,
+  type Task,
 } from "@aws-sdk/client-ecs";
 import {
   GetObjectCommand,
@@ -302,7 +303,13 @@ export interface EcsSandboxCommandExecutor {
   execute(
     taskArn: string,
     command: SandboxExecution,
+    context?: EcsSandboxCommandContext,
   ): Promise<SandboxExecutionResult>;
+  ready?(taskArn: string, context?: EcsSandboxCommandContext): Promise<void>;
+}
+
+export interface EcsSandboxCommandContext {
+  readonly authToken?: string;
 }
 
 export interface HttpEcsSandboxCommandExecutorOptions {
@@ -323,35 +330,97 @@ export class HttpEcsSandboxCommandExecutor implements EcsSandboxCommandExecutor 
   async execute(
     taskArn: string,
     command: SandboxExecution,
+    context: EcsSandboxCommandContext = {},
   ): Promise<SandboxExecutionResult> {
-    const response = await (this.#options.fetchImpl ?? fetch)(
+    return executeSandboxRequest(
+      this.#options.fetchImpl ?? fetch,
       this.#options.endpoint,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(this.#options.bearerToken !== undefined
-            ? { Authorization: `Bearer ${this.#options.bearerToken}` }
-            : {}),
-        },
-        body: JSON.stringify({ taskArn, command }),
-        ...(command.timeoutMs !== undefined
-          ? { signal: AbortSignal.timeout(command.timeoutMs) }
-          : {}),
-      },
+      { taskArn, command },
+      this.#options.bearerToken ?? context.authToken,
+      command.timeoutMs,
     );
-    const body = (await response.json()) as Partial<SandboxExecutionResult>;
-    if (
-      !response.ok ||
-      typeof body.exitCode !== "number" ||
-      typeof body.stdout !== "string" ||
-      typeof body.stderr !== "string"
-    ) {
-      throw new Error(
-        `ECS sandbox command bridge failed: ${response.status} ${JSON.stringify(body).slice(0, 500)}`,
+  }
+}
+
+export interface AwsEcsTaskHttpCommandExecutorOptions {
+  readonly cluster: string;
+  readonly client?: ECSClient;
+  readonly port?: number;
+  readonly path?: string;
+  readonly scheme?: "http" | "https";
+  readonly fetchImpl?: typeof fetch;
+  readonly readyTimeoutMs?: number;
+  readonly pollMs?: number;
+}
+
+/** Connects the Worker directly to the private command runner in each task. */
+export class AwsEcsTaskHttpCommandExecutor implements EcsSandboxCommandExecutor {
+  readonly #options: AwsEcsTaskHttpCommandExecutorOptions;
+  readonly #client: ECSClient;
+
+  constructor(options: AwsEcsTaskHttpCommandExecutorOptions) {
+    this.#options = options;
+    this.#client = options.client ?? new ECSClient({});
+  }
+
+  async execute(
+    taskArn: string,
+    command: SandboxExecution,
+    context: EcsSandboxCommandContext = {},
+  ): Promise<SandboxExecutionResult> {
+    const endpoint = await this.#endpoint(taskArn);
+    return executeSandboxRequest(
+      this.#options.fetchImpl ?? fetch,
+      endpoint,
+      { command },
+      context.authToken,
+      command.timeoutMs,
+    );
+  }
+
+  async ready(
+    taskArn: string,
+    _context: EcsSandboxCommandContext = {},
+  ): Promise<void> {
+    const deadline = Date.now() + (this.#options.readyTimeoutMs ?? 60_000);
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      try {
+        const endpoint = await this.#endpoint(taskArn);
+        const readyUrl = new URL(endpoint);
+        readyUrl.pathname = "/readyz";
+        const response = await (this.#options.fetchImpl ?? fetch)(readyUrl, {
+          signal: AbortSignal.timeout(2_000),
+        });
+        if (response.ok) return;
+        lastError = new Error(`sandbox runner readiness ${response.status}`);
+      } catch (error) {
+        lastError = error;
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, this.#options.pollMs ?? 500),
       );
     }
-    return body as SandboxExecutionResult;
+    throw new Error(
+      `sandbox runner did not become ready: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    );
+  }
+
+  async #endpoint(taskArn: string): Promise<string> {
+    const result = await this.#client.send(
+      new DescribeTasksCommand({
+        cluster: this.#options.cluster,
+        tasks: [taskArn],
+      }),
+    );
+    const task = result.tasks?.[0];
+    if (task?.lastStatus !== "RUNNING") {
+      throw new Error(
+        `ECS sandbox is not running: ${task?.lastStatus ?? "missing"}`,
+      );
+    }
+    const address = ecsPrivateIpv4(task);
+    return `${this.#options.scheme ?? "http"}://${address}:${this.#options.port ?? 8081}${this.#options.path ?? "/v1/execute"}`;
   }
 }
 
@@ -368,6 +437,12 @@ export interface AwsEcsSandboxOptions {
   readonly pollMs?: number;
   /** Shared EFS mount path visible to both worker and sandbox tasks. */
   readonly workspaceRoot?: string;
+  /** HMAC source used to derive one stable bearer token per AgentRun attempt. */
+  readonly runnerSharedSecret?: string;
+  /** Workspace path inside the sandbox task/container. */
+  readonly runnerWorkspacePath?: string;
+  /** Legacy bridge deployments may opt into ECS Exec; direct runners do not. */
+  readonly enableExecuteCommand?: boolean;
 }
 
 class EcsSandboxHandle implements SandboxHandle {
@@ -375,13 +450,18 @@ class EcsSandboxHandle implements SandboxHandle {
     readonly id: string,
     readonly workspacePath: string,
     private readonly executor: EcsSandboxCommandExecutor,
+    private readonly authToken: string | undefined,
   ) {}
 
   execute(command: SandboxExecution): Promise<SandboxExecutionResult> {
-    return this.executor.execute(this.id, {
-      ...command,
-      env: { ...command.env, AWS_EC2_METADATA_DISABLED: "true" },
-    });
+    return this.executor.execute(
+      this.id,
+      {
+        ...command,
+        env: { ...command.env, AWS_EC2_METADATA_DISABLED: "true" },
+      },
+      this.authToken === undefined ? {} : { authToken: this.authToken },
+    );
   }
 }
 
@@ -396,6 +476,14 @@ export class AwsEcsFargateSandboxProvisioner implements SandboxProvisioner {
     if (options.securityGroups.length === 0) {
       throw new Error("a deny-by-default sandbox security group is required");
     }
+    if (
+      options.runnerSharedSecret !== undefined &&
+      Buffer.byteLength(options.runnerSharedSecret, "utf8") < 32
+    ) {
+      throw new Error(
+        "ECS runner shared secret must contain at least 32 bytes",
+      );
+    }
     this.#options = options;
     this.#client = options.client ?? new ECSClient({});
   }
@@ -405,6 +493,7 @@ export class AwsEcsFargateSandboxProvisioner implements SandboxProvisioner {
       this.#options.workspaceRoot ?? "/workspace",
       spec,
     );
+    const authToken = sandboxAuthToken(this.#options.runnerSharedSecret, spec);
     const started = await this.#client.send(
       new RunTaskCommand({
         cluster: this.#options.cluster,
@@ -412,7 +501,7 @@ export class AwsEcsFargateSandboxProvisioner implements SandboxProvisioner {
         launchType: "FARGATE",
         platformVersion: this.#options.platformVersion ?? "LATEST",
         count: 1,
-        enableExecuteCommand: true,
+        enableExecuteCommand: this.#options.enableExecuteCommand ?? false,
         networkConfiguration: {
           awsvpcConfiguration: {
             subnets: [...this.#options.subnets],
@@ -431,6 +520,13 @@ export class AwsEcsFargateSandboxProvisioner implements SandboxProvisioner {
                 { name: "REEF_RUN_ID", value: spec.runId },
                 { name: "REEF_PROJECT_REF", value: spec.projectRef },
                 { name: "REEF_WORKSPACE_PATH", value: workspacePath },
+                {
+                  name: "REEF_SANDBOX_WORKSPACE",
+                  value: this.#options.runnerWorkspacePath ?? "/workspace",
+                },
+                ...(authToken === undefined
+                  ? []
+                  : [{ name: "REEF_SANDBOX_AUTH_TOKEN", value: authToken }]),
               ],
             },
           ],
@@ -449,10 +545,15 @@ export class AwsEcsFargateSandboxProvisioner implements SandboxProvisioner {
       );
     }
     await this.#waitUntilRunning(taskArn);
+    await this.#options.commandExecutor.ready?.(
+      taskArn,
+      authToken === undefined ? {} : { authToken },
+    );
     return new EcsSandboxHandle(
       taskArn,
       workspacePath,
       this.#options.commandExecutor,
+      authToken,
     );
   }
 
@@ -467,10 +568,16 @@ export class AwsEcsFargateSandboxProvisioner implements SandboxProvisioner {
       }),
     );
     if (result.tasks?.[0]?.lastStatus !== "RUNNING") return undefined;
+    const authToken = sandboxAuthToken(this.#options.runnerSharedSecret, _spec);
+    await this.#options.commandExecutor.ready?.(
+      sandboxId,
+      authToken === undefined ? {} : { authToken },
+    );
     return new EcsSandboxHandle(
       sandboxId,
       ecsWorkspacePath(this.#options.workspaceRoot ?? "/workspace", _spec),
       this.#options.commandExecutor,
+      authToken,
     );
   }
 
@@ -506,6 +613,71 @@ export class AwsEcsFargateSandboxProvisioner implements SandboxProvisioner {
     }
     throw new Error(`timed out waiting for ECS sandbox ${taskArn}`);
   }
+}
+
+async function executeSandboxRequest(
+  fetchImpl: typeof fetch,
+  endpoint: string,
+  payload: unknown,
+  bearerToken: string | undefined,
+  timeoutMs: number | undefined,
+): Promise<SandboxExecutionResult> {
+  const response = await fetchImpl(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(bearerToken !== undefined
+        ? { Authorization: `Bearer ${bearerToken}` }
+        : {}),
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(timeoutMs ?? 15 * 60_000),
+  });
+  const body = (await response.json()) as Partial<SandboxExecutionResult> & {
+    readonly error?: unknown;
+  };
+  if (
+    !response.ok ||
+    typeof body.exitCode !== "number" ||
+    typeof body.stdout !== "string" ||
+    typeof body.stderr !== "string"
+  ) {
+    throw new Error(
+      `ECS sandbox command bridge failed: ${response.status} ${JSON.stringify(body).slice(0, 500)}`,
+    );
+  }
+  return body as SandboxExecutionResult;
+}
+
+function ecsPrivateIpv4(task: Task): string {
+  for (const attachment of task.attachments ?? []) {
+    const address = attachment.details?.find(
+      (detail) => detail.name === "privateIPv4Address",
+    )?.value;
+    if (address !== undefined && address !== "") return address;
+  }
+  for (const container of task.containers ?? []) {
+    const address = container.networkInterfaces?.[0]?.privateIpv4Address;
+    if (address !== undefined && address !== "") return address;
+  }
+  throw new Error("ECS sandbox task has no private IPv4 address");
+}
+
+function sandboxAuthToken(
+  sharedSecret: string | undefined,
+  spec: SandboxSpec,
+): string | undefined {
+  if (sharedSecret === undefined) return undefined;
+  return createHmac("sha256", sharedSecret)
+    .update(
+      [
+        spec.organisationId,
+        spec.projectId,
+        spec.runId,
+        String(spec.attempt),
+      ].join("\0"),
+    )
+    .digest("base64url");
 }
 
 function parseQueueMessage(body: string): QueueMessage {
