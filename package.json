@@ -25,16 +25,17 @@
     "packages/cli",
     "packages/web",
     "packages/ide",
-    "packages/control-plane"
+    "packages/control-plane",
+    "packages/verification"
   ],
   "scripts": {
-    "build": "tsc -b packages/engine packages/protocol packages/driver-claude packages/agent packages/adapter-runtime packages/adapter-observe packages/adapter-blackboard packages/adapter-experience packages/adapter-scout packages/control-plane packages/commercial packages/gateway packages/server packages/cli",
+    "build": "tsc -b packages/engine packages/protocol packages/driver-claude packages/agent packages/adapter-runtime packages/adapter-observe packages/adapter-blackboard packages/adapter-experience packages/adapter-scout packages/control-plane packages/verification packages/commercial packages/gateway packages/server packages/cli",
     "build:web": "npm run build --workspace @octopus-reef/web",
     "build:ide": "npm run build --workspace @octopus-reef/commercial && npm run build --workspace @octopus-reef/ide",
-    "typecheck": "tsc -b packages/engine packages/protocol packages/driver-claude packages/agent packages/adapter-runtime packages/adapter-observe packages/adapter-blackboard packages/adapter-experience packages/adapter-scout packages/control-plane packages/commercial packages/gateway packages/server packages/cli",
+    "typecheck": "tsc -b packages/engine packages/protocol packages/driver-claude packages/agent packages/adapter-runtime packages/adapter-observe packages/adapter-blackboard packages/adapter-experience packages/adapter-scout packages/control-plane packages/verification packages/commercial packages/gateway packages/server packages/cli",
     "typecheck:web": "tsc --noEmit -p packages/web",
     "typecheck:ide": "npm run typecheck --workspace @octopus-reef/commercial && tsc --noEmit -p packages/ide",
-    "test": "node --import tsx --test packages/engine/tests/*.test.ts packages/driver-claude/tests/*.test.ts packages/agent/tests/*.test.ts packages/adapter-runtime/tests/*.test.ts packages/adapter-observe/tests/*.test.ts packages/adapter-blackboard/tests/*.test.ts packages/adapter-experience/tests/*.test.ts packages/adapter-scout/tests/*.test.ts packages/control-plane/tests/*.test.ts packages/gateway/tests/*.test.ts packages/server/tests/*.test.ts packages/cli/tests/*.test.ts packages/web/tests/*.test.ts packages/ide/tests/*.test.ts",
+    "test": "node --import tsx --test packages/engine/tests/*.test.ts packages/driver-claude/tests/*.test.ts packages/agent/tests/*.test.ts packages/adapter-runtime/tests/*.test.ts packages/adapter-observe/tests/*.test.ts packages/adapter-blackboard/tests/*.test.ts packages/adapter-experience/tests/*.test.ts packages/adapter-scout/tests/*.test.ts packages/control-plane/tests/*.test.ts packages/verification/tests/*.test.ts packages/gateway/tests/*.test.ts packages/server/tests/*.test.ts packages/cli/tests/*.test.ts packages/web/tests/*.test.ts packages/ide/tests/*.test.ts",
     "format": "prettier --write \"packages/*/src/**/*.{ts,tsx}\" \"packages/*/tests/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"packages/*/src/**/*.{ts,tsx}\" \"packages/*/tests/**/*.{ts,tsx}\"",
     "lint": "eslint packages",
@@ -42,7 +43,7 @@
     "bench": "tsx bench/run.mts",
     "bench:validate": "tsx bench/validate.mts",
     "verify:all": "npm run typecheck && npm run typecheck:web && npm run typecheck:ide && npm run format:check && npm run lint && npm test && npm run build && npm run build:web && npm run build:ide",
-    "release:smoke": "npm pack --dry-run --workspace @octopus-reef/protocol --workspace @octopus-reef/engine --workspace @octopus-reef/driver-claude --workspace @octopus-reef/agent --workspace @octopus-reef/control-plane --workspace @octopus-reef/adapter-runtime --workspace @octopus-reef/adapter-observe --workspace @octopus-reef/adapter-blackboard --workspace @octopus-reef/adapter-experience --workspace @octopus-reef/adapter-scout"
+    "release:smoke": "npm pack --dry-run --workspace @octopus-reef/protocol --workspace @octopus-reef/engine --workspace @octopus-reef/driver-claude --workspace @octopus-reef/agent --workspace @octopus-reef/control-plane --workspace @octopus-reef/verification --workspace @octopus-reef/adapter-runtime --workspace @octopus-reef/adapter-observe --workspace @octopus-reef/adapter-blackboard --workspace @octopus-reef/adapter-experience --workspace @octopus-reef/adapter-scout"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
