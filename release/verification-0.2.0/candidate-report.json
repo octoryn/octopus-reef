@@ -1,0 +1,160 @@
+{
+  "schemaVersion": "reef.verification-candidate-report.v1",
+  "decision": "READY_FOR_INDEPENDENT_AUDIT",
+  "implementationCommit": "09c97ac66b4a65021a6ac05997c9eac271bbac6d",
+  "recoveredFromCommit": "5d73dd32bcf00393ab359c38e165bac86d62e942",
+  "preparedAt": "2026-07-22T23:55:01Z",
+  "releaseIdentity": {
+    "publicPackage": "@octopus-reef/control-plane@0.2.0",
+    "formalRuntimePackage": "@octopus-reef/verification@0.2.0",
+    "gitTag": "control-plane-v0.2.0",
+    "api": "/v1/verifications"
+  },
+  "historicalBaseline": {
+    "decision": "NO-GO",
+    "retainedAsAuditEvidence": true,
+    "note": "The prior independent ten-item NO-GO remains historical evidence. This report is the implementation owner's closure claim, not an independent GO."
+  },
+  "prepublishGates": {
+    "passed": true,
+    "command": "npm run verify:all && npm run release:smoke && node scripts/verification-prepublish-gate.mjs",
+    "fullSourceTests": {
+      "tests": 224,
+      "passed": 218,
+      "failed": 0,
+      "skipped": 6,
+      "note": "The six environment-gated integrations were executed separately with real PostgreSQL and Docker."
+    },
+    "dependencyAudit": {
+      "high": 0,
+      "critical": 0
+    },
+    "migrationSetDigest": "sha256:31ce57261255474ff4bda0bee336264347a222289058c7a3fa83104284477098"
+  },
+  "realPostgresTests": {
+    "passed": true,
+    "tests": 23,
+    "failed": 0,
+    "skipped": 0,
+    "coverage": [
+      "concurrent migration serialization",
+      "restart recovery",
+      "duplicate delivery",
+      "lease takeover and fencing",
+      "tenant isolation"
+    ]
+  },
+  "isolatedDockerTests": {
+    "passed": true,
+    "sandboxImage": "sha256:aa69ac5d77a4bd8a8613a7191609aeb5f3af9153ea6c84a4a057ef9cc99218ef",
+    "localPlatform": "linux/arm64",
+    "tests": 1,
+    "failed": 0,
+    "skipped": 0,
+    "durationMs": 41098,
+    "coverage": [
+      "real Next.js production build and tests",
+      "real FastAPI dependency install and pytest",
+      "real PostgreSQL migration repetition and idempotency",
+      "live application health",
+      "offline high-severity dependency policy"
+    ]
+  },
+  "cleanPackageInstall": {
+    "passed": true,
+    "verification": {
+      "shasum": "db535d2794c1510531f87e7530cd996eb25f4000",
+      "integrity": "sha512-+8rFWGGjR3yr3GI/F0lMFcyQhZShYzaCVMt8PMsugfH6mXuLlUKSPtMWbQw9F53GH6YCgir5y/gUduUFMElxWA=="
+    },
+    "controlPlane": {
+      "shasum": "00bf6f96c1e67048a7b7293529d5efcba1601955",
+      "integrity": "sha512-hbZAVzX8w40Vc+Y8Q0iaejv5KYfa9GrABloWDUqzguJd7RzywSCftfJ6EiRozd7lKCzrhtks7s7exi2kaU/wEQ=="
+    },
+    "clientMethods": [
+      "createRun",
+      "getRun",
+      "streamRunEvents",
+      "retryRun",
+      "cancelRun",
+      "resolveEvidence"
+    ]
+  },
+  "baselineClosure": [
+    {
+      "gate": "release identity and compatibility",
+      "status": "implemented",
+      "evidence": "Exact control-plane 0.2.0 dependency and verification subpath exports; release workflow is single-owner and fail-closed."
+    },
+    {
+      "gate": "versioned API and typed client",
+      "status": "implemented",
+      "evidence": "Strict /v1/verifications create/get/stream/retry/cancel plus runtime response validation."
+    },
+    {
+      "gate": "identity, tenant, idempotency and SSE",
+      "status": "implemented",
+      "evidence": "Verified RS256 workload principal binding, exact keys and identity tuple, decimal cursor, terminal EOF tests."
+    },
+    {
+      "gate": "trusted profile boundary",
+      "status": "implemented",
+      "evidence": "No caller command/cwd/env/credential surface; exact server profile with immutable image and canonical digest."
+    },
+    {
+      "gate": "PostgreSQL durability and recovery",
+      "status": "implemented",
+      "evidence": "Real concurrent migration, queue/outbox, lease, fencing, checkpoint, duplicate-delivery and restart tests."
+    },
+    {
+      "gate": "required coverage and verdict semantics",
+      "status": "implemented",
+      "evidence": "Required test failure completes with failed verdict; infrastructure failures alone use operational failed."
+    },
+    {
+      "gate": "octopus-evidence store-untrusting contract",
+      "status": "implemented",
+      "evidence": "Real Evidence creation/verification and independent digest/integrity recomputation on store resolution and client receipt."
+    },
+    {
+      "gate": "immutable images and entrypoints",
+      "status": "workflow-gated",
+      "evidence": "Non-root migrate/api/worker targets; release workflow publishes and verifies exact amd64/arm64 manifests."
+    },
+    {
+      "gate": "real generated bundle",
+      "status": "implemented",
+      "evidence": "Next.js/FastAPI/PostgreSQL Golden Stack passes isolated Docker and real Compose acceptance."
+    },
+    {
+      "gate": "atomic release, provenance, SBOM and scans",
+      "status": "workflow-gated",
+      "evidence": "Irreversible publication requires this report, full preflight, scans, SBOM, provenance, immutable digests and a draft Release; final Release requires independent GO."
+    }
+  ],
+  "knownUnverified": [
+    {
+      "id": "public-candidate-not-published",
+      "scope": "registry, Git tag, GHCR manifests and GitHub draft Release",
+      "reason": "Publication is intentionally prohibited until the environment-protected irreversible workflow is approved.",
+      "releaseGate": "Independent black-box audit must verify the published candidate by registry/tag/digest before finalization."
+    },
+    {
+      "id": "multiarch-and-supply-chain-workflow-not-executed",
+      "scope": "linux/amd64 and linux/arm64 manifests, registry SBOM, provenance and Trivy image scans",
+      "reason": "The Mac Studio local proof is linux/arm64; these checks require the protected GitHub release workflow.",
+      "releaseGate": "The workflow fails before npm publication and draft Release creation if any required platform, scan, SBOM or attestation step fails."
+    },
+    {
+      "id": "production-cloud-adapters-not-exercised",
+      "scope": "AWS ECS, S3, SQS and Secrets Manager deployment",
+      "reason": "Production and AWS were deliberately not touched.",
+      "releaseGate": "No production deployment is authorized by this candidate report."
+    },
+    {
+      "id": "moderate-unrelated-mcp-advisories",
+      "scope": "octopus-blackboard/octopus-experience transitive @hono/node-server on Windows",
+      "reason": "npm reports four moderate GHSA-frvp-7c67-39w9 paths with no fix available; they are outside the Verification runtime and Linux release images.",
+      "releaseGate": "The complete dependency tree has zero HIGH and zero CRITICAL findings; source and image Trivy HIGH/CRITICAL gates remain mandatory."
+    }
+  ]
+}
