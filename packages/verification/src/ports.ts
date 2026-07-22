@@ -29,8 +29,7 @@ export interface VerificationDispatchInput {
 }
 
 export interface VerificationOutboxRecord
-  extends VerificationTenant,
-    VerificationDispatchInput {
+  extends VerificationTenant, VerificationDispatchInput {
   readonly id: string;
   readonly runRef: string;
   readonly deliveryAttempts: number;
@@ -153,10 +152,7 @@ export interface SourceBundleStore {
     tenant: VerificationTenant,
     sourceBundleRef: string,
   ): Promise<SourceBundleDescriptor>;
-  content(
-    tenant: VerificationTenant,
-    contentRef: string,
-  ): Promise<Uint8Array>;
+  content(tenant: VerificationTenant, contentRef: string): Promise<Uint8Array>;
 }
 
 export interface SourceBundleMaterializer {
@@ -175,10 +171,7 @@ export interface VerificationArtifactStore {
     mediaType: string,
     content: Uint8Array,
   ): Promise<VerificationArtifact>;
-  get(
-    tenant: VerificationTenant,
-    ref: string,
-  ): Promise<Uint8Array | undefined>;
+  get(tenant: VerificationTenant, ref: string): Promise<Uint8Array | undefined>;
 }
 
 export interface VerificationEvidenceStore {
@@ -190,8 +183,7 @@ export interface VerificationEvidenceStore {
     tenant: VerificationTenant,
     ref: string,
   ): Promise<
-    | { readonly evidence: Evidence; readonly digest: string }
-    | undefined
+    { readonly evidence: Evidence; readonly digest: string } | undefined
   >;
 }
 
@@ -206,4 +198,7 @@ export interface VerificationSecretResolver {
   ): Promise<Readonly<Record<string, string>>>;
 }
 
-export { type TrustedVerificationProfileRegistry, type TrustedVerificationProfile };
+export {
+  type TrustedVerificationProfileRegistry,
+  type TrustedVerificationProfile,
+};

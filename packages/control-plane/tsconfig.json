@@ -8,7 +8,8 @@
     { "path": "../engine" },
     { "path": "../protocol" },
     { "path": "../agent" },
-    { "path": "../adapter-runtime" }
+    { "path": "../adapter-runtime" },
+    { "path": "../verification" }
   ],
   "include": ["src/**/*.ts"]
 }

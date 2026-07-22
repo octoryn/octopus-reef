@@ -1,0 +1,26 @@
+[
+  {
+    "ref": "verification-profile:release-smoke",
+    "version": "0.2.0",
+    "sandboxImageDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "maxDurationMs": 60000,
+    "maxChecks": 1,
+    "checks": [
+      {
+        "checkRef": "runtime-smoke",
+        "required": true,
+        "argv": ["node", "--version"],
+        "workingDirectory": ".",
+        "timeoutMs": 30000,
+        "outputLimitBytes": 65536,
+        "environment": {},
+        "tool": {
+          "name": "node",
+          "version": "22.17.1",
+          "imageDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    ],
+    "digest": "sha256:a1de225210f7fb9e6e16ad76f6570bd58d3056721806e0b84abf43c645b292f5"
+  }
+]

@@ -37,7 +37,7 @@ export class LocalSourceBundleStore implements SourceBundleStore {
     this.#root = realpathSync(root);
   }
 
-  descriptor(
+  async descriptor(
     tenant: VerificationTenant,
     sourceBundleRef: string,
   ): Promise<SourceBundleDescriptor> {
@@ -48,14 +48,22 @@ export class LocalSourceBundleStore implements SourceBundleStore {
       hash(sourceBundleRef),
       "descriptor.json",
     );
-    return Promise.resolve(
-      JSON.parse(readFileSync(confined(this.#root, path), "utf8")) as SourceBundleDescriptor,
-    );
+    return JSON.parse(
+      readRegularFile(this.#root, path).toString("utf8"),
+    ) as SourceBundleDescriptor;
   }
 
-  content(tenant: VerificationTenant, contentRef: string): Promise<Uint8Array> {
-    const path = join(this.#root, tenantHash(tenant), "objects", hash(contentRef));
-    return Promise.resolve(Uint8Array.from(readFileSync(confined(this.#root, path))));
+  async content(
+    tenant: VerificationTenant,
+    contentRef: string,
+  ): Promise<Uint8Array> {
+    const path = join(
+      this.#root,
+      tenantHash(tenant),
+      "objects",
+      hash(contentRef),
+    );
+    return Uint8Array.from(readRegularFile(this.#root, path));
   }
 }
 
@@ -79,12 +87,23 @@ export class LocalVerificationArtifactStore implements VerificationArtifactStore
     const path = join(this.#root, tenantHash(tenant), "artifacts", hash(ref));
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     writeContentAddressed(path, content);
-    return Promise.resolve({ ref, digest, kind, mediaType, size: content.byteLength });
+    return Promise.resolve({
+      ref,
+      digest,
+      kind,
+      mediaType,
+      size: content.byteLength,
+    });
   }
 
-  get(tenant: VerificationTenant, ref: string): Promise<Uint8Array | undefined> {
+  get(
+    tenant: VerificationTenant,
+    ref: string,
+  ): Promise<Uint8Array | undefined> {
     const path = join(this.#root, tenantHash(tenant), "artifacts", hash(ref));
-    return Promise.resolve(existsSync(path) ? Uint8Array.from(readFileSync(path)) : undefined);
+    return Promise.resolve(
+      existsSync(path) ? Uint8Array.from(readFileSync(path)) : undefined,
+    );
   }
 }
 
@@ -106,7 +125,10 @@ export class LocalVerificationEvidenceStore implements VerificationEvidenceStore
     const path = join(this.#root, tenantHash(tenant), "evidence", hash(ref));
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     if (!existsSync(path)) {
-      writeFileSync(path, JSON.stringify({ evidence, digest }), { mode: 0o600, flag: "wx" });
+      writeFileSync(path, JSON.stringify({ evidence, digest }), {
+        mode: 0o600,
+        flag: "wx",
+      });
     }
     return Promise.resolve({ ref, digest });
   }
@@ -118,7 +140,10 @@ export class LocalVerificationEvidenceStore implements VerificationEvidenceStore
     const path = join(this.#root, tenantHash(tenant), "evidence", hash(ref));
     if (!existsSync(path)) return Promise.resolve(undefined);
     return Promise.resolve(
-      JSON.parse(readFileSync(path, "utf8")) as { evidence: Evidence; digest: string },
+      JSON.parse(readFileSync(path, "utf8")) as {
+        evidence: Evidence;
+        digest: string;
+      },
     );
   }
 }
@@ -141,10 +166,13 @@ export class EnvironmentProfileSecretResolver implements VerificationSecretResol
     const resolved: Record<string, string> = {};
     for (const binding of bindings) {
       if (!binding.secretRef.startsWith("env:")) {
-        throw new Error(`unsupported profile-owned secretRef: ${binding.secretRef}`);
+        throw new Error(
+          `unsupported profile-owned secretRef: ${binding.secretRef}`,
+        );
       }
       const sourceName = binding.secretRef.slice(4);
-      if (!/^[A-Z][A-Z0-9_]*$/.test(sourceName)) throw new Error("invalid env secretRef");
+      if (!/^[A-Z][A-Z0-9_]*$/.test(sourceName))
+        throw new Error("invalid env secretRef");
       const value = this.#environment[sourceName];
       if (value === undefined || value === "") {
         throw new Error(`profile secret is unavailable: ${binding.name}`);
@@ -155,9 +183,7 @@ export class EnvironmentProfileSecretResolver implements VerificationSecretResol
   }
 }
 
-export class LocalVerificationSandboxProvisioner
-  implements VerificationSandboxProvisioner
-{
+export class LocalVerificationSandboxProvisioner implements VerificationSandboxProvisioner {
   readonly #root: string;
 
   constructor(root: string) {
@@ -169,9 +195,15 @@ export class LocalVerificationSandboxProvisioner
     spec: VerificationSandboxSpec,
     _signal: AbortSignal,
   ): Promise<VerificationSandbox> {
-    const workspace = join(this.#root, tenantHash(spec), hash(`${spec.runRef}\0${spec.attempt}`));
+    const workspace = join(
+      this.#root,
+      tenantHash(spec),
+      hash(`${spec.runRef}\0${spec.attempt}`),
+    );
     mkdirSync(workspace, { recursive: true, mode: 0o700 });
-    return Promise.resolve(new LocalVerificationSandbox(`local:${hash(workspace)}`, workspace));
+    return Promise.resolve(
+      new LocalVerificationSandbox(`local:${hash(workspace)}`, workspace),
+    );
   }
 
   restore(
@@ -179,7 +211,11 @@ export class LocalVerificationSandboxProvisioner
     sandboxRef: string,
     _signal: AbortSignal,
   ): Promise<VerificationSandbox | undefined> {
-    const workspace = join(this.#root, tenantHash(spec), hash(`${spec.runRef}\0${spec.attempt}`));
+    const workspace = join(
+      this.#root,
+      tenantHash(spec),
+      hash(`${spec.runRef}\0${spec.attempt}`),
+    );
     return Promise.resolve(
       existsSync(workspace)
         ? new LocalVerificationSandbox(sandboxRef, workspace)
@@ -203,7 +239,11 @@ class LocalVerificationSandbox implements VerificationSandbox {
     this.workspacePath = realpathSync(workspacePath);
   }
 
-  writeFile(path: string, content: Uint8Array, signal: AbortSignal): Promise<void> {
+  writeFile(
+    path: string,
+    content: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<void> {
     abort(signal);
     const target = safeWorkspacePath(this.workspacePath, path, false);
     mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
@@ -217,8 +257,19 @@ class LocalVerificationSandbox implements VerificationSandbox {
     environment: Readonly<Record<string, string>>,
     signal: AbortSignal,
   ): Promise<VerificationCommandResult> {
-    const cwd = safeWorkspacePath(this.workspacePath, check.workingDirectory, true);
-    return spawnBounded(check.argv, cwd, environment, check.timeoutMs, check.outputLimitBytes, signal);
+    const cwd = safeWorkspacePath(
+      this.workspacePath,
+      check.workingDirectory,
+      true,
+    );
+    return spawnBounded(
+      check.argv,
+      cwd,
+      environment,
+      check.timeoutMs,
+      check.outputLimitBytes,
+      signal,
+    );
   }
 
   readFile(
@@ -245,18 +296,23 @@ export interface DockerVerificationSandboxOptions {
   readonly memory?: string;
   readonly cpus?: string;
   readonly pidsLimit?: number;
+  /** Deployment-owned Docker API endpoint; useful for rootless/desktop daemons. */
+  readonly dockerHost?: string;
 }
 
-export class DockerVerificationSandboxProvisioner
-  implements VerificationSandboxProvisioner
-{
+export class DockerVerificationSandboxProvisioner implements VerificationSandboxProvisioner {
   readonly #root: string;
   readonly #options: DockerVerificationSandboxOptions;
+  readonly #dockerEnvironment: Readonly<Record<string, string>>;
 
   constructor(options: DockerVerificationSandboxOptions) {
     mkdirSync(options.root, { recursive: true, mode: 0o700 });
     this.#root = resolve(options.root);
     this.#options = options;
+    this.#dockerEnvironment =
+      options.dockerHost === undefined
+        ? {}
+        : { DOCKER_HOST: options.dockerHost };
   }
 
   async provision(
@@ -264,7 +320,11 @@ export class DockerVerificationSandboxProvisioner
     signal: AbortSignal,
   ): Promise<VerificationSandbox> {
     abort(signal);
-    const workspace = join(this.#root, tenantHash(spec), hash(`${spec.runRef}\0${spec.attempt}`));
+    const workspace = join(
+      this.#root,
+      tenantHash(spec),
+      hash(`${spec.runRef}\0${spec.attempt}`),
+    );
     mkdirSync(workspace, { recursive: true, mode: 0o700 });
     chmodSync(workspace, 0o777);
     const name = `reef-verification-${hash(`${tenantHash(spec)}\0${spec.runRef}\0${spec.attempt}`).slice(0, 32)}`;
@@ -301,24 +361,30 @@ export class DockerVerificationSandboxProvisioner
         "trap : TERM INT; sleep infinity & wait",
       ],
       process.cwd(),
-      {},
+      this.#dockerEnvironment,
       120_000,
       1024 * 1024,
       signal,
     );
     if (created.exitCode !== 0) {
-      throw new Error(`docker sandbox create failed: ${Buffer.from(created.stderr).toString("utf8")}`);
+      throw new Error(
+        `docker sandbox create failed: ${Buffer.from(created.stderr).toString("utf8")}`,
+      );
     }
     const started = await runProcess(
       ["docker", "start", name],
       process.cwd(),
-      {},
+      this.#dockerEnvironment,
       30_000,
       1024 * 1024,
       signal,
     );
     if (started.exitCode !== 0) throw new Error("docker sandbox start failed");
-    return new DockerVerificationSandbox(name, workspace);
+    return new DockerVerificationSandbox(
+      name,
+      workspace,
+      this.#dockerEnvironment,
+    );
   }
 
   async restore(
@@ -329,23 +395,34 @@ export class DockerVerificationSandboxProvisioner
     const inspected = await runProcess(
       ["docker", "inspect", "--format", "{{.State.Running}}", sandboxRef],
       process.cwd(),
-      {},
+      this.#dockerEnvironment,
       10_000,
       1024,
       signal,
     );
-    if (inspected.exitCode !== 0 || Buffer.from(inspected.stdout).toString("utf8").trim() !== "true") {
+    if (
+      inspected.exitCode !== 0 ||
+      Buffer.from(inspected.stdout).toString("utf8").trim() !== "true"
+    ) {
       return undefined;
     }
-    const workspace = join(this.#root, tenantHash(spec), hash(`${spec.runRef}\0${spec.attempt}`));
-    return new DockerVerificationSandbox(sandboxRef, workspace);
+    const workspace = join(
+      this.#root,
+      tenantHash(spec),
+      hash(`${spec.runRef}\0${spec.attempt}`),
+    );
+    return new DockerVerificationSandbox(
+      sandboxRef,
+      workspace,
+      this.#dockerEnvironment,
+    );
   }
 
   async destroy(sandbox: VerificationSandbox): Promise<void> {
     await runProcess(
       ["docker", "rm", "--force", sandbox.id],
       process.cwd(),
-      {},
+      this.#dockerEnvironment,
       30_000,
       1024 * 1024,
       new AbortController().signal,
@@ -354,8 +431,15 @@ export class DockerVerificationSandboxProvisioner
 }
 
 class DockerVerificationSandbox extends LocalVerificationSandbox {
-  constructor(id: string, workspacePath: string) {
+  readonly #dockerEnvironment: Readonly<Record<string, string>>;
+
+  constructor(
+    id: string,
+    workspacePath: string,
+    dockerEnvironment: Readonly<Record<string, string>>,
+  ) {
     super(id, workspacePath);
+    this.#dockerEnvironment = dockerEnvironment;
   }
 
   override execute(
@@ -364,17 +448,36 @@ class DockerVerificationSandbox extends LocalVerificationSandbox {
     signal: AbortSignal,
   ): Promise<VerificationCommandResult> {
     const containerCwd =
-      check.workingDirectory === "." ? "/workspace" : `/workspace/${check.workingDirectory}`;
-    const envArgs = Object.entries(environment).flatMap(([name, value]) => ["--env", `${name}=${value}`]);
+      check.workingDirectory === "."
+        ? "/workspace"
+        : `/workspace/${check.workingDirectory}`;
+    const envArgs = Object.entries(environment).flatMap(([name, value]) => [
+      "--env",
+      `${name}=${value}`,
+    ]);
     return runProcess(
-      ["docker", "exec", "--workdir", containerCwd, ...envArgs, this.id, ...check.argv],
+      [
+        "docker",
+        "exec",
+        "--workdir",
+        containerCwd,
+        ...envArgs,
+        this.id,
+        ...check.argv,
+      ],
       process.cwd(),
-      {},
+      this.#dockerEnvironment,
       check.timeoutMs,
       check.outputLimitBytes,
       signal,
       () => {
-        const killer = spawn("docker", ["kill", this.id], { stdio: "ignore" });
+        const killer = spawn("docker", ["kill", this.id], {
+          stdio: "ignore",
+          env: {
+            PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+            ...this.#dockerEnvironment,
+          },
+        });
         killer.unref();
       },
     );
@@ -389,7 +492,14 @@ async function spawnBounded(
   outputLimit: number,
   signal: AbortSignal,
 ): Promise<VerificationCommandResult> {
-  return runProcess([...argv], cwd, environment, timeoutMs, outputLimit, signal);
+  return runProcess(
+    [...argv],
+    cwd,
+    environment,
+    timeoutMs,
+    outputLimit,
+    signal,
+  );
 }
 
 function runProcess(
@@ -424,7 +534,11 @@ function runProcess(
     let stderrSize = 0;
     let timedOut = false;
     let settled = false;
-    const capture = (chunks: Buffer[], chunk: Buffer, current: number): number => {
+    const capture = (
+      chunks: Buffer[],
+      chunk: Buffer,
+      current: number,
+    ): number => {
       const remaining = Math.max(0, outputLimit - current);
       if (remaining > 0) chunks.push(chunk.subarray(0, remaining));
       return current + chunk.byteLength;
@@ -472,7 +586,11 @@ function runProcess(
   });
 }
 
-function safeWorkspacePath(root: string, path: string, allowExisting: boolean): string {
+function safeWorkspacePath(
+  root: string,
+  path: string,
+  allowExisting: boolean,
+): string {
   if (path === ".") assertWorkingDirectory(path);
   else assertRelativePath(path);
   const target = confined(root, resolve(root, path));
@@ -485,18 +603,38 @@ function safeWorkspacePath(root: string, path: string, allowExisting: boolean): 
 
 function writeContentAddressed(path: string, content: Uint8Array): void {
   if (existsSync(path)) {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+      throw new Error("verification object is not one regular unlinked file");
+    }
     const existing = readFileSync(path);
     if (
       existing.byteLength !== content.byteLength ||
-      !createHash("sha256").update(existing).digest().equals(
-        createHash("sha256").update(content).digest(),
-      )
+      !createHash("sha256")
+        .update(existing)
+        .digest()
+        .equals(createHash("sha256").update(content).digest())
     ) {
-      throw new Error("content-addressed verification object conflicts with existing content");
+      throw new Error(
+        "content-addressed verification object conflicts with existing content",
+      );
     }
     return;
   }
   writeFileSync(path, content, { mode: 0o600, flag: "wx" });
+}
+
+function readRegularFile(root: string, path: string): Buffer {
+  const confinedPath = confined(root, path);
+  const stat = lstatSync(confinedPath);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+    throw new Error(
+      "verification source object is not one regular unlinked file",
+    );
+  }
+  const real = realpathSync(confinedPath);
+  confined(root, real);
+  return readFileSync(real);
 }
 
 function rejectSymlinkAncestors(root: string, target: string): void {
@@ -513,7 +651,11 @@ function rejectSymlinkAncestors(root: string, target: string): void {
 
 function confined(root: string, target: string): string {
   const path = relative(root, target);
-  if (isAbsolute(path) || path === ".." || path.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
+  if (
+    isAbsolute(path) ||
+    path === ".." ||
+    path.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)
+  ) {
     throw new Error("path escapes verification workspace");
   }
   return target;

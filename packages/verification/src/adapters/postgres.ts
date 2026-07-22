@@ -40,16 +40,15 @@ export interface VerificationPgPoolLike extends VerificationPgClientLike {
 
 export interface VerificationPostgresConnectionOptions {
   readonly connectionString: string;
-  readonly ssl?: boolean | { readonly ca?: string; readonly rejectUnauthorized: boolean };
+  readonly ssl?:
+    boolean | { readonly ca?: string; readonly rejectUnauthorized: boolean };
   readonly max?: number;
   readonly connectionTimeoutMillis?: number;
   readonly idleTimeoutMillis?: number;
 }
 
 export type VerificationPostgresConnection =
-  | string
-  | VerificationPostgresConnectionOptions
-  | VerificationPgPoolLike;
+  string | VerificationPostgresConnectionOptions | VerificationPgPoolLike;
 
 interface RunRow {
   readonly run_data: unknown;
@@ -108,7 +107,9 @@ interface QueueRow {
 }
 
 /** PostgreSQL request/checkpoint/event/outbox/lease store and reference queue. */
-export class PostgresVerificationStore implements VerificationStore, VerificationQueue {
+export class PostgresVerificationStore
+  implements VerificationStore, VerificationQueue
+{
   readonly #pool: VerificationPgPoolLike;
   readonly #ownsPool: boolean;
   readonly #now: () => string;
@@ -129,13 +130,23 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
 
   async migrate(): Promise<void> {
     await this.#transaction(async (client) => {
-      for (const migration of VERIFICATION_MIGRATIONS) await client.query(migration.sql);
+      // PostgreSQL's IF NOT EXISTS is not a concurrency primitive: two fresh
+      // API/Worker tasks can still race while creating a sequence or table.
+      // Hold one database-local transaction lock across the entire ordered set.
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('octopus-reef/verification/migrations', 0))",
+      );
+      for (const migration of VERIFICATION_MIGRATIONS)
+        await client.query(migration.sql);
     });
   }
 
   async ready(): Promise<void> {
-    const result = await this.#pool.query<{ readonly ok: number }>("SELECT 1 AS ok");
-    if (result.rows[0]?.ok !== 1) throw new Error("verification PostgreSQL readiness failed");
+    const result = await this.#pool.query<{ readonly ok: number }>(
+      "SELECT 1 AS ok",
+    );
+    if (result.rows[0]?.ok !== 1)
+      throw new Error("verification PostgreSQL readiness failed");
   }
 
   async close(): Promise<void> {
@@ -157,14 +168,32 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,0,$15::jsonb,$16,$17)
         ON CONFLICT DO NOTHING`,
         [
-          run.organisationRef, run.projectRef, run.runRef, run.idempotencyKey,
-          run.candidateRef, run.candidateDigest, run.sourceBundleRef, run.sourceBundleDigest,
-          run.verificationProfileRef, run.verificationProfileVersion, run.verificationProfileDigest,
-          run.state, run.version, run.attempt, json(run), run.createdAt, run.updatedAt,
+          run.organisationRef,
+          run.projectRef,
+          run.runRef,
+          run.idempotencyKey,
+          run.candidateRef,
+          run.candidateDigest,
+          run.sourceBundleRef,
+          run.sourceBundleDigest,
+          run.verificationProfileRef,
+          run.verificationProfileVersion,
+          run.verificationProfileDigest,
+          run.state,
+          run.version,
+          run.attempt,
+          json(run),
+          run.createdAt,
+          run.updatedAt,
         ],
       );
       if ((inserted.rowCount ?? 0) === 0) {
-        const existing = await this.#getByIdempotency(client, run, run.idempotencyKey, false);
+        const existing = await this.#getByIdempotency(
+          client,
+          run,
+          run.idempotencyKey,
+          false,
+        );
         if (existing === undefined || !sameIdentity(existing, run)) {
           throw new VerificationConflictError(
             "idempotency key conflicts with another verification identity",
@@ -180,13 +209,18 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
     });
   }
 
-  async get(tenant: VerificationTenant, runRef: string): Promise<VerificationRun | undefined> {
+  async get(
+    tenant: VerificationTenant,
+    runRef: string,
+  ): Promise<VerificationRun | undefined> {
     const result = await this.#pool.query<RunRow>(
       `SELECT run_data, version, state, lease_owner, lease_expires_at, fencing_token
        FROM verification_runs WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3`,
       [tenant.organisationRef, tenant.projectRef, runRef],
     );
-    return result.rows[0] === undefined ? undefined : runFromRow(result.rows[0]);
+    return result.rows[0] === undefined
+      ? undefined
+      : runFromRow(result.rows[0]);
   }
 
   getByIdempotencyKey(
@@ -204,7 +238,14 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
     event: VerificationEventInput,
     fencingToken?: number,
   ): Promise<VerificationRun | undefined> {
-    return this.#mutate(tenant, runRef, expectedVersion, mutation, event, fencingToken);
+    return this.#mutate(
+      tenant,
+      runRef,
+      expectedVersion,
+      mutation,
+      event,
+      fencingToken,
+    );
   }
 
   mutateAndDispatch(
@@ -215,7 +256,15 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
     event: VerificationEventInput,
     dispatch: VerificationDispatchInput,
   ): Promise<VerificationRun | undefined> {
-    return this.#mutate(tenant, runRef, expectedVersion, mutation, event, undefined, dispatch);
+    return this.#mutate(
+      tenant,
+      runRef,
+      expectedVersion,
+      mutation,
+      event,
+      undefined,
+      dispatch,
+    );
   }
 
   acquireLease(
@@ -228,12 +277,15 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
     return this.#transaction(async (client) => {
       const current = await this.#lockedRun(client, tenant, runRef);
       if (
-        current === undefined || terminal(current.state) ||
-        (current.lease !== undefined && Date.parse(current.lease.expiresAt) > Date.parse(now))
-      ) return undefined;
-      const fenceResult = await client.query<{ readonly token: string | number }>(
-        "SELECT nextval('verification_fencing_token_seq') AS token",
-      );
+        current === undefined ||
+        terminal(current.state) ||
+        (current.lease !== undefined &&
+          Date.parse(current.lease.expiresAt) > Date.parse(now))
+      )
+        return undefined;
+      const fenceResult = await client.query<{
+        readonly token: string | number;
+      }>("SELECT nextval('verification_fencing_token_seq') AS token");
       const fencingToken = Number(fenceResult.rows[0]!.token);
       const next: VerificationRun = {
         ...current,
@@ -261,8 +313,10 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
       const current = await this.#lockedRun(client, tenant, runRef);
       if (
         current?.lease?.ownerId !== ownerId ||
-        current.lease.fencingToken !== fencingToken || terminal(current.state)
-      ) return false;
+        current.lease.fencingToken !== fencingToken ||
+        terminal(current.state)
+      )
+        return false;
       await this.#writeRun(client, {
         ...current,
         updatedAt: this.#now(),
@@ -283,7 +337,13 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
         WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3
           AND fencing_token=$4 AND lease_expires_at > $5 AND state NOT IN ('completed','failed','cancelled')
       ) AS matches`,
-      [tenant.organisationRef, tenant.projectRef, runRef, fencingToken, this.#now()],
+      [
+        tenant.organisationRef,
+        tenant.projectRef,
+        runRef,
+        fencingToken,
+        this.#now(),
+      ],
     );
     return result.rows[0]?.matches === true;
   }
@@ -299,13 +359,22 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
   ): Promise<VerificationRun | undefined> {
     return this.#transaction(async (client) => {
       const current = await this.#lockedRun(client, tenant, runRef);
-      if (!mutable(current, expectedVersion, fencingToken, this.#now()) || current.attempt !== attempt) {
+      if (
+        !mutable(current, expectedVersion, fencingToken, this.#now()) ||
+        current.attempt !== attempt
+      ) {
         return undefined;
       }
       const duplicate = await client.query(
         `SELECT 1 FROM verification_checkpoints
          WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3 AND attempt=$4 AND check_ref=$5`,
-        [tenant.organisationRef, tenant.projectRef, runRef, attempt, result.checkRef],
+        [
+          tenant.organisationRef,
+          tenant.projectRef,
+          runRef,
+          attempt,
+          result.checkRef,
+        ],
       );
       if (duplicate.rows.length > 0) return current;
       const cursor = await this.#insertEvent(client, current, event);
@@ -319,9 +388,18 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
           id, organisation_ref, project_ref, run_ref, sequence, attempt,
           check_ref, result, fencing_token, created_at
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10)`,
-        [randomUUID(), tenant.organisationRef, tenant.projectRef, runRef,
-          sequenceResult.rows[0]!.sequence, attempt, result.checkRef, json(result),
-          fencingToken, event.createdAt],
+        [
+          randomUUID(),
+          tenant.organisationRef,
+          tenant.projectRef,
+          runRef,
+          sequenceResult.rows[0]!.sequence,
+          attempt,
+          result.checkRef,
+          json(result),
+          fencingToken,
+          event.createdAt,
+        ],
       );
       const next = applyMutation(
         current,
@@ -354,13 +432,20 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
     afterCursor = "0",
     limit = 100,
   ): Promise<readonly VerificationEvent[]> {
-    if (!/^\d+$/.test(afterCursor)) throw new Error("invalid decimal event cursor");
+    if (!/^\d+$/.test(afterCursor))
+      throw new Error("invalid decimal event cursor");
     const result = await this.#pool.query<EventRow>(
       `SELECT cursor, id, organisation_ref, project_ref, run_ref, type, data, created_at
        FROM verification_events
        WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3 AND cursor > $4
        ORDER BY cursor LIMIT $5`,
-      [tenant.organisationRef, tenant.projectRef, runRef, afterCursor, Math.max(1, Math.min(limit, 1000))],
+      [
+        tenant.organisationRef,
+        tenant.projectRef,
+        runRef,
+        afterCursor,
+        Math.max(1, Math.min(limit, 1000)),
+      ],
     );
     return result.rows.map(eventFromRow);
   }
@@ -419,14 +504,23 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
     attempt: number,
     delayMs = 0,
   ): Promise<void> {
-    const availableAt = new Date(Date.parse(this.#now()) + delayMs).toISOString();
+    const availableAt = new Date(
+      Date.parse(this.#now()) + delayMs,
+    ).toISOString();
     await this.#pool.query(
       `INSERT INTO verification_queue (
         id, organisation_ref, project_ref, run_ref, attempt, available_at
       ) VALUES ($1,$2,$3,$4,$5,$6)
       ON CONFLICT (organisation_ref, project_ref, run_ref, attempt) DO UPDATE
         SET available_at=LEAST(verification_queue.available_at, EXCLUDED.available_at)`,
-      [randomUUID(), tenant.organisationRef, tenant.projectRef, runRef, attempt, availableAt],
+      [
+        randomUUID(),
+        tenant.organisationRef,
+        tenant.projectRef,
+        runRef,
+        attempt,
+        availableAt,
+      ],
     );
   }
 
@@ -450,11 +544,16 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
           q.available_at, q.receipt, q.lease_owner, q.lease_expires_at`,
         [now, workerId, expiresAt, receipt],
       );
-      return result.rows[0] === undefined ? undefined : queueLeaseFromRow(result.rows[0]);
+      return result.rows[0] === undefined
+        ? undefined
+        : queueLeaseFromRow(result.rows[0]);
     });
   }
 
-  async heartbeat(lease: VerificationQueueLease, expiresAt: string): Promise<boolean> {
+  async heartbeat(
+    lease: VerificationQueueLease,
+    expiresAt: string,
+  ): Promise<boolean> {
     const result = await this.#pool.query(
       `UPDATE verification_queue SET lease_expires_at=$4
        WHERE id=$1 AND receipt=$2 AND lease_owner=$3`,
@@ -470,7 +569,10 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
     );
   }
 
-  async retry(lease: VerificationQueueLease, availableAt: string): Promise<void> {
+  async retry(
+    lease: VerificationQueueLease,
+    availableAt: string,
+  ): Promise<void> {
     await this.#pool.query(
       `UPDATE verification_queue SET available_at=$4, receipt=NULL,
          lease_owner=NULL, lease_expires_at=NULL
@@ -490,17 +592,24 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
   ): Promise<VerificationRun | undefined> {
     return this.#transaction(async (client) => {
       const current = await this.#lockedRun(client, tenant, runRef);
-      if (!mutable(current, expectedVersion, fencingToken, this.#now())) return undefined;
+      if (!mutable(current, expectedVersion, fencingToken, this.#now()))
+        return undefined;
       const existing = await client.query(
         `SELECT 1 FROM verification_events
          WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3 AND idempotency_key=$4`,
-        [tenant.organisationRef, tenant.projectRef, runRef, event.idempotencyKey],
+        [
+          tenant.organisationRef,
+          tenant.projectRef,
+          runRef,
+          event.idempotencyKey,
+        ],
       );
       if (existing.rows.length > 0) return current;
       const cursor = await this.#insertEvent(client, current, event);
       const next = applyMutation(current, mutation, cursor, this.#now());
       await this.#writeRun(client, next);
-      if (dispatch !== undefined) await this.#insertOutbox(client, current, dispatch);
+      if (dispatch !== undefined)
+        await this.#insertOutbox(client, current, dispatch);
       return next;
     });
   }
@@ -516,7 +625,9 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
        FOR UPDATE`,
       [tenant.organisationRef, tenant.projectRef, runRef],
     );
-    return result.rows[0] === undefined ? undefined : runFromRow(result.rows[0]);
+    return result.rows[0] === undefined
+      ? undefined
+      : runFromRow(result.rows[0]);
   }
 
   async #getByIdempotency(
@@ -531,7 +642,9 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
        ${lock ? "FOR UPDATE" : ""}`,
       [tenant.organisationRef, tenant.projectRef, idempotencyKey],
     );
-    return result.rows[0] === undefined ? undefined : runFromRow(result.rows[0]);
+    return result.rows[0] === undefined
+      ? undefined
+      : runFromRow(result.rows[0]);
   }
 
   async #insertEvent(
@@ -543,8 +656,16 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
       `INSERT INTO verification_events (
         id, organisation_ref, project_ref, run_ref, idempotency_key, type, data, created_at
       ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8) RETURNING cursor`,
-      [randomUUID(), run.organisationRef, run.projectRef, run.runRef,
-        event.idempotencyKey, event.type, json(event.data), event.createdAt],
+      [
+        randomUUID(),
+        run.organisationRef,
+        run.projectRef,
+        run.runRef,
+        event.idempotencyKey,
+        event.type,
+        json(event.data),
+        event.createdAt,
+      ],
     );
     return String(result.rows[0]!.cursor);
   }
@@ -559,25 +680,50 @@ export class PostgresVerificationStore implements VerificationStore, Verificatio
         organisation_ref, project_ref, run_ref, idempotency_key, attempt, available_at
       ) VALUES ($1,$2,$3,$4,$5,$6)
       ON CONFLICT (organisation_ref, project_ref, run_ref, idempotency_key) DO NOTHING`,
-      [run.organisationRef, run.projectRef, run.runRef,
-        dispatch.idempotencyKey, dispatch.attempt, dispatch.availableAt],
+      [
+        run.organisationRef,
+        run.projectRef,
+        run.runRef,
+        dispatch.idempotencyKey,
+        dispatch.attempt,
+        dispatch.availableAt,
+      ],
     );
   }
 
-  async #writeRun(client: VerificationPgClientLike, run: VerificationRun): Promise<void> {
+  async #writeRun(
+    client: VerificationPgClientLike,
+    run: VerificationRun,
+  ): Promise<void> {
     await client.query(
       `UPDATE verification_runs SET state=$4, version=$5, attempt=$6, event_cursor=$7,
          run_data=$8::jsonb, lease_owner=$9, lease_expires_at=$10,
          fencing_token=$11, updated_at=$12
        WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3`,
-      [run.organisationRef, run.projectRef, run.runRef, run.state, run.version, run.attempt,
-        run.eventCursor, json(run), run.lease?.ownerId ?? null, run.lease?.expiresAt ?? null,
-        run.lease?.fencingToken ?? null, run.updatedAt],
+      [
+        run.organisationRef,
+        run.projectRef,
+        run.runRef,
+        run.state,
+        run.version,
+        run.attempt,
+        run.eventCursor,
+        json(run),
+        run.lease?.ownerId ?? null,
+        run.lease?.expiresAt ?? null,
+        run.lease?.fencingToken ?? null,
+        run.updatedAt,
+      ],
     );
   }
 
-  async #transaction<T>(work: (client: VerificationPgClientLike) => Promise<T>): Promise<T> {
-    const client = this.#pool.connect === undefined ? this.#pool : await this.#pool.connect();
+  async #transaction<T>(
+    work: (client: VerificationPgClientLike) => Promise<T>,
+  ): Promise<T> {
+    const client =
+      this.#pool.connect === undefined
+        ? this.#pool
+        : await this.#pool.connect();
     await client.query("BEGIN");
     try {
       const value = await work(client);
@@ -602,10 +748,13 @@ function mutable(
   fencingToken: number | undefined,
   now: string,
 ): current is VerificationRun {
-  if (current === undefined || current.version !== expectedVersion) return false;
+  if (current === undefined || current.version !== expectedVersion)
+    return false;
   if (fencingToken === undefined) return true;
-  return current.lease?.fencingToken === fencingToken &&
-    Date.parse(current.lease.expiresAt) > Date.parse(now);
+  return (
+    current.lease?.fencingToken === fencingToken &&
+    Date.parse(current.lease.expiresAt) > Date.parse(now)
+  );
 }
 
 function applyMutation(
@@ -621,16 +770,34 @@ function applyMutation(
     ...(mutation.checks === undefined ? {} : { checks: mutation.checks }),
     ...(mutation.verdict === undefined ? {} : { verdict: mutation.verdict }),
     ...(mutation.failure === undefined ? {} : { failure: mutation.failure }),
-    ...(mutation.startedAt === undefined ? {} : { startedAt: mutation.startedAt }),
-    ...(mutation.finishedAt === undefined ? {} : { finishedAt: mutation.finishedAt }),
-    ...(mutation.sandboxRef === undefined ? {} : { sandboxRef: mutation.sandboxRef }),
+    ...(mutation.startedAt === undefined
+      ? {}
+      : { startedAt: mutation.startedAt }),
+    ...(mutation.finishedAt === undefined
+      ? {}
+      : { finishedAt: mutation.finishedAt }),
+    ...(mutation.sandboxRef === undefined
+      ? {}
+      : { sandboxRef: mutation.sandboxRef }),
     version: current.version + 1,
     eventCursor: mutation.eventCursor ?? eventCursor,
     updatedAt,
   };
-  if (mutation.clearLease) { const { lease: _, ...rest } = next; next = rest; }
-  if (mutation.clearFailure) { const { failure: _, ...rest } = next; next = rest; }
-  if (mutation.clearVerdict) { const { verdict: _, ...rest } = next; next = rest; }
+  if (mutation.clearLease) {
+    const { lease, ...rest } = next;
+    void lease;
+    next = rest;
+  }
+  if (mutation.clearFailure) {
+    const { failure, ...rest } = next;
+    void failure;
+    next = rest;
+  }
+  if (mutation.clearVerdict) {
+    const { verdict, ...rest } = next;
+    void verdict;
+    next = rest;
+  }
   return next;
 }
 
@@ -644,9 +811,12 @@ function sameIdentity(a: VerificationRun, b: VerificationRun): boolean {
 
 function identity(run: VerificationRun): unknown {
   return {
-    organisationRef: run.organisationRef, projectRef: run.projectRef,
-    candidateRef: run.candidateRef, candidateDigest: run.candidateDigest,
-    sourceBundleRef: run.sourceBundleRef, sourceBundleDigest: run.sourceBundleDigest,
+    organisationRef: run.organisationRef,
+    projectRef: run.projectRef,
+    candidateRef: run.candidateRef,
+    candidateDigest: run.candidateDigest,
+    sourceBundleRef: run.sourceBundleRef,
+    sourceBundleDigest: run.sourceBundleDigest,
     verificationProfileRef: run.verificationProfileRef,
     verificationProfileVersion: run.verificationProfileVersion,
     verificationProfileDigest: run.verificationProfileDigest,
@@ -655,47 +825,74 @@ function identity(run: VerificationRun): unknown {
 
 function eventFromRow(row: EventRow): VerificationEvent {
   return {
-    organisationRef: row.organisation_ref, projectRef: row.project_ref,
-    id: row.id, runRef: row.run_ref, cursor: String(row.cursor), type: row.type,
-    data: row.data, createdAt: iso(row.created_at),
+    organisationRef: row.organisation_ref,
+    projectRef: row.project_ref,
+    id: row.id,
+    runRef: row.run_ref,
+    cursor: String(row.cursor),
+    type: row.type,
+    data: row.data,
+    createdAt: iso(row.created_at),
   };
 }
 
 function checkpointFromRow(row: CheckpointRow): VerificationCheckpoint {
   return {
-    organisationRef: row.organisation_ref, projectRef: row.project_ref,
-    id: row.id, runRef: row.run_ref, sequence: row.sequence, attempt: row.attempt,
-    checkRef: row.check_ref, result: row.result as VerificationCheckResult,
-    fencingToken: Number(row.fencing_token), createdAt: iso(row.created_at),
+    organisationRef: row.organisation_ref,
+    projectRef: row.project_ref,
+    id: row.id,
+    runRef: row.run_ref,
+    sequence: row.sequence,
+    attempt: row.attempt,
+    checkRef: row.check_ref,
+    result: row.result as VerificationCheckResult,
+    fencingToken: Number(row.fencing_token),
+    createdAt: iso(row.created_at),
   };
 }
 
 function outboxFromRow(row: OutboxRow): VerificationOutboxRecord {
   return {
-    id: String(row.id), organisationRef: row.organisation_ref,
-    projectRef: row.project_ref, runRef: row.run_ref,
-    idempotencyKey: row.idempotency_key, attempt: row.attempt,
-    availableAt: iso(row.available_at), deliveryAttempts: row.delivery_attempts,
+    id: String(row.id),
+    organisationRef: row.organisation_ref,
+    projectRef: row.project_ref,
+    runRef: row.run_ref,
+    idempotencyKey: row.idempotency_key,
+    attempt: row.attempt,
+    availableAt: iso(row.available_at),
+    deliveryAttempts: row.delivery_attempts,
   };
 }
 
 function queueLeaseFromRow(row: QueueRow): VerificationQueueLease {
   return {
     message: {
-      id: row.id, organisationRef: row.organisation_ref, projectRef: row.project_ref,
-      runRef: row.run_ref, attempt: row.attempt, availableAt: iso(row.available_at),
+      id: row.id,
+      organisationRef: row.organisation_ref,
+      projectRef: row.project_ref,
+      runRef: row.run_ref,
+      attempt: row.attempt,
+      availableAt: iso(row.available_at),
     },
-    receipt: row.receipt, ownerId: row.lease_owner, expiresAt: iso(row.lease_expires_at),
+    receipt: row.receipt,
+    ownerId: row.lease_owner,
+    expiresAt: iso(row.lease_expires_at),
   };
 }
 
-function json(value: unknown): string { return JSON.stringify(value); }
-
-function iso(value: unknown): string {
-  return value instanceof Date ? value.toISOString() : new Date(String(value)).toISOString();
+function json(value: unknown): string {
+  return JSON.stringify(value);
 }
 
-function isPool(value: VerificationPostgresConnection): value is VerificationPgPoolLike {
+function iso(value: unknown): string {
+  return value instanceof Date
+    ? value.toISOString()
+    : new Date(String(value)).toISOString();
+}
+
+function isPool(
+  value: VerificationPostgresConnection,
+): value is VerificationPgPoolLike {
   return typeof value === "object" && value !== null && "query" in value;
 }
 
@@ -709,6 +906,8 @@ function createPool(
   const require = createRequire(import.meta.url);
   const pg = require("pg") as { readonly Pool: PoolConstructor };
   return new pg.Pool(
-    typeof connection === "string" ? { connectionString: connection } : connection,
+    typeof connection === "string"
+      ? { connectionString: connection }
+      : connection,
   );
 }

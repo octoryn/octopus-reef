@@ -19,10 +19,7 @@ import type {
   VerificationTenant,
   VerificationVerdict,
 } from "./types.js";
-import {
-  createCheckEvidence,
-  createVerdictEvidence,
-} from "./evidence.js";
+import { createCheckEvidence, createVerdictEvidence } from "./evidence.js";
 
 export interface DeterministicVerificationWorkerOptions {
   readonly workerId: string;
@@ -40,6 +37,11 @@ export interface DeterministicVerificationWorkerOptions {
   readonly now?: () => string;
   readonly afterCheckpoint?: (
     result: VerificationCheckResult,
+    run: VerificationRun,
+  ) => Promise<void> | void;
+  /** Deployment-local observability hook. Errors must never enter the public Run payload. */
+  readonly onInfrastructureError?: (
+    error: unknown,
     run: VerificationRun,
   ) => Promise<void> | void;
 }
@@ -88,21 +90,27 @@ export class DeterministicVerificationWorker {
     const abort = new AbortController();
     let crashed = false;
     let sandbox: VerificationSandbox | undefined;
-    const heartbeat = startInterval(() => {
-      const expiresAt = new Date(Date.parse(this.#now()) + this.#leaseMs).toISOString();
-      void Promise.all([
-        this.#options.store.heartbeatLease(
-          tenant,
-          run!.runRef,
-          this.#options.workerId,
-          fence,
-          expiresAt,
-        ),
-        this.#options.queue.heartbeat(queueLease, expiresAt),
-      ]).then(([runOk, queueOk]) => {
-        if (!runOk || !queueOk) abort.abort(new Error("verification lease lost"));
-      });
-    }, Math.max(100, Math.floor(this.#leaseMs / 3)));
+    const heartbeat = startInterval(
+      () => {
+        const expiresAt = new Date(
+          Date.parse(this.#now()) + this.#leaseMs,
+        ).toISOString();
+        void Promise.all([
+          this.#options.store.heartbeatLease(
+            tenant,
+            run!.runRef,
+            this.#options.workerId,
+            fence,
+            expiresAt,
+          ),
+          this.#options.queue.heartbeat(queueLease, expiresAt),
+        ]).then(([runOk, queueOk]) => {
+          if (!runOk || !queueOk)
+            abort.abort(new Error("verification lease lost"));
+        });
+      },
+      Math.max(100, Math.floor(this.#leaseMs / 3)),
+    );
     heartbeat.unref();
 
     try {
@@ -116,7 +124,11 @@ export class DeterministicVerificationWorker {
       };
       sandbox =
         (run.sandboxRef !== undefined
-          ? await this.#options.sandboxes.restore?.(spec, run.sandboxRef, abort.signal)
+          ? await this.#options.sandboxes.restore?.(
+              spec,
+              run.sandboxRef,
+              abort.signal,
+            )
           : undefined) ??
         (await this.#options.sandboxes.provision(spec, abort.signal));
       run = await this.#mutate(
@@ -131,22 +143,37 @@ export class DeterministicVerificationWorker {
       run = await this.#transition(tenant, run, fence, "running");
       const executionStarted = Date.now();
       for (const check of profile.checks) {
-        if (run.checks.some((result) => result.checkRef === check.checkRef)) continue;
+        if (run.checks.some((result) => result.checkRef === check.checkRef))
+          continue;
         if (Date.now() - executionStarted >= profile.maxDurationMs) {
           throw new Error("verification profile duration budget exceeded");
         }
-        run = await this.#executeCheck(tenant, run, fence, profile, check, sandbox, abort.signal);
+        run = await this.#executeCheck(
+          tenant,
+          run,
+          fence,
+          profile,
+          check,
+          sandbox,
+          abort.signal,
+        );
       }
       const verdictBase = requiredVerdict(profile, run.checks);
       await this.#assertFence(tenant, run.runRef, fence);
       const verdictEvidence = createVerdictEvidence(
-        run,
+        { ...run, version: run.version + 1 },
         profile,
         verdictBase,
-        run.checks.map((check) => ({ ref: check.evidenceRef, digest: check.evidenceDigest })),
+        run.checks.map((check) => ({
+          ref: check.evidenceRef,
+          digest: check.evidenceDigest,
+        })),
         this.#now(),
       );
-      const storedVerdict = await this.#options.evidence.put(tenant, verdictEvidence);
+      const storedVerdict = await this.#options.evidence.put(
+        tenant,
+        verdictEvidence,
+      );
       await this.#assertFence(tenant, run.runRef, fence);
       const verdict: VerificationVerdict = {
         ...verdictBase,
@@ -174,6 +201,11 @@ export class DeterministicVerificationWorker {
         crashed = true;
         throw error;
       }
+      try {
+        await this.#options.onInfrastructureError?.(error, run);
+      } catch {
+        // Observability must not change retry, fencing, or product-safe failure semantics.
+      }
       const current = await this.#options.store.get(tenant, run.runRef);
       if (current?.state === "cancelled") {
         await this.#options.queue.ack(queueLease);
@@ -187,8 +219,11 @@ export class DeterministicVerificationWorker {
       }
       const maxRetries = this.#options.maxInfrastructureRetries ?? 2;
       if (run.attempt <= maxRetries) {
-        const delay = (this.#options.retryBaseMs ?? 500) * 2 ** (run.attempt - 1);
-        const availableAt = new Date(Date.parse(this.#now()) + delay).toISOString();
+        const delay =
+          (this.#options.retryBaseMs ?? 500) * 2 ** (run.attempt - 1);
+        const availableAt = new Date(
+          Date.parse(this.#now()) + delay,
+        ).toISOString();
         const retried = await this.#mutate(
           tenant,
           run,
@@ -214,7 +249,8 @@ export class DeterministicVerificationWorker {
           state: "failed",
           failure: {
             code: safeFailureCode(error),
-            message: "verification infrastructure failed; retry with the same identity",
+            message:
+              "verification infrastructure failed; retry with the same identity",
             retryable: true,
           },
           finishedAt,
@@ -257,9 +293,10 @@ export class DeterministicVerificationWorker {
     const artifacts: VerificationArtifact[] = [];
     if (command.stdout.byteLength > 0) {
       artifacts.push(
-        await this.#options.artifacts.put(
+        await this.#publishArtifact(
           tenant,
           run.runRef,
+          fence,
           `${check.checkRef}.stdout`,
           "text/plain; charset=utf-8",
           command.stdout.subarray(0, check.outputLimitBytes),
@@ -268,9 +305,10 @@ export class DeterministicVerificationWorker {
     }
     if (command.stderr.byteLength > 0) {
       artifacts.push(
-        await this.#options.artifacts.put(
+        await this.#publishArtifact(
           tenant,
           run.runRef,
+          fence,
           `${check.checkRef}.stderr`,
           "text/plain; charset=utf-8",
           command.stderr.subarray(0, check.outputLimitBytes),
@@ -279,14 +317,19 @@ export class DeterministicVerificationWorker {
     }
     let requiredArtifactMissing = false;
     for (const expected of check.expectedArtifacts ?? []) {
-      const content = await sandbox.readFile(expected.path, expected.maxBytes, signal);
+      const content = await sandbox.readFile(
+        expected.path,
+        expected.maxBytes,
+        signal,
+      );
       if (content === undefined) {
         if (expected.required) {
           requiredArtifactMissing = true;
           artifacts.push(
-            await this.#options.artifacts.put(
+            await this.#publishArtifact(
               tenant,
               run.runRef,
+              fence,
               `${check.checkRef}.missing-artifact`,
               "application/json",
               Buffer.from(JSON.stringify({ missing: expected.path }), "utf8"),
@@ -296,9 +339,10 @@ export class DeterministicVerificationWorker {
         continue;
       }
       artifacts.push(
-        await this.#options.artifacts.put(
+        await this.#publishArtifact(
           tenant,
           run.runRef,
+          fence,
           expected.kind,
           expected.mediaType,
           content,
@@ -322,13 +366,17 @@ export class DeterministicVerificationWorker {
         ? "CHECK_TIMEOUT"
         : requiredArtifactMissing
           ? "REQUIRED_ARTIFACT_MISSING"
-        : command.exitCode === 0
-          ? "CHECK_PASSED"
-          : "CHECK_FAILED",
+          : command.exitCode === 0
+            ? "CHECK_PASSED"
+            : "CHECK_FAILED",
       tool: check.tool,
       artifacts,
     } as const;
-    const evidence = createCheckEvidence(run, profile, resultBase);
+    const evidence = createCheckEvidence(
+      { ...run, version: run.version + 1 },
+      profile,
+      resultBase,
+    );
     const stored = await this.#options.evidence.put(tenant, evidence);
     await this.#assertFence(tenant, run.runRef, fence);
     const result: VerificationCheckResult = {
@@ -358,7 +406,8 @@ export class DeterministicVerificationWorker {
         idempotencyKey: `check:${run.attempt}:${check.checkRef}`,
       },
     );
-    if (next === undefined) throw new Error("verification fencing rejected check result");
+    if (next === undefined)
+      throw new Error("verification fencing rejected check result");
     await this.#options.afterCheckpoint?.(result, next);
     return next;
   }
@@ -375,7 +424,9 @@ export class DeterministicVerificationWorker {
       fence,
       {
         state,
-        ...(state === "running" && run.startedAt === undefined ? { startedAt: this.#now() } : {}),
+        ...(state === "running" && run.startedAt === undefined
+          ? { startedAt: this.#now() }
+          : {}),
       },
       `verification.${state}`,
       { identity: identity(run) },
@@ -390,6 +441,7 @@ export class DeterministicVerificationWorker {
     type: string,
     data: unknown,
   ): Promise<VerificationRun> {
+    const eventData = eventDataWithIdentity(run, data);
     const next = await this.#options.store.mutateWithEvent(
       tenant,
       run.runRef,
@@ -397,13 +449,14 @@ export class DeterministicVerificationWorker {
       mutation,
       {
         type,
-        data,
+        data: eventData,
         createdAt: this.#now(),
         idempotencyKey: `${type}:${run.attempt}:${run.version}`,
       },
       fence,
     );
-    if (next === undefined) throw new Error("verification lease or fencing token was lost");
+    if (next === undefined)
+      throw new Error("verification lease or fencing token was lost");
     return next;
   }
 
@@ -416,17 +469,52 @@ export class DeterministicVerificationWorker {
       throw new Error("verification lease or fencing token was lost");
     }
   }
+
+  async #publishArtifact(
+    tenant: VerificationTenant,
+    runRef: string,
+    fence: number,
+    kind: string,
+    mediaType: string,
+    content: Uint8Array,
+  ): Promise<VerificationArtifact> {
+    await this.#assertFence(tenant, runRef, fence);
+    return this.#options.artifacts.put(
+      tenant,
+      runRef,
+      kind,
+      mediaType,
+      content,
+    );
+  }
+}
+
+function eventDataWithIdentity(
+  run: VerificationRun,
+  data: unknown,
+): Record<string, unknown> {
+  if (data !== null && typeof data === "object" && !Array.isArray(data)) {
+    const record = data as Record<string, unknown>;
+    if (record["identity"] !== undefined) return record;
+    return { identity: identity(run), ...record };
+  }
+  return { identity: identity(run), detail: data };
 }
 
 function requiredVerdict(
   profile: TrustedVerificationProfile,
   checks: readonly VerificationCheckResult[],
 ): Omit<VerificationVerdict, "evidenceRef" | "evidenceDigest"> {
-  const requiredChecks = profile.checks.filter((check) => check.required).map((check) => check.checkRef);
+  const requiredChecks = profile.checks
+    .filter((check) => check.required)
+    .map((check) => check.checkRef);
   const passedRequiredChecks = requiredChecks.filter(
-    (ref) => checks.find((check) => check.checkRef === ref)?.outcome === "passed",
+    (ref) =>
+      checks.find((check) => check.checkRef === ref)?.outcome === "passed",
   );
-  const failedRequiredChecks = requiredChecks.filter((ref) => !passedRequiredChecks.includes(ref));
+  const failedRequiredChecks = requiredChecks.filter(
+    (ref) => !passedRequiredChecks.includes(ref),
+  );
   return {
     outcome: failedRequiredChecks.length === 0 ? "passed" : "failed",
     requiredChecks,

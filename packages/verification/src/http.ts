@@ -1,24 +1,34 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   InvalidVerificationRequestError,
+  VerificationAuthenticationError,
+  VerificationAuthorizationError,
   VerificationConflictError,
   VerificationInfrastructureError,
   VerificationNotFoundError,
   verificationInfrastructureStatus,
 } from "./errors.js";
 import type { VerificationService } from "./service.js";
-import { encodeVerificationSseBatch, resolveVerificationSseCursor } from "./sse.js";
+import {
+  encodeVerificationSseBatch,
+  resolveVerificationSseCursor,
+} from "./sse.js";
 import type { VerificationRunRequest, VerificationTenant } from "./types.js";
+import {
+  authorizeVerificationWorkload,
+  type VerificationWorkloadAuthenticator,
+} from "./workload-auth.js";
 
 export interface VerificationHttpOptions {
   readonly pollMs?: number;
   readonly maxBodyBytes?: number;
   readonly readiness?: () => Promise<void>;
+  readonly workloadAuthenticator: VerificationWorkloadAuthenticator;
 }
 
 export function createVerificationHttpHandler(
   service: VerificationService,
-  options: VerificationHttpOptions = {},
+  options: VerificationHttpOptions,
 ): (request: IncomingMessage, response: ServerResponse) => void {
   return (request, response): void => {
     void route(service, request, response, options).catch((error: unknown) => {
@@ -55,37 +65,70 @@ async function route(
     json(response, 200, { status: "ready" });
     return;
   }
+  const principal = await options.workloadAuthenticator.authenticate(
+    header(request, "authorization"),
+  );
   const tenant = tenantHeaders(request);
-  if (request.method === "GET" && path[0] === "v1" && path[1] === "verification-evidence") {
+  if (
+    request.method === "GET" &&
+    path[0] === "v1" &&
+    path[1] === "verification-evidence"
+  ) {
     if (path.length !== 3) return notFound(response);
+    authorizeVerificationWorkload(
+      principal,
+      tenant,
+      "verification:evidence:read",
+    );
     const ref = decode(path[2]!);
     const envelope = await service.resolveEvidence(tenant, ref);
-    if (envelope === undefined) throw new VerificationNotFoundError("verification Evidence not found");
+    if (envelope === undefined)
+      throw new VerificationNotFoundError("verification Evidence not found");
     json(response, 200, envelope);
     return;
   }
-  if (path[0] !== "v1" || path[1] !== "verifications") return notFound(response);
+  if (path[0] !== "v1" || path[1] !== "verifications")
+    return notFound(response);
   if (request.method === "POST" && path.length === 2) {
+    authorizeVerificationWorkload(principal, tenant, "verification:create");
     const body = await readJson(request, options.maxBodyBytes ?? 256_000);
     assertIdempotencyHeader(request, body);
-    json(response, 202, await service.createRun(tenant, body as unknown as VerificationRunRequest));
+    json(
+      response,
+      202,
+      await service.createRun(
+        tenant,
+        body as unknown as VerificationRunRequest,
+      ),
+    );
     return;
   }
   if (path.length < 3) return notFound(response);
   const runRef = decode(path[2]!);
   if (request.method === "GET" && path.length === 3) {
+    authorizeVerificationWorkload(principal, tenant, "verification:read");
     json(response, 200, await service.getRun(tenant, runRef));
     return;
   }
   if (request.method === "GET" && path.length === 4 && path[3] === "events") {
+    authorizeVerificationWorkload(principal, tenant, "verification:read");
     const cursor = resolveVerificationSseCursor(
       header(request, "last-event-id"),
       url.searchParams.get("cursor") ?? undefined,
     );
     if ((request.headers.accept ?? "").includes("text/event-stream")) {
-      await streamEvents(service, tenant, runRef, cursor, response, options.pollMs ?? 750);
+      await streamEvents(
+        service,
+        tenant,
+        runRef,
+        cursor,
+        response,
+        options.pollMs ?? 750,
+      );
     } else {
-      json(response, 200, { events: await service.events(tenant, runRef, cursor) });
+      json(response, 200, {
+        events: await service.events(tenant, runRef, cursor),
+      });
     }
     return;
   }
@@ -93,11 +136,29 @@ async function route(
   const command = await readJson(request, options.maxBodyBytes ?? 256_000);
   assertIdempotencyHeader(request, command);
   if (path[3] === "retry") {
-    json(response, 200, await service.retryRun(tenant, runRef, command as { idempotencyKey: string }));
+    authorizeVerificationWorkload(principal, tenant, "verification:retry");
+    json(
+      response,
+      200,
+      await service.retryRun(
+        tenant,
+        runRef,
+        command as { idempotencyKey: string },
+      ),
+    );
     return;
   }
   if (path[3] === "cancel") {
-    json(response, 200, await service.cancelRun(tenant, runRef, command as { idempotencyKey: string }));
+    authorizeVerificationWorkload(principal, tenant, "verification:cancel");
+    json(
+      response,
+      200,
+      await service.cancelRun(
+        tenant,
+        runRef,
+        command as { idempotencyKey: string },
+      ),
+    );
     return;
   }
   return notFound(response);
@@ -141,9 +202,12 @@ function tenantHeaders(request: IncomingMessage): VerificationTenant {
   const organisationRef = header(request, "x-organisation-ref");
   const projectRef = header(request, "x-project-ref");
   if (
-    organisationRef === undefined || projectRef === undefined ||
-    organisationRef.length > 1024 || projectRef.length > 1024 ||
-    !organisationRef.includes(":") || !projectRef.includes(":")
+    organisationRef === undefined ||
+    projectRef === undefined ||
+    organisationRef.length > 1024 ||
+    projectRef.length > 1024 ||
+    !organisationRef.includes(":") ||
+    !projectRef.includes(":")
   ) {
     throw new InvalidVerificationRequestError(
       "bounded x-organisation-ref and x-project-ref headers are required",
@@ -152,13 +216,19 @@ function tenantHeaders(request: IncomingMessage): VerificationTenant {
   return { organisationRef, projectRef };
 }
 
-async function readJson(request: IncomingMessage, maxBytes: number): Promise<Record<string, unknown>> {
+async function readJson(
+  request: IncomingMessage,
+  maxBytes: number,
+): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+    const buffer = Buffer.isBuffer(chunk)
+      ? chunk
+      : Buffer.from(chunk as string);
     bytes += buffer.byteLength;
-    if (bytes > maxBytes) throw new InvalidVerificationRequestError("request body is too large");
+    if (bytes > maxBytes)
+      throw new InvalidVerificationRequestError("request body is too large");
     chunks.push(buffer);
   }
   if (chunks.length === 0) return {};
@@ -170,7 +240,9 @@ async function readJson(request: IncomingMessage, maxBytes: number): Promise<Rec
     return value as Record<string, unknown>;
   } catch (error) {
     throw new InvalidVerificationRequestError(
-      error instanceof Error ? error.message : "request body must be valid JSON",
+      error instanceof Error
+        ? error.message
+        : "request body must be valid JSON",
       { cause: error },
     );
   }
@@ -186,9 +258,12 @@ function assertIdempotencyHeader(
     throw new InvalidVerificationRequestError("idempotencyKey is required");
   }
   if (headerKey === undefined) {
-    throw new InvalidVerificationRequestError("Idempotency-Key header is required");
+    throw new InvalidVerificationRequestError(
+      "Idempotency-Key header is required",
+    );
   }
-  if (headerKey !== bodyKey) throw new VerificationConflictError("idempotency header/body mismatch");
+  if (headerKey !== bodyKey)
+    throw new VerificationConflictError("idempotency header/body mismatch");
 }
 
 function header(request: IncomingMessage, name: string): string | undefined {
@@ -197,20 +272,31 @@ function header(request: IncomingMessage, name: string): string | undefined {
 }
 
 function decode(value: string): string {
-  try { return decodeURIComponent(value); }
-  catch (error) { throw new InvalidVerificationRequestError("opaque reference is invalid", { cause: error }); }
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    throw new InvalidVerificationRequestError("opaque reference is invalid", {
+      cause: error,
+    });
+  }
 }
 
 function notFound(response: ServerResponse): void {
-  json(response, 404, { error: { code: "NOT_FOUND", message: "not found", retryable: false } });
+  json(response, 404, {
+    error: { code: "NOT_FOUND", message: "not found", retryable: false },
+  });
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  response.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+  });
   response.end(JSON.stringify(body));
 }
 
 function errorStatus(error: unknown): number {
+  if (error instanceof VerificationAuthenticationError) return 401;
+  if (error instanceof VerificationAuthorizationError) return 403;
   if (error instanceof VerificationNotFoundError) return 404;
   if (error instanceof InvalidVerificationRequestError) return 400;
   if (error instanceof VerificationConflictError) return 409;
@@ -218,11 +304,20 @@ function errorStatus(error: unknown): number {
 }
 
 function errorCode(error: unknown, status: number): string {
-  if (error instanceof VerificationNotFoundError) return "VERIFICATION_NOT_FOUND";
-  if (error instanceof InvalidVerificationRequestError) return "INVALID_VERIFICATION_REQUEST";
-  if (error instanceof VerificationConflictError) return "VERIFICATION_CONFLICT";
+  if (error instanceof VerificationAuthenticationError)
+    return "VERIFICATION_AUTHENTICATION_FAILED";
+  if (error instanceof VerificationAuthorizationError)
+    return "VERIFICATION_AUTHORIZATION_DENIED";
+  if (error instanceof VerificationNotFoundError)
+    return "VERIFICATION_NOT_FOUND";
+  if (error instanceof InvalidVerificationRequestError)
+    return "INVALID_VERIFICATION_REQUEST";
+  if (error instanceof VerificationConflictError)
+    return "VERIFICATION_CONFLICT";
   if (error instanceof VerificationInfrastructureError) return error.code;
-  return status === 503 ? "VERIFICATION_INFRASTRUCTURE_UNAVAILABLE" : "VERIFICATION_INFRASTRUCTURE_FAILURE";
+  return status === 503
+    ? "VERIFICATION_INFRASTRUCTURE_UNAVAILABLE"
+    : "VERIFICATION_INFRASTRUCTURE_FAILURE";
 }
 
 function errorMessage(error: unknown, status: number): string {

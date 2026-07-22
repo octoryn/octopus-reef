@@ -1,7 +1,7 @@
 {
   "name": "@octopus-reef/control-plane",
-  "version": "0.1.3",
-  "description": "Deployment-neutral, durable and horizontally scalable execution control plane for the Octopus Reef Agent Kernel.",
+  "version": "0.2.0",
+  "description": "Reef control plane with separate durable AgentRun and deterministic Verification Run public contracts.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",
   "repository": {
@@ -43,6 +43,30 @@
     "./production": {
       "types": "./dist/production.d.ts",
       "default": "./dist/production.js"
+    },
+    "./verification": {
+      "types": "./dist/verification.d.ts",
+      "default": "./dist/verification.js"
+    },
+    "./verification/client": {
+      "types": "./dist/verification-client.d.ts",
+      "default": "./dist/verification-client.js"
+    },
+    "./verification/production": {
+      "types": "./dist/verification-production.d.ts",
+      "default": "./dist/verification-production.js"
+    },
+    "./verification/adapters/postgres": {
+      "types": "./dist/verification-adapter-postgres.d.ts",
+      "default": "./dist/verification-adapter-postgres.js"
+    },
+    "./verification/adapters/local": {
+      "types": "./dist/verification-adapter-local.d.ts",
+      "default": "./dist/verification-adapter-local.js"
+    },
+    "./verification/adapters/aws": {
+      "types": "./dist/verification-adapter-aws.d.ts",
+      "default": "./dist/verification-adapter-aws.js"
     }
   },
   "files": [
@@ -57,6 +81,7 @@
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
+    "@octopus-reef/verification": "0.2.0",
     "@octopus-reef/adapter-runtime": "^0.1.1",
     "@octopus-reef/agent": "^0.2.3",
     "@octopus-reef/engine": "^0.2.1",

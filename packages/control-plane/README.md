@@ -77,6 +77,20 @@ network isolation and minimum IAM policy.
 Compatibility and a remote deployment example are documented in
 `docs/CONTROL-PLANE-COMPATIBILITY.md`.
 
+## Deterministic Verification Runs in 0.2.0
+
+`@octopus-reef/control-plane@0.2.0` formally exposes the separate verification
+runtime from `@octopus-reef/control-plane/verification`, with its typed client
+at `@octopus-reef/control-plane/verification/client` and production adapters at
+the corresponding `verification/*` subpaths. The package declares the exact
+compatible `@octopus-reef/verification@0.2.0` dependency.
+
+The versioned `/v1/verifications` contract uses the canonical client methods
+`createRun`, `getRun`, `streamRunEvents`, `retryRun`, and `cancelRun`. It accepts
+only opaque candidate/source/profile identity and never aliases an AgentRun or
+accepts caller commands, argv, cwd, environment, or credentials. Existing
+0.1.x AgentRun clients remain on their prior endpoints and client surface.
+
 Reef review approval is scoped to an `AgentRun`: it may resume that run, but it
 never approves a Builder deliverable or advances Builder Project State. Builder
 integrates through its server-side `AgentRuntimePort` and opaque references

@@ -5,6 +5,20 @@ export class VerificationConflictError extends Error {
   }
 }
 
+export class VerificationAuthenticationError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "VerificationAuthenticationError";
+  }
+}
+
+export class VerificationAuthorizationError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "VerificationAuthorizationError";
+  }
+}
+
 export class InvalidVerificationRequestError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
@@ -34,7 +48,10 @@ export class VerificationInfrastructureError extends Error {
 }
 
 export class VerificationInfrastructureUnavailableError extends VerificationInfrastructureError {
-  constructor(message = "verification infrastructure is temporarily unavailable", options?: ErrorOptions) {
+  constructor(
+    message = "verification infrastructure is temporarily unavailable",
+    options?: ErrorOptions,
+  ) {
     super(message, "VERIFICATION_INFRASTRUCTURE_UNAVAILABLE", 503, options);
     this.name = "VerificationInfrastructureUnavailableError";
   }

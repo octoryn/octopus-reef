@@ -74,7 +74,7 @@ export class VerificationService {
           run,
           {
             type: "verification.queued",
-            data: identity(run),
+            data: { identity: identity(run) },
             createdAt: now,
             idempotencyKey: `create:${run.idempotencyKey}`,
           },
@@ -86,7 +86,10 @@ export class VerificationService {
         )
       ).run;
     } catch (error) {
-      if (error instanceof Error && error.message.includes("idempotency key conflicts")) {
+      if (
+        error instanceof Error &&
+        error.message.includes("idempotency key conflicts")
+      ) {
         throw new VerificationConflictError(error.message);
       }
       throw error;
@@ -140,7 +143,8 @@ export class VerificationService {
         availableAt: now,
       },
     );
-    if (next === undefined) throw new VerificationConflictError("verification changed concurrently");
+    if (next === undefined)
+      throw new VerificationConflictError("verification changed concurrently");
     return next;
   }
 
@@ -153,7 +157,9 @@ export class VerificationService {
     const current = await this.getRun(tenant, runRef);
     if (current.state === "cancelled") return current;
     if (["completed", "failed"].includes(current.state)) {
-      throw new VerificationConflictError("terminal verification run cannot be cancelled");
+      throw new VerificationConflictError(
+        "terminal verification run cannot be cancelled",
+      );
     }
     const now = this.#now();
     const next = await this.#store.mutateWithEvent(
@@ -168,7 +174,8 @@ export class VerificationService {
         idempotencyKey: `cancel:${command.idempotencyKey}`,
       },
     );
-    if (next === undefined) throw new VerificationConflictError("verification changed concurrently");
+    if (next === undefined)
+      throw new VerificationConflictError("verification changed concurrently");
     return next;
   }
 
@@ -178,7 +185,8 @@ export class VerificationService {
     afterCursor = "0",
     limit = 100,
   ): Promise<readonly VerificationEvent[]> {
-    if (!/^\d+$/.test(afterCursor)) throw new Error("invalid decimal event cursor");
+    if (!/^\d+$/.test(afterCursor))
+      throw new Error("invalid decimal event cursor");
     await this.getRun(tenant, runRef);
     return this.#store.events(tenant, runRef, afterCursor, limit);
   }
@@ -187,7 +195,8 @@ export class VerificationService {
     tenant: VerificationTenant,
     ref: string,
   ): Promise<VerificationEvidenceEnvelope | undefined> {
-    if (!ref.startsWith("evidence:")) throw new Error("invalid opaque Evidence ref");
+    if (!ref.startsWith("evidence:"))
+      throw new Error("invalid opaque Evidence ref");
     return resolveEvidenceEnvelope(this.#evidence, tenant, ref);
   }
 }

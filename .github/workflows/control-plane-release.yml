@@ -2,7 +2,9 @@ name: control-plane-release
 
 on:
   push:
-    tags: ["control-plane-v*"]
+    # 0.2.0 is owned by verification-release.yml because it is one formal
+    # package/image/contract bundle. Never let both workflows publish it.
+    tags: ["control-plane-v0.1.*"]
 
 permissions:
   contents: write

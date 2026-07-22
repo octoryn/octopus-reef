@@ -1,8 +1,5 @@
 import { createHash } from "node:crypto";
-import type {
-  SourceBundleMaterializer,
-  SourceBundleStore,
-} from "./ports.js";
+import type { SourceBundleMaterializer, SourceBundleStore } from "./ports.js";
 import type {
   SourceBundleDescriptor,
   VerificationRun,
@@ -12,6 +9,7 @@ import {
   assertDigest,
   assertRelativePath,
   computeBundleDigest,
+  parseSourceBundleDescriptor,
 } from "./validation.js";
 
 export interface DeterministicSourceBundleMaterializerOptions {
@@ -23,10 +21,10 @@ export interface DeterministicSourceBundleMaterializerOptions {
 }
 
 /** Validates a descriptor and every regular file before writing a fresh sandbox. */
-export class DeterministicSourceBundleMaterializer
-  implements SourceBundleMaterializer
-{
-  readonly #options: Required<Omit<DeterministicSourceBundleMaterializerOptions, "store">> & {
+export class DeterministicSourceBundleMaterializer implements SourceBundleMaterializer {
+  readonly #options: Required<
+    Omit<DeterministicSourceBundleMaterializerOptions, "store">
+  > & {
     readonly store: SourceBundleStore;
   };
 
@@ -50,17 +48,17 @@ export class DeterministicSourceBundleMaterializer
       organisationRef: run.organisationRef,
       projectRef: run.projectRef,
     };
-    const descriptor = await this.#options.store.descriptor(
-      tenant,
-      run.sourceBundleRef,
+    const descriptor = parseSourceBundleDescriptor(
+      await this.#options.store.descriptor(tenant, run.sourceBundleRef),
     );
     validateDescriptor(descriptor, run, this.#options);
     const seen = new Set<string>();
     let total = 0;
-    for (const entry of descriptor.entries) {
-      abort(signal);
+    const entries = descriptor.entries.map((entry) => {
       const path = assertRelativePath(entry.path, "source bundle path");
-      const collisionKey = path.toLocaleLowerCase("en-US");
+      // Documented v1 collision rule: NFC path followed by locale-independent
+      // Unicode lowercasing. This is deterministic across deployment locales.
+      const collisionKey = path.toLowerCase();
       if (seen.has(collisionKey)) {
         throw new Error(`duplicate or case-ambiguous source path: ${path}`);
       }
@@ -80,12 +78,21 @@ export class DeterministicSourceBundleMaterializer
       if (total > this.#options.maxTotalBytes) {
         throw new Error("source bundle exceeds total byte limit");
       }
-      const content = await this.#options.store.content(tenant, entry.contentRef);
+      return { ...entry, path };
+    });
+    for (const entry of entries) {
+      abort(signal);
+      const { path } = entry;
+      const content = await this.#options.store.content(
+        tenant,
+        entry.contentRef,
+      );
       if (content.byteLength !== entry.size) {
         throw new Error(`source size mismatch: ${path}`);
       }
       const actual = `sha256:${createHash("sha256").update(content).digest("hex")}`;
-      if (actual !== entry.digest) throw new Error(`source digest mismatch: ${path}`);
+      if (actual !== entry.digest)
+        throw new Error(`source digest mismatch: ${path}`);
       await sandbox.writeFile(path, content, signal);
     }
   }
@@ -110,7 +117,10 @@ function validateDescriptor(
   ) {
     throw new Error("source bundle identity does not match verification run");
   }
-  if (descriptor.entries.length < 1 || descriptor.entries.length > limits.maxFiles) {
+  if (
+    descriptor.entries.length < 1 ||
+    descriptor.entries.length > limits.maxFiles
+  ) {
     throw new Error("source bundle file count is outside limits");
   }
   const canonical = computeBundleDigest({

@@ -1,0 +1,80 @@
+name: deterministic-verification-release-finalize
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Immutable candidate tag to finalize
+        required: true
+        default: control-plane-v0.2.0
+      audit_path:
+        description: Main-branch path to the independent black-box audit JSON
+        required: true
+        default: release/verification-0.2.0/independent-audit.json
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    environment: deterministic-verification-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.17.1"
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify candidate artifacts and independent black-box GO
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          AUDIT_PATH: ${{ inputs.audit_path }}
+        run: |
+          set -euo pipefail
+          test "$TAG" = control-plane-v0.2.0
+          test -f "$AUDIT_PATH"
+          tag_commit="$(git rev-list -n 1 "$TAG")"
+          jq -e --arg sha "$tag_commit" '
+            .schemaVersion == "reef.verification-independent-audit.v1" and
+            .decision == "GO" and
+            .gitCommit == $sha and
+            (.registryPackageTests.passed == true) and
+            (.gitTagTests.passed == true) and
+            (.imageDigestTests.passed == true) and
+            (.trustedProfileTests.passed == true) and
+            (.workerPlatforms | sort == ["linux/amd64", "linux/arm64"]) and
+            (.typedClientTests.passed == true) and
+            (.tenantBindingTests.passed == true) and
+            (.evidenceStoreUntrustingTests.passed == true) and
+            (.knownUnverified | type == "array")
+          ' "$AUDIT_PATH"
+          test "$(npm view '@octopus-reef/control-plane@0.2.0' gitHead)" = "$tag_commit"
+          test "$(npm view '@octopus-reef/verification@0.2.0' gitHead)" = "$tag_commit"
+          gh release view "$TAG" --json isDraft --jq '.isDraft == true' | grep -Fx true
+          mkdir release-assets
+          gh release download "$TAG" --dir release-assets
+          (cd release-assets && sha256sum --check verification-release-record.sha256)
+
+      - name: Replace candidate record with independent-audit-complete record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          AUDIT_PATH: ${{ inputs.audit_path }}
+        run: |
+          set -euo pipefail
+          jq --slurpfile audit "$AUDIT_PATH" '
+            .status = "complete" |
+            .independentAudit = $audit[0]
+          ' release-assets/verification-release-record.json > verification-release-record.json
+          sha256sum verification-release-record.json > verification-release-record.sha256
+          cp "$AUDIT_PATH" independent-audit.json
+          gh release upload "$TAG" --clobber \
+            verification-release-record.json \
+            verification-release-record.sha256 \
+            independent-audit.json
+          gh release edit "$TAG" --draft=false --latest=false

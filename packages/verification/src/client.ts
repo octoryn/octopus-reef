@@ -5,6 +5,14 @@ import type {
   VerificationRunRequest,
   VerificationTenant,
 } from "./types.js";
+import {
+  assertSameIdentity,
+  parseVerificationEvidenceResponse,
+  parseVerificationEventResponse,
+  parseVerificationRunResponse,
+  verificationEventIdentity,
+} from "./client-schema.js";
+import { parseVerificationRunRequest } from "./validation.js";
 
 export type VerificationDecimalCursor = `${bigint}`;
 
@@ -81,49 +89,78 @@ export class VerificationHttpClient {
     this.#reconnectDelayMs = options.reconnectDelayMs ?? 750;
   }
 
-  async createVerification(request: VerificationRunRequest): Promise<VerificationRun> {
-    assertTenant(request, this.#tenant);
-    const run = await this.#json<VerificationRun>(
-      "POST",
-      "v1/verifications",
+  async createRun(request: VerificationRunRequest): Promise<VerificationRun> {
+    const validated = parseProtocol(
       request,
-      request.idempotencyKey,
+      parseVerificationRunRequest,
+      "verification create request",
     );
-    assertRunIdentity(run, request);
+    assertTenant(validated, this.#tenant);
+    const run = parseProtocol(
+      await this.#json(
+        "POST",
+        "v1/verifications",
+        validated,
+        validated.idempotencyKey,
+      ),
+      parseVerificationRunResponse,
+      "verification create response",
+    );
+    assertRunIdentity(run, validated);
     return run;
   }
 
-  async getVerification(runRef: string): Promise<VerificationRun> {
-    const run = await this.#json<VerificationRun>("GET", `v1/verifications/${segment(runRef)}`);
+  async getRun(runRef: string): Promise<VerificationRun> {
+    const run = parseProtocol(
+      await this.#json("GET", `v1/verifications/${segment(runRef)}`),
+      parseVerificationRunResponse,
+      "verification get response",
+    );
+    if (run.runRef !== runRef)
+      throw new VerificationProtocolError("verification run identity mismatch");
     assertTenant(run, this.#tenant);
     return run;
   }
 
-  async retryVerification(runRef: string, command: VerificationCommand): Promise<VerificationRun> {
+  async retryRun(
+    runRef: string,
+    command: VerificationCommand,
+  ): Promise<VerificationRun> {
     return this.#command(runRef, "retry", command);
   }
 
-  async cancelVerification(runRef: string, command: VerificationCommand): Promise<VerificationRun> {
+  async cancelRun(
+    runRef: string,
+    command: VerificationCommand,
+  ): Promise<VerificationRun> {
     return this.#command(runRef, "cancel", command);
   }
 
   async resolveEvidence(ref: string): Promise<VerificationEvidenceEnvelope> {
-    const envelope = await this.#json<VerificationEvidenceEnvelope>(
-      "GET",
-      `v1/verification-evidence/${segment(ref)}`,
+    const envelope = parseProtocol(
+      await this.#json("GET", `v1/verification-evidence/${segment(ref)}`),
+      parseVerificationEvidenceResponse,
+      "verification Evidence response",
     );
     assertTenant(envelope, this.#tenant);
-    if (envelope.ref !== ref) throw new VerificationProtocolError("Evidence identity echo mismatch");
+    if (envelope.ref !== ref)
+      throw new VerificationProtocolError("Evidence identity echo mismatch");
     return envelope;
   }
 
-  async *streamEvents(
+  async *streamRunEvents(
     runRef: string,
     options: VerificationEventStreamOptions = {},
   ): AsyncIterable<VerificationEvent> {
     let cursor = options.cursor ?? "0";
     assertDecimalCursor(cursor);
     const reconnect = options.reconnect ?? true;
+    let expectedRun = await this.getRun(runRef);
+    if (
+      isTerminalRun(expectedRun) &&
+      BigInt(cursor) >= BigInt(expectedRun.eventCursor)
+    )
+      return;
     while (!options.signal?.aborted) {
       let response: Response;
       try {
@@ -140,22 +177,44 @@ export class VerificationHttpClient {
         );
       } catch (error) {
         if (options.signal?.aborted) return;
-        if (!reconnect) throw new VerificationNetworkError("verification event stream failed", error);
+        if (!reconnect)
+          throw new VerificationNetworkError(
+            "verification event stream failed",
+            error,
+          );
         await delay(this.#reconnectDelayMs, options.signal);
         continue;
       }
       if (!response.ok) throw await httpError(response);
-      if (!response.headers.get("content-type")?.includes("text/event-stream")) {
-        throw new VerificationProtocolError("verification event stream returned non-SSE content");
+      if (
+        !response.headers.get("content-type")?.includes("text/event-stream")
+      ) {
+        throw new VerificationProtocolError(
+          "verification event stream returned non-SSE content",
+        );
       }
-      if (response.body === null) throw new VerificationProtocolError("verification SSE body is missing");
+      if (response.body === null)
+        throw new VerificationProtocolError("verification SSE body is missing");
       let terminal = false;
       try {
         for await (const event of decodeSse(response.body)) {
           assertDecimalCursor(event.cursor);
           if (BigInt(event.cursor) <= BigInt(cursor)) continue;
-          if (event.runRef !== runRef) throw new VerificationProtocolError("SSE run identity mismatch");
+          if (event.runRef !== runRef)
+            throw new VerificationProtocolError("SSE run identity mismatch");
           assertTenant(event, this.#tenant);
+          try {
+            assertSameIdentity(
+              verificationEventIdentity(event),
+              expectedRun,
+              "verification SSE identity",
+            );
+          } catch (error) {
+            throw new VerificationProtocolError(
+              "verification SSE identity binding failed",
+              error,
+            );
+          }
           cursor = event.cursor as VerificationDecimalCursor;
           yield event;
           if (TERMINAL_EVENTS.has(event.type)) terminal = true;
@@ -163,11 +222,60 @@ export class VerificationHttpClient {
       } catch (error) {
         if (options.signal?.aborted) return;
         if (error instanceof VerificationProtocolError) throw error;
-        if (!reconnect) throw new VerificationNetworkError("verification event stream interrupted", error);
+        if (!reconnect)
+          throw new VerificationNetworkError(
+            "verification event stream interrupted",
+            error,
+          );
       }
       if (terminal || !reconnect) return;
+      expectedRun = await this.getRun(runRef);
+      if (isTerminalRun(expectedRun)) {
+        if (BigInt(cursor) === BigInt(expectedRun.eventCursor)) return;
+        if (BigInt(cursor) > BigInt(expectedRun.eventCursor)) {
+          throw new VerificationProtocolError(
+            "SSE cursor is ahead of the terminal verification run",
+          );
+        }
+      }
       await delay(this.#reconnectDelayMs, options.signal);
     }
+  }
+
+  /** @deprecated Use createRun. Kept for compatibility with 0.2.0 prerelease clients. */
+  createVerification(
+    request: VerificationRunRequest,
+  ): Promise<VerificationRun> {
+    return this.createRun(request);
+  }
+
+  /** @deprecated Use getRun. Kept for compatibility with 0.2.0 prerelease clients. */
+  getVerification(runRef: string): Promise<VerificationRun> {
+    return this.getRun(runRef);
+  }
+
+  /** @deprecated Use retryRun. Kept for compatibility with 0.2.0 prerelease clients. */
+  retryVerification(
+    runRef: string,
+    command: VerificationCommand,
+  ): Promise<VerificationRun> {
+    return this.retryRun(runRef, command);
+  }
+
+  /** @deprecated Use cancelRun. Kept for compatibility with 0.2.0 prerelease clients. */
+  cancelVerification(
+    runRef: string,
+    command: VerificationCommand,
+  ): Promise<VerificationRun> {
+    return this.cancelRun(runRef, command);
+  }
+
+  /** @deprecated Use streamRunEvents. Kept for compatibility with 0.2.0 prerelease clients. */
+  streamEvents(
+    runRef: string,
+    options: VerificationEventStreamOptions = {},
+  ): AsyncIterable<VerificationEvent> {
+    return this.streamRunEvents(runRef, options);
   }
 
   async #command(
@@ -175,18 +283,28 @@ export class VerificationHttpClient {
     action: "retry" | "cancel",
     command: VerificationCommand,
   ): Promise<VerificationRun> {
-    const run = await this.#json<VerificationRun>(
-      "POST",
-      `v1/verifications/${segment(runRef)}/${action}`,
-      command,
-      command.idempotencyKey,
+    const run = parseProtocol(
+      await this.#json(
+        "POST",
+        `v1/verifications/${segment(runRef)}/${action}`,
+        command,
+        command.idempotencyKey,
+      ),
+      parseVerificationRunResponse,
+      `verification ${action} response`,
     );
-    if (run.runRef !== runRef) throw new VerificationProtocolError("verification run identity mismatch");
+    if (run.runRef !== runRef)
+      throw new VerificationProtocolError("verification run identity mismatch");
     assertTenant(run, this.#tenant);
     return run;
   }
 
-  async #json<T>(method: string, path: string, body?: unknown, key?: string): Promise<T> {
+  async #json(
+    method: string,
+    path: string,
+    body?: unknown,
+    key?: string,
+  ): Promise<unknown> {
     let response: Response;
     try {
       response = await this.#fetch(this.#url(path), {
@@ -198,13 +316,19 @@ export class VerificationHttpClient {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch (error) {
-      throw new VerificationNetworkError(`verification ${method} request failed`, error);
+      throw new VerificationNetworkError(
+        `verification ${method} request failed`,
+        error,
+      );
     }
     if (!response.ok) throw await httpError(response);
     try {
-      return (await response.json()) as T;
+      return await response.json();
     } catch (error) {
-      throw new VerificationProtocolError("verification API returned invalid JSON", error);
+      throw new VerificationProtocolError(
+        "verification API returned invalid JSON",
+        error,
+      );
     }
   }
 
@@ -218,7 +342,8 @@ export class VerificationHttpClient {
 
   #url(path: string, query?: Readonly<Record<string, string>>): URL {
     const url = new URL(path, this.#baseUrl);
-    for (const [name, value] of Object.entries(query ?? {})) url.searchParams.set(name, value);
+    for (const [name, value] of Object.entries(query ?? {}))
+      url.searchParams.set(name, value);
     return url;
   }
 }
@@ -229,7 +354,9 @@ const TERMINAL_EVENTS = new Set([
   "verification.cancelled",
 ]);
 
-async function* decodeSse(body: ReadableStream<Uint8Array>): AsyncIterable<VerificationEvent> {
+async function* decodeSse(
+  body: ReadableStream<Uint8Array>,
+): AsyncIterable<VerificationEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -275,42 +402,73 @@ function parseSseFrame(frame: string): VerificationEvent | undefined {
   try {
     parsed = JSON.parse(data.join("\n"));
   } catch (error) {
-    throw new VerificationProtocolError("verification SSE data is invalid JSON", error);
+    throw new VerificationProtocolError(
+      "verification SSE data is invalid JSON",
+      error,
+    );
   }
   if (parsed === null || typeof parsed !== "object") {
-    throw new VerificationProtocolError("verification SSE data must be an object");
+    throw new VerificationProtocolError(
+      "verification SSE data must be an object",
+    );
   }
   const event = parsed as Partial<VerificationEvent>;
-  if (event.cursor !== id || event.type !== type || typeof event.type !== "string") {
-    throw new VerificationProtocolError("verification SSE id, cursor, or type mismatch");
+  if (
+    event.cursor !== id ||
+    event.type !== type ||
+    typeof event.type !== "string"
+  ) {
+    throw new VerificationProtocolError(
+      "verification SSE id, cursor, or type mismatch",
+    );
   }
-  return event as VerificationEvent;
+  return parseProtocol(
+    event,
+    parseVerificationEventResponse,
+    "verification SSE event",
+  );
 }
 
 async function httpError(response: Response): Promise<VerificationHttpError> {
   const text = await response.text();
   let body: unknown = text;
-  try { body = text === "" ? undefined : JSON.parse(text); } catch { /* retain text */ }
+  try {
+    body = text === "" ? undefined : JSON.parse(text);
+  } catch {
+    /* retain text */
+  }
   const details = errorDetails(body);
   return new VerificationHttpError(
     response.status,
     details.code ?? `HTTP_${response.status}`,
-    details.message ?? `verification request failed with HTTP ${response.status}`,
+    details.message ??
+      `verification request failed with HTTP ${response.status}`,
     body,
     details.retryable ??
-      (response.status === 408 || response.status === 429 || response.status >= 500),
+      (response.status === 408 ||
+        response.status === 429 ||
+        response.status >= 500),
   );
 }
 
-function errorDetails(body: unknown): { code?: string; message?: string; retryable?: boolean } {
-  if (body === null || typeof body !== "object" || !("error" in body)) return {};
+function errorDetails(body: unknown): {
+  code?: string;
+  message?: string;
+  retryable?: boolean;
+} {
+  if (body === null || typeof body !== "object" || !("error" in body))
+    return {};
   const error = (body as { error?: unknown }).error;
   if (error === null || typeof error !== "object") return {};
   const record = error as Record<string, unknown>;
   return {
     ...(typeof record["code"] === "string" ? { code: record["code"] } : {}),
-    ...(typeof record["message"] === "string" ? { message: record["message"] } : {}),
-    ...(typeof record["retryable"] === "boolean" ? { retryable: record["retryable"] } : {}),
+    ...(typeof record["message"] === "string"
+      ? { message: record["message"] }
+      : {}),
+    ...(typeof record["retryable"] === "boolean"
+      ? { retryable: record["retryable"] }
+      : {}),
   };
 }
 
@@ -328,33 +486,88 @@ function segment(value: string): string {
   return encodeURIComponent(value);
 }
 
-function assertDecimalCursor(value: string): asserts value is VerificationDecimalCursor {
-  if (!/^\d+$/.test(value)) throw new VerificationProtocolError("event cursor must be decimal");
+function assertDecimalCursor(
+  value: string,
+): asserts value is VerificationDecimalCursor {
+  if (!/^(?:0|[1-9]\d*)$/.test(value)) {
+    throw new VerificationProtocolError(
+      "event cursor must be canonical decimal",
+    );
+  }
 }
 
-function assertTenant(value: VerificationTenant, expected: VerificationTenant): void {
+function assertTenant(
+  value: VerificationTenant,
+  expected: VerificationTenant,
+): void {
   if (
     value.organisationRef !== expected.organisationRef ||
     value.projectRef !== expected.projectRef
-  ) throw new VerificationProtocolError("verification tenant identity echo mismatch");
+  )
+    throw new VerificationProtocolError(
+      "verification tenant identity echo mismatch",
+    );
 }
 
-function assertRunIdentity(run: VerificationRun, request: VerificationRunRequest): void {
+function assertRunIdentity(
+  run: VerificationRun,
+  request: VerificationRunRequest,
+): void {
   for (const key of IDENTITY_KEYS) {
-    if (run[key] !== request[key]) throw new VerificationProtocolError(`verification identity mismatch: ${key}`);
+    if (run[key] !== request[key])
+      throw new VerificationProtocolError(
+        `verification identity mismatch: ${key}`,
+      );
   }
 }
 
 const IDENTITY_KEYS = [
-  "organisationRef", "projectRef", "candidateRef", "candidateDigest", "sourceBundleRef",
-  "sourceBundleDigest", "verificationProfileRef", "verificationProfileVersion",
+  "organisationRef",
+  "projectRef",
+  "candidateRef",
+  "candidateDigest",
+  "sourceBundleRef",
+  "sourceBundleDigest",
+  "verificationProfileRef",
+  "verificationProfileVersion",
   "verificationProfileDigest",
 ] as const;
+
+function isTerminalRun(run: VerificationRun): boolean {
+  return (
+    run.state === "completed" ||
+    run.state === "failed" ||
+    run.state === "cancelled"
+  );
+}
+
+function parseProtocol<T>(
+  value: unknown,
+  parse: (input: unknown) => T,
+  name: string,
+): T {
+  try {
+    return parse(value);
+  } catch (error) {
+    if (error instanceof VerificationProtocolError) throw error;
+    throw new VerificationProtocolError(
+      `${name} failed runtime schema validation`,
+      error,
+    );
+  }
+}
 
 async function delay(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return;
   await new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
   });
 }

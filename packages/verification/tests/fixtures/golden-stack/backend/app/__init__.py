@@ -1,0 +1,1 @@
+"""Generated Golden Stack backend."""

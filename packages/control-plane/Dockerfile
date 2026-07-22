@@ -14,6 +14,7 @@ COPY packages/adapter-blackboard/package.json packages/adapter-blackboard/
 COPY packages/adapter-experience/package.json packages/adapter-experience/
 COPY packages/adapter-scout/package.json packages/adapter-scout/
 COPY packages/control-plane/package.json packages/control-plane/
+COPY packages/verification/package.json packages/verification/
 COPY packages/commercial/package.json packages/commercial/
 COPY packages/gateway/package.json packages/gateway/
 COPY packages/server/package.json packages/server/
@@ -34,7 +35,11 @@ COPY packages/control-plane/tsconfig.json packages/control-plane/tsconfig.json
 COPY packages/control-plane/src packages/control-plane/src
 COPY packages/control-plane/migrations packages/control-plane/migrations
 COPY packages/control-plane/README.md packages/control-plane/README.md
-RUN npx tsc -b packages/engine packages/protocol packages/agent packages/adapter-runtime packages/control-plane
+COPY packages/verification/tsconfig.json packages/verification/tsconfig.json
+COPY packages/verification/src packages/verification/src
+COPY packages/verification/migrations packages/verification/migrations
+COPY packages/verification/README.md packages/verification/README.md
+RUN npx tsc -b packages/engine packages/protocol packages/agent packages/adapter-runtime packages/verification packages/control-plane
 RUN npm prune --omit=dev
 
 FROM node:22.17.1-bookworm-slim AS runtime-base
@@ -69,6 +74,10 @@ COPY --from=build /app/packages/control-plane/package.json ./packages/control-pl
 COPY --from=build /app/packages/control-plane/dist ./packages/control-plane/dist
 COPY --from=build /app/packages/control-plane/migrations ./packages/control-plane/migrations
 COPY --from=build /app/packages/control-plane/README.md ./packages/control-plane/README.md
+COPY --from=build /app/packages/verification/package.json ./packages/verification/package.json
+COPY --from=build /app/packages/verification/dist ./packages/verification/dist
+COPY --from=build /app/packages/verification/migrations ./packages/verification/migrations
+COPY --from=build /app/packages/verification/README.md ./packages/verification/README.md
 
 USER node
 ENTRYPOINT ["node", "/app/packages/control-plane/dist/bin.js"]

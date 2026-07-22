@@ -33,7 +33,26 @@ const FORBIDDEN_KEYS = new Set([
   "token",
 ]);
 
-export function parseVerificationRunRequest(value: unknown): VerificationRunRequest {
+const SOURCE_BUNDLE_DESCRIPTOR_KEYS = new Set([
+  "schemaVersion",
+  "organisationRef",
+  "projectRef",
+  "sourceBundleRef",
+  "sourceBundleDigest",
+  "unicodeNormalization",
+  "entries",
+]);
+
+const SOURCE_BUNDLE_ENTRY_KEYS = new Set([
+  "path",
+  "size",
+  "digest",
+  "contentRef",
+]);
+
+export function parseVerificationRunRequest(
+  value: unknown,
+): VerificationRunRequest {
   try {
     return parseVerificationRunRequestValue(value);
   } catch (error) {
@@ -45,7 +64,9 @@ export function parseVerificationRunRequest(value: unknown): VerificationRunRequ
   }
 }
 
-function parseVerificationRunRequestValue(value: unknown): VerificationRunRequest {
+function parseVerificationRunRequestValue(
+  value: unknown,
+): VerificationRunRequest {
   const record = strictObject(value, "verification request");
   for (const key of Object.keys(record)) {
     if (!REQUEST_KEYS.has(key)) {
@@ -54,7 +75,9 @@ function parseVerificationRunRequestValue(value: unknown): VerificationRunReques
     }
   }
   if (Object.keys(record).length !== REQUEST_KEYS.size) {
-    throw new Error("verification request must contain the exact v1 identity fields");
+    throw new Error(
+      "verification request must contain the exact v1 identity fields",
+    );
   }
   const request = {
     organisationRef: nonempty(record, "organisationRef"),
@@ -77,7 +100,13 @@ function parseVerificationRunRequestValue(value: unknown): VerificationRunReques
     sourceBundleRef: request.sourceBundleRef,
     verificationProfileRef: request.verificationProfileRef,
   })) {
-    if (ref.length > 1024 || !ref.includes(":")) {
+    if (
+      ref.length > 1024 ||
+      !ref.includes(":") ||
+      ref.includes("://") ||
+      ref.includes("\\") ||
+      /\p{Cc}/u.test(ref)
+    ) {
       throw new Error(`${name} must be a bounded opaque reference`);
     }
   }
@@ -94,6 +123,69 @@ export function assertTenantBinding(
   ) {
     throw new InvalidVerificationRequestError(
       "verification request identity does not match tenant headers",
+    );
+  }
+}
+
+/** Strict runtime parser for untrusted descriptor JSON returned by a bundle store. */
+export function parseSourceBundleDescriptor(
+  value: unknown,
+): SourceBundleDescriptor {
+  try {
+    const descriptor = strictObject(value, "source bundle descriptor");
+    exactKeys(
+      descriptor,
+      SOURCE_BUNDLE_DESCRIPTOR_KEYS,
+      "source bundle descriptor",
+    );
+    if (descriptor["schemaVersion"] !== "reef.source-bundle.v1") {
+      throw new Error("unsupported source bundle schemaVersion");
+    }
+    if (descriptor["unicodeNormalization"] !== "NFC") {
+      throw new Error("source bundle must use NFC Unicode normalization");
+    }
+    const organisationRef = opaqueReference(descriptor, "organisationRef");
+    const projectRef = opaqueReference(descriptor, "projectRef");
+    const sourceBundleRef = opaqueReference(descriptor, "sourceBundleRef");
+    const sourceBundleDigest = digest(descriptor, "sourceBundleDigest");
+    const rawEntries = descriptor["entries"];
+    if (!Array.isArray(rawEntries))
+      throw new Error("source bundle entries must be an array");
+    const entries = rawEntries.map((rawEntry, index) => {
+      const entry = strictObject(rawEntry, `source bundle entry ${index}`);
+      exactKeys(
+        entry,
+        SOURCE_BUNDLE_ENTRY_KEYS,
+        `source bundle entry ${index}`,
+      );
+      const path = assertRelativePath(
+        nonempty(entry, "path"),
+        "source bundle path",
+      );
+      const size = entry["size"];
+      if (!Number.isSafeInteger(size) || Number(size) < 0) {
+        throw new Error(`source bundle entry ${index} size is invalid`);
+      }
+      const entryDigest = digest(entry, "digest");
+      const contentRef = opaqueReference(entry, "contentRef");
+      return { path, size: Number(size), digest: entryDigest, contentRef };
+    });
+    return {
+      schemaVersion: "reef.source-bundle.v1",
+      organisationRef,
+      projectRef,
+      sourceBundleRef,
+      sourceBundleDigest,
+      unicodeNormalization: "NFC",
+      entries,
+    };
+  } catch (error) {
+    if (error instanceof InvalidVerificationRequestError) throw error;
+    throw new InvalidVerificationRequestError(
+      error instanceof Error
+        ? error.message
+        : "invalid source bundle descriptor",
+      { cause: error },
     );
   }
 }
@@ -120,16 +212,14 @@ export function computeProfileDigest(
 export function computeBundleDigest(
   descriptor: Omit<SourceBundleDescriptor, "sourceBundleDigest">,
 ): string {
-  return `sha256:${canonicalHash(
-    {
-      schemaVersion: descriptor.schemaVersion,
-      organisationRef: descriptor.organisationRef,
-      projectRef: descriptor.projectRef,
-      sourceBundleRef: descriptor.sourceBundleRef,
-      unicodeNormalization: descriptor.unicodeNormalization,
-      entries: descriptor.entries,
-    } as never,
-  )}`;
+  return `sha256:${canonicalHash({
+    schemaVersion: descriptor.schemaVersion,
+    organisationRef: descriptor.organisationRef,
+    projectRef: descriptor.projectRef,
+    sourceBundleRef: descriptor.sourceBundleRef,
+    unicodeNormalization: descriptor.unicodeNormalization,
+    entries: descriptor.entries,
+  } as never)}`;
 }
 
 export function assertDigest(value: string, name = "digest"): void {
@@ -145,7 +235,9 @@ export function assertRelativePath(value: string, name = "path"): string {
     value.includes("\\") ||
     value.startsWith("/") ||
     value.endsWith("/") ||
-    value.split("/").some((part) => part === "" || part === "." || part === "..") ||
+    value
+      .split("/")
+      .some((part) => part === "" || part === "." || part === "..") ||
     value.normalize("NFC") !== value
   ) {
     throw new Error(`${name} is not a canonical NFC relative path`);
@@ -158,7 +250,10 @@ export function assertWorkingDirectory(value: string): string {
   return assertRelativePath(value, "check working directory");
 }
 
-export function strictObject(value: unknown, name: string): Record<string, unknown> {
+export function strictObject(
+  value: unknown,
+  name: string,
+): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${name} must be an object`);
   }
@@ -180,13 +275,42 @@ function digest(record: Record<string, unknown>, key: string): string {
 }
 
 function bounded(value: string, maximum: number): string {
-  if (value.length > maximum) throw new Error(`value exceeds ${maximum} characters`);
+  if (value.length > maximum)
+    throw new Error(`value exceeds ${maximum} characters`);
   return value;
 }
 
 function immutableVersion(value: string): string {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value)) {
-    throw new Error("verificationProfileVersion must be an immutable semantic version");
+    throw new Error(
+      "verificationProfileVersion must be an immutable semantic version",
+    );
+  }
+  return value;
+}
+
+function exactKeys(
+  value: Record<string, unknown>,
+  expected: ReadonlySet<string>,
+  name: string,
+): void {
+  const keys = Object.keys(value);
+  if (keys.length !== expected.size || keys.some((key) => !expected.has(key))) {
+    throw new Error(`${name} contains missing or unsupported fields`);
+  }
+}
+
+function opaqueReference(record: Record<string, unknown>, key: string): string {
+  const value = nonempty(record, key);
+  if (
+    value.length > 1024 ||
+    !value.includes(":") ||
+    value.includes("://") ||
+    value.includes("\\") ||
+    value !== value.trim() ||
+    /\p{Cc}/u.test(value)
+  ) {
+    throw new Error(`${key} must be a bounded opaque reference`);
   }
   return value;
 }

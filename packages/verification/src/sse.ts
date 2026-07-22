@@ -10,7 +10,9 @@ export function encodeVerificationSseEvent(event: VerificationEvent): string {
   ].join("\n");
 }
 
-export function encodeVerificationSseBatch(events: readonly VerificationEvent[]): string {
+export function encodeVerificationSseBatch(
+  events: readonly VerificationEvent[],
+): string {
   return events.map(encodeVerificationSseEvent).join("");
 }
 

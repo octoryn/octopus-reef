@@ -1,7 +1,4 @@
-import type {
-  VerificationQueue,
-  VerificationStore,
-} from "./ports.js";
+import type { VerificationQueue, VerificationStore } from "./ports.js";
 
 export interface VerificationDispatchPublisherOptions {
   readonly ownerId: string;
@@ -39,10 +36,15 @@ export class VerificationDispatchPublisher {
           record.attempt,
           Math.max(0, Date.parse(record.availableAt) - Date.parse(this.#now())),
         );
-        await this.#options.store.markOutboxPublished(record.id, this.#options.ownerId);
+        await this.#options.store.markOutboxPublished(
+          record.id,
+          this.#options.ownerId,
+        );
         published++;
       } catch (error) {
-        const delay = (this.#options.retryBaseMs ?? 500) * 2 ** Math.min(8, record.deliveryAttempts);
+        const delay =
+          (this.#options.retryBaseMs ?? 500) *
+          2 ** Math.min(8, record.deliveryAttempts);
         await this.#options.store.retryOutbox(
           record.id,
           this.#options.ownerId,

@@ -55,9 +55,12 @@ export class MemoryVerificationStore implements VerificationStore {
     const existingRef = this.#idempotency.get(idemKey);
     if (existingRef !== undefined) {
       const existing = this.#runs.get(runKey(tenant, existingRef));
-      if (existing === undefined) throw new Error("verification idempotency index is corrupt");
+      if (existing === undefined)
+        throw new Error("verification idempotency index is corrupt");
       if (!sameIdentity(existing, run)) {
-        throw new Error("idempotency key conflicts with another verification identity");
+        throw new Error(
+          "idempotency key conflicts with another verification identity",
+        );
       }
       return Promise.resolve({ run: clone(existing), created: false });
     }
@@ -69,8 +72,13 @@ export class MemoryVerificationStore implements VerificationStore {
     return Promise.resolve({ run: clone(stored), created: true });
   }
 
-  get(tenant: VerificationTenant, runRef: string): Promise<VerificationRun | undefined> {
-    return Promise.resolve(optionalClone(this.#runs.get(runKey(tenant, runRef))));
+  get(
+    tenant: VerificationTenant,
+    runRef: string,
+  ): Promise<VerificationRun | undefined> {
+    return Promise.resolve(
+      optionalClone(this.#runs.get(runKey(tenant, runRef))),
+    );
   }
 
   getByIdempotencyKey(
@@ -78,7 +86,9 @@ export class MemoryVerificationStore implements VerificationStore {
     key: string,
   ): Promise<VerificationRun | undefined> {
     const runRef = this.#idempotency.get(idempotencyKey(tenant, key));
-    return runRef === undefined ? Promise.resolve(undefined) : this.get(tenant, runRef);
+    return runRef === undefined
+      ? Promise.resolve(undefined)
+      : this.get(tenant, runRef);
   }
 
   mutateWithEvent(
@@ -90,7 +100,8 @@ export class MemoryVerificationStore implements VerificationStore {
     fencingToken?: number,
   ): Promise<VerificationRun | undefined> {
     const current = this.#runs.get(runKey(tenant, runRef));
-    if (!canMutate(current, expectedVersion, fencingToken)) return Promise.resolve(undefined);
+    if (!canMutate(current, expectedVersion, fencingToken))
+      return Promise.resolve(undefined);
     const appended = this.#appendEvent(current, event);
     const next = mutate(current, mutation, appended.cursor, this.#now());
     this.#runs.set(runKey(tenant, runRef), next);
@@ -194,12 +205,17 @@ export class MemoryVerificationStore implements VerificationStore {
   ): Promise<VerificationRun | undefined> {
     const key = runKey(tenant, runRef);
     const current = this.#runs.get(key);
-    if (!canMutate(current, expectedVersion, fencingToken) || current.attempt !== attempt) {
+    if (
+      !canMutate(current, expectedVersion, fencingToken) ||
+      current.attempt !== attempt
+    ) {
       return Promise.resolve(undefined);
     }
     const list = this.#checkpoints.get(key) ?? [];
     const existing = list.find(
-      (checkpoint) => checkpoint.attempt === attempt && checkpoint.checkRef === result.checkRef,
+      (checkpoint) =>
+        checkpoint.attempt === attempt &&
+        checkpoint.checkRef === result.checkRef,
     );
     if (existing !== undefined) return Promise.resolve(clone(current));
     const appended = this.#appendEvent(current, event);
@@ -229,7 +245,9 @@ export class MemoryVerificationStore implements VerificationStore {
     tenant: VerificationTenant,
     runRef: string,
   ): Promise<readonly VerificationCheckpoint[]> {
-    return Promise.resolve(clone(this.#checkpoints.get(runKey(tenant, runRef)) ?? []));
+    return Promise.resolve(
+      clone(this.#checkpoints.get(runKey(tenant, runRef)) ?? []),
+    );
   }
 
   events(
@@ -238,10 +256,15 @@ export class MemoryVerificationStore implements VerificationStore {
     afterCursor = "0",
     limit = 100,
   ): Promise<readonly VerificationEvent[]> {
-    if (!/^\d+$/.test(afterCursor)) throw new Error("invalid decimal event cursor");
+    if (!/^\d+$/.test(afterCursor))
+      throw new Error("invalid decimal event cursor");
     const events = this.#events.get(runKey(tenant, runRef)) ?? [];
     return Promise.resolve(
-      clone(events.filter((event) => BigInt(event.cursor) > BigInt(afterCursor)).slice(0, limit)),
+      clone(
+        events
+          .filter((event) => BigInt(event.cursor) > BigInt(afterCursor))
+          .slice(0, limit),
+      ),
     );
   }
 
@@ -257,7 +280,8 @@ export class MemoryVerificationStore implements VerificationStore {
         claimed.length >= limit ||
         row.publishedAt !== undefined ||
         Date.parse(row.availableAt) > Date.parse(now) ||
-        (row.leaseExpiresAt !== undefined && Date.parse(row.leaseExpiresAt) > Date.parse(now))
+        (row.leaseExpiresAt !== undefined &&
+          Date.parse(row.leaseExpiresAt) > Date.parse(now))
       ) {
         continue;
       }
@@ -275,7 +299,8 @@ export class MemoryVerificationStore implements VerificationStore {
 
   markOutboxPublished(id: string, ownerId: string): Promise<void> {
     const row = this.#outbox.get(id);
-    if (row?.ownerId === ownerId) this.#outbox.set(id, { ...row, publishedAt: this.#now() });
+    if (row?.ownerId === ownerId)
+      this.#outbox.set(id, { ...row, publishedAt: this.#now() });
     return Promise.resolve();
   }
 
@@ -288,12 +313,21 @@ export class MemoryVerificationStore implements VerificationStore {
     const row = this.#outbox.get(id);
     if (row?.ownerId === ownerId) {
       const { ownerId: _owner, leaseExpiresAt: _lease, ...rest } = row;
-      this.#outbox.set(id, { ...rest, availableAt, lastError: error.slice(0, 2000) });
+      void _owner;
+      void _lease;
+      this.#outbox.set(id, {
+        ...rest,
+        availableAt,
+        lastError: error.slice(0, 2000),
+      });
     }
     return Promise.resolve();
   }
 
-  #appendEvent(run: VerificationRun, input: VerificationEventInput): VerificationEvent {
+  #appendEvent(
+    run: VerificationRun,
+    input: VerificationEventInput,
+  ): VerificationEvent {
     const tenant = tenantOf(run);
     const semantic = `${runKey(tenant, run.runRef)}\0${input.idempotencyKey}`;
     const existing = this.#eventKeys.get(semantic);
@@ -319,7 +353,10 @@ export class MemoryVerificationStore implements VerificationStore {
     dispatch: VerificationDispatchInput,
   ): void {
     const semantic = `${runKey(tenant, runRef)}\0${dispatch.idempotencyKey}`;
-    if ([...this.#outbox.values()].some((row) => row.idempotencyKey === semantic)) return;
+    if (
+      [...this.#outbox.values()].some((row) => row.idempotencyKey === semantic)
+    )
+      return;
     const row: OutboxRow = {
       ...tenant,
       id: randomUUID(),
@@ -361,7 +398,8 @@ export class MemoryVerificationQueue implements VerificationQueue {
       availableAt: new Date(Date.parse(this.#now()) + delayMs).toISOString(),
     };
     this.#messages.push(message);
-    if (this.duplicateDeliveries) this.#messages.push({ ...message, id: randomUUID() });
+    if (this.duplicateDeliveries)
+      this.#messages.push({ ...message, id: randomUUID() });
     return Promise.resolve();
   }
 
@@ -370,13 +408,14 @@ export class MemoryVerificationQueue implements VerificationQueue {
     leaseMs: number,
     now: string,
   ): Promise<VerificationQueueLease | undefined> {
-    const message = this.#messages.find(
-      (candidate) => {
-        const current = this.#leased.get(candidate.id);
-        return Date.parse(candidate.availableAt) <= Date.parse(now) &&
-          (current === undefined || Date.parse(current.expiresAt) <= Date.parse(now));
-      },
-    );
+    const message = this.#messages.find((candidate) => {
+      const current = this.#leased.get(candidate.id);
+      return (
+        Date.parse(candidate.availableAt) <= Date.parse(now) &&
+        (current === undefined ||
+          Date.parse(current.expiresAt) <= Date.parse(now))
+      );
+    });
     if (message === undefined) return Promise.resolve(undefined);
     const lease: VerificationQueueLease = {
       message: clone(message),
@@ -388,7 +427,10 @@ export class MemoryVerificationQueue implements VerificationQueue {
     return Promise.resolve(lease);
   }
 
-  heartbeat(lease: VerificationQueueLease, expiresAt: string): Promise<boolean> {
+  heartbeat(
+    lease: VerificationQueueLease,
+    expiresAt: string,
+  ): Promise<boolean> {
     const current = this.#leased.get(lease.message.id);
     if (current?.receipt !== lease.receipt) return Promise.resolve(false);
     this.#leased.set(lease.message.id, { ...current, expiresAt });
@@ -396,14 +438,18 @@ export class MemoryVerificationQueue implements VerificationQueue {
   }
 
   ack(lease: VerificationQueueLease): Promise<void> {
-    const index = this.#messages.findIndex((message) => message.id === lease.message.id);
+    const index = this.#messages.findIndex(
+      (message) => message.id === lease.message.id,
+    );
     if (index >= 0) this.#messages.splice(index, 1);
     this.#leased.delete(lease.message.id);
     return Promise.resolve();
   }
 
   retry(lease: VerificationQueueLease, availableAt: string): Promise<void> {
-    const message = this.#messages.find((candidate) => candidate.id === lease.message.id);
+    const message = this.#messages.find(
+      (candidate) => candidate.id === lease.message.id,
+    );
     if (message !== undefined) Object.assign(message, { availableAt });
     this.#leased.delete(lease.message.id);
     return Promise.resolve();
@@ -411,7 +457,10 @@ export class MemoryVerificationQueue implements VerificationQueue {
 }
 
 export class MemoryArtifactStore implements VerificationArtifactStore {
-  readonly #values = new Map<string, { tenant: VerificationTenant; value: Uint8Array }>();
+  readonly #values = new Map<
+    string,
+    { tenant: VerificationTenant; value: Uint8Array }
+  >();
 
   put(
     tenant: VerificationTenant,
@@ -421,12 +470,26 @@ export class MemoryArtifactStore implements VerificationArtifactStore {
     content: Uint8Array,
   ): Promise<VerificationArtifact> {
     const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
-    const ref = `artifact:${createHash("sha256").update(`${tenantKey(tenant)}\0${runRef}\0${kind}\0${digest}`).digest("hex")}`;
-    this.#values.set(ref, { tenant: clone(tenant), value: Uint8Array.from(content) });
-    return Promise.resolve({ ref, digest, kind, mediaType, size: content.byteLength });
+    const ref = `artifact:${createHash("sha256")
+      .update(`${tenantKey(tenant)}\0${runRef}\0${kind}\0${digest}`)
+      .digest("hex")}`;
+    this.#values.set(ref, {
+      tenant: clone(tenant),
+      value: Uint8Array.from(content),
+    });
+    return Promise.resolve({
+      ref,
+      digest,
+      kind,
+      mediaType,
+      size: content.byteLength,
+    });
   }
 
-  get(tenant: VerificationTenant, ref: string): Promise<Uint8Array | undefined> {
+  get(
+    tenant: VerificationTenant,
+    ref: string,
+  ): Promise<Uint8Array | undefined> {
     const stored = this.#values.get(ref);
     return Promise.resolve(
       stored !== undefined && tenantKey(stored.tenant) === tenantKey(tenant)
@@ -449,7 +512,11 @@ export class MemoryEvidenceStore implements VerificationEvidenceStore {
     if (!verifyEvidence(evidence)) throw new Error("refusing invalid Evidence");
     const digest = `sha256:${canonicalHash(evidence as never)}`;
     const ref = `evidence:${evidence.id}`;
-    this.#values.set(ref, { tenant: clone(tenant), evidence: clone(evidence), digest });
+    this.#values.set(ref, {
+      tenant: clone(tenant),
+      evidence: clone(evidence),
+      digest,
+    });
     return Promise.resolve({ ref, digest });
   }
 
@@ -468,14 +535,20 @@ export class MemoryEvidenceStore implements VerificationEvidenceStore {
 
 export class MemorySourceBundleStore implements SourceBundleStore {
   readonly #descriptors = new Map<string, SourceBundleDescriptor>();
-  readonly #content = new Map<string, { tenant: VerificationTenant; value: Uint8Array }>();
+  readonly #content = new Map<
+    string,
+    { tenant: VerificationTenant; value: Uint8Array }
+  >();
 
   add(
     descriptor: SourceBundleDescriptor,
     content: Readonly<Record<string, Uint8Array>>,
   ): void {
     const tenant = tenantOf(descriptor);
-    this.#descriptors.set(bundleKey(tenant, descriptor.sourceBundleRef), clone(descriptor));
+    this.#descriptors.set(
+      bundleKey(tenant, descriptor.sourceBundleRef),
+      clone(descriptor),
+    );
     for (const [ref, value] of Object.entries(content)) {
       this.#content.set(bundleKey(tenant, ref), {
         tenant: clone(tenant),
@@ -489,7 +562,8 @@ export class MemorySourceBundleStore implements SourceBundleStore {
     sourceBundleRef: string,
   ): Promise<SourceBundleDescriptor> {
     const value = this.#descriptors.get(bundleKey(tenant, sourceBundleRef));
-    if (value === undefined) throw new Error("source bundle descriptor not found");
+    if (value === undefined)
+      throw new Error("source bundle descriptor not found");
     return Promise.resolve(clone(value));
   }
 
@@ -510,26 +584,41 @@ function mutate(
     ...current,
     ...(mutation.state !== undefined ? { state: mutation.state } : {}),
     ...(mutation.attempt !== undefined ? { attempt: mutation.attempt } : {}),
-    ...(mutation.checks !== undefined ? { checks: clone(mutation.checks) } : {}),
-    ...(mutation.verdict !== undefined ? { verdict: clone(mutation.verdict) } : {}),
-    ...(mutation.failure !== undefined ? { failure: clone(mutation.failure) } : {}),
-    ...(mutation.startedAt !== undefined ? { startedAt: mutation.startedAt } : {}),
-    ...(mutation.finishedAt !== undefined ? { finishedAt: mutation.finishedAt } : {}),
-    ...(mutation.sandboxRef !== undefined ? { sandboxRef: mutation.sandboxRef } : {}),
+    ...(mutation.checks !== undefined
+      ? { checks: clone(mutation.checks) }
+      : {}),
+    ...(mutation.verdict !== undefined
+      ? { verdict: clone(mutation.verdict) }
+      : {}),
+    ...(mutation.failure !== undefined
+      ? { failure: clone(mutation.failure) }
+      : {}),
+    ...(mutation.startedAt !== undefined
+      ? { startedAt: mutation.startedAt }
+      : {}),
+    ...(mutation.finishedAt !== undefined
+      ? { finishedAt: mutation.finishedAt }
+      : {}),
+    ...(mutation.sandboxRef !== undefined
+      ? { sandboxRef: mutation.sandboxRef }
+      : {}),
     version: current.version + 1,
     eventCursor: mutation.eventCursor ?? eventCursor,
     updatedAt,
   };
   if (mutation.clearLease) {
-    const { lease: _lease, ...withoutLease } = next;
+    const { lease, ...withoutLease } = next;
+    void lease;
     next = withoutLease;
   }
   if (mutation.clearFailure) {
-    const { failure: _failure, ...withoutFailure } = next;
+    const { failure, ...withoutFailure } = next;
+    void failure;
     next = withoutFailure;
   }
   if (mutation.clearVerdict) {
-    const { verdict: _verdict, ...withoutVerdict } = next;
+    const { verdict, ...withoutVerdict } = next;
+    void verdict;
     next = withoutVerdict;
   }
   return next;
@@ -558,7 +647,11 @@ function sameIdentity(a: VerificationRun, b: VerificationRun): boolean {
     "verificationProfileRef",
     "verificationProfileVersion",
     "verificationProfileDigest",
-  ].every((key) => (a as unknown as Record<string, unknown>)[key] === (b as unknown as Record<string, unknown>)[key]);
+  ].every(
+    (key) =>
+      (a as unknown as Record<string, unknown>)[key] ===
+      (b as unknown as Record<string, unknown>)[key],
+  );
 }
 
 function runKey(tenant: VerificationTenant, runRef: string): string {

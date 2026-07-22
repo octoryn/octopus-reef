@@ -101,7 +101,9 @@ export async function resolveEvidenceEnvelope(
   const stored = await store.get(tenant, ref);
   if (stored === undefined) return undefined;
   if (!verifyEvidence(stored.evidence)) {
-    throw new Error("stored verification Evidence failed integrity verification");
+    throw new Error(
+      "stored verification Evidence failed integrity verification",
+    );
   }
   const digest = evidenceDigest(stored.evidence);
   if (digest !== stored.digest) {
@@ -124,7 +126,9 @@ export function evidenceDigest(evidence: Evidence): string {
   return `sha256:${canonicalHash(evidence as never)}`;
 }
 
-function subjects(run: VerificationRun): readonly { type: string; id: string }[] {
+function subjects(
+  run: VerificationRun,
+): readonly { type: string; id: string }[] {
   return [
     { type: "organisation", id: run.organisationRef },
     { type: "project", id: run.projectRef },
