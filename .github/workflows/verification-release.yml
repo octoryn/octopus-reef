@@ -865,7 +865,7 @@ jobs:
           if npm view "@octopus-reef/control-plane@${VERSION}" --json > control-plane-existing.json 2>/dev/null; then
             test "$(jq -r '.gitHead' control-plane-existing.json)" = "$RELEASE_COMMIT"
             test "$(jq -r '.dist.integrity' control-plane-existing.json)" = "$expected_control_integrity"
-            test "$(jq -r '.dependencies[\"@octopus-reef/verification\"]' control-plane-existing.json)" = "$VERSION"
+            test "$(jq -r '.dependencies["@octopus-reef/verification"]' control-plane-existing.json)" = "$VERSION"
           else
             npm publish --provenance --access public --workspace @octopus-reef/control-plane
           fi
