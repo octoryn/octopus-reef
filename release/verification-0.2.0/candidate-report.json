@@ -1,9 +1,9 @@
 {
   "schemaVersion": "reef.verification-candidate-report.v1",
   "decision": "READY_FOR_INDEPENDENT_AUDIT",
-  "implementationCommit": "3d9ed9f5d9d5d55c033fdd7f7d573ffab442a909",
+  "implementationCommit": "0c5701980c635541bb4941417d7bbd607c18534c",
   "recoveredFromCommit": "5d73dd32bcf00393ab359c38e165bac86d62e942",
-  "preparedAt": "2026-07-22T23:55:01Z",
+  "preparedAt": "2026-07-23T01:00:41Z",
   "releaseIdentity": {
     "publicPackage": "@octopus-reef/control-plane@0.2.0",
     "formalRuntimePackage": "@octopus-reef/verification@0.2.0",
@@ -23,14 +23,22 @@
       "failure": "The Trivy action ref omitted the required v tag prefix.",
       "publishedArtifacts": [],
       "disposition": "Corrected to aquasecurity/trivy-action@v0.32.0; the failed tag may be replaced only after registry, GHCR and GitHub Release identities are independently confirmed unused."
+    },
+    {
+      "runId": 29970199207,
+      "tagCommit": "966a0ee5f7a08d0890cc8f67d9d61ecc5fa6fa78",
+      "stage": "real PostgreSQL and isolated Golden Stack Worker preflight",
+      "failure": "Linux bind-mount files were owned by the host runner and inaccessible to the named non-root sandbox user.",
+      "publishedArtifacts": [],
+      "disposition": "The sandbox retains its image-declared non-root user, uses the Worker's private numeric group, and grants materialized paths group-only access; real Golden Stack acceptance passed after the fix."
     }
   ],
   "prepublishGates": {
     "passed": true,
     "command": "npm run verify:all && npm run release:smoke && node scripts/verification-prepublish-gate.mjs",
     "fullSourceTests": {
-      "tests": 224,
-      "passed": 218,
+      "tests": 225,
+      "passed": 219,
       "failed": 0,
       "skipped": 6,
       "note": "The six environment-gated integrations were executed separately with real PostgreSQL and Docker."
@@ -61,7 +69,7 @@
     "tests": 1,
     "failed": 0,
     "skipped": 0,
-    "durationMs": 41098,
+    "durationMs": 45114,
     "coverage": [
       "real Next.js production build and tests",
       "real FastAPI dependency install and pytest",
@@ -73,8 +81,8 @@
   "cleanPackageInstall": {
     "passed": true,
     "verification": {
-      "shasum": "db535d2794c1510531f87e7530cd996eb25f4000",
-      "integrity": "sha512-+8rFWGGjR3yr3GI/F0lMFcyQhZShYzaCVMt8PMsugfH6mXuLlUKSPtMWbQw9F53GH6YCgir5y/gUduUFMElxWA=="
+      "shasum": "e58f40acad363a38c4ebd153968e8aff6f2b9a46",
+      "integrity": "sha512-fJExLKV/2omAsHOsnwrGpBaY5SbPhGHSBahiV12qeZaWIOtEiUomt0EIS8tvGf1ZlH2u15tV1c9647tQWEsXYw=="
     },
     "controlPlane": {
       "shasum": "00bf6f96c1e67048a7b7293529d5efcba1601955",
