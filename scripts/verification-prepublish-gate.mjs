@@ -15,19 +15,19 @@ assert(
   "control-plane package identity drifted",
 );
 assert(
-  controlPlane.version === "0.3.0",
-  "control-plane release must be exactly 0.3.0",
+  controlPlane.version === "0.4.0",
+  "control-plane release must be exactly 0.4.0",
 );
 assert(
   verification.name === "@octopus-reef/verification",
   "verification package identity drifted",
 );
 assert(
-  verification.version === "0.3.0",
-  "verification release must be exactly 0.3.0",
+  verification.version === "0.4.0",
+  "verification release must be exactly 0.4.0",
 );
 assert(
-  controlPlane.dependencies?.["@octopus-reef/verification"] === "0.3.0",
+  controlPlane.dependencies?.["@octopus-reef/verification"] === "0.4.0",
   "control-plane must declare the exact formal verification compatibility version",
 );
 
@@ -39,6 +39,7 @@ for (const subpath of [
   "./verification/adapters/postgres",
   "./verification/adapters/local",
   "./verification/adapters/aws",
+  "./verification/adapters/builder-source-bundle-s3",
 ])
   assert(
     controlPlane.exports?.[subpath] !== undefined,
@@ -82,6 +83,22 @@ for (const forbidden of ["`command`", "`argv`", "raw credential", "AgentRun"]) {
     `security boundary documentation omits ${forbidden}`,
   );
 }
+for (const marker of [
+  "octopus.builder.source-bundle/v1",
+  "octopus.reef.builder-source-bundle-binding/v1",
+  "octopus.reef.materialization-descriptor/v2",
+  "octopus.reef.materialization/v2",
+  'JSON.stringify({schemaVersion:"octopus.builder.source-bundle/v1",files})',
+]) {
+  assert(
+    readme.includes(marker),
+    `Builder v1 compatibility documentation omits ${marker}`,
+  );
+}
+assert(
+  verification.exports?.["./adapters/builder-source-bundle-s3"] !== undefined,
+  "verification package omits the Builder v1 S3 adapter export",
+);
 
 const workflow = text(".github/workflows/verification-release.yml");
 for (const marker of [
@@ -99,9 +116,15 @@ for (const marker of [
   "PROFILE_REPOSITORY",
   "golden-profile.json",
   "npm rebuild better-sqlite3",
-  "0002_materialization",
+  "0003_builder_v1_binding",
+  "--draft",
+  ".immutable == true",
 ])
   assert(workflow.includes(marker), `release workflow omits ${marker}`);
+assert(
+  !workflow.includes("--prerelease"),
+  "0.4.0 Release must not be a prerelease",
+);
 
 const verificationDockerfile = text("packages/verification/Dockerfile");
 for (const marker of [
@@ -135,7 +158,7 @@ assert(
 );
 assert(
   text("scripts/write-verification-remote-profile.mjs").includes(
-    'version: "1.1.0"',
+    'version: "1.2.0"',
   ),
   "remote Golden Stack profile version drifted",
 );
@@ -184,6 +207,11 @@ const migrationAssets = [
     asset: "migrations/0002_materialization.sql",
     sql: text("packages/verification/migrations/0002_materialization.sql"),
   },
+  {
+    id: "0003_builder_v1_binding",
+    asset: "migrations/0003_builder_v1_binding.sql",
+    sql: text("packages/verification/migrations/0003_builder_v1_binding.sql"),
+  },
 ];
 const runtimeMigrationModule = await import(
   pathToFileURL(join(root, "packages/verification/dist/adapters/migrations.js"))
@@ -226,6 +254,12 @@ try {
       (file) => file.path === "migrations/0002_materialization.sql",
     ),
     "verification tarball is missing its materialization migration",
+  );
+  assert(
+    verificationPack.files.some(
+      (file) => file.path === "migrations/0003_builder_v1_binding.sql",
+    ),
+    "verification tarball is missing its Builder v1 binding migration",
   );
   assert(
     verificationPack.files.some((file) => file.path === "dist/bin.js"),
@@ -274,6 +308,15 @@ try {
         "}",
         "const pkg = await import('@octopus-reef/control-plane/verification');",
         "if (typeof pkg.VerificationService !== 'function') throw new Error('missing verification core export');",
+        "const materialization = await import('@octopus-reef/control-plane/verification/materialization');",
+        "const adapter = await import('@octopus-reef/control-plane/verification/adapters/builder-source-bundle-s3');",
+        "if (typeof materialization.computeBuilderSourceBundleDigest !== 'function') throw new Error('missing Builder v1 digest adapter');",
+        "if (typeof adapter.AwsS3BuilderSourceBundleMaterializationPort !== 'function') throw new Error('missing Builder v1 S3 adapter');",
+        "const digest = materialization.computeBuilderSourceBundleDigest([",
+        "  {path:'README.md',contentDigest:'sha256:3ff7d0ee673d132b4c46e68fe806da4a31269d1d95a6219a91d5fa7eb25e9b69',sizeBytes:22},",
+        "  {path:'src/app.ts',contentDigest:'sha256:4c9a2a851c102d1e1fe2ebb20defb6a0332b9b5c431a0fd644fe21712c412c6a',sizeBytes:27}",
+        "]);",
+        "if (digest !== 'sha256:dc4f26d4717eb33cb448a4edc1fa8150c4f140fb7db5cad9fe3e1503ce25333d') throw new Error('Builder v1 frozen digest drifted');",
       ].join("\n"),
     ],
     temporary,
@@ -296,7 +339,7 @@ try {
   process.stdout.write(
     `${JSON.stringify(
       {
-        schemaHead: "0002_materialization",
+        schemaHead: "0003_builder_v1_binding",
         migrationSetDigest,
         migrationDigestAlgorithm:
           "sha256(concat(runtime-ordered exact migration SQL bytes))",

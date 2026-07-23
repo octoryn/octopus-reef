@@ -3,7 +3,7 @@ name: deterministic-verification-release
 on:
   workflow_dispatch:
   push:
-    tags: ["control-plane-v0.3.0"]
+    tags: ["control-plane-v0.4.0"]
 
 permissions:
   contents: write
@@ -12,11 +12,11 @@ permissions:
   security-events: write
 
 concurrency:
-  group: deterministic-verification-0.3.0-${{ github.ref }}
+  group: deterministic-verification-0.4.0-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  VERSION: 0.3.0
+  VERSION: 0.4.0
   API_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-api
   WORKER_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-worker
   PROFILE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-golden-stack
@@ -67,6 +67,9 @@ jobs:
           test "$(node -p 'require("./packages/verification/package.json").version')" = "$VERSION"
           test "$(node -p 'require("./packages/control-plane/package.json").dependencies["@octopus-reef/verification"]')" = "$VERSION"
           test "$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.visibility')" = "public"
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/immutable-releases" \
+            --jq 'select(.enabled == true)'
           for package in @octopus-reef/control-plane @octopus-reef/verification; do
             if npm view "${package}@${VERSION}" --json > existing-package.json 2>/dev/null; then
               test "$(jq -r '.gitHead' existing-package.json)" = "$GITHUB_SHA"
@@ -87,14 +90,14 @@ jobs:
       - name: Require a report-only release authorization commit
         run: |
           set -euo pipefail
-          report=release/verification-0.3.0/candidate-report.json
+          report=release/verification-0.4.0/candidate-report.json
           test -f "$report"
           implementation_commit="$(git rev-parse "$GITHUB_SHA^")"
           test "$(git diff --name-only "$implementation_commit" "$GITHUB_SHA" | wc -l | tr -d ' ')" = 1
           test "$(git diff --name-only "$implementation_commit" "$GITHUB_SHA")" = "$report"
           jq -e --arg sha "$implementation_commit" '
             .schemaVersion == "reef.verification-candidate-report.v1" and
-            .decision == "READY_FOR_INDEPENDENT_AUDIT" and
+            .decision == "READY_FOR_FRESH_INDEPENDENT_AUDIT" and
             .implementationCommit == $sha and
             (.prepublishGates.passed == true) and
             (.realPostgresTests.passed == true) and
@@ -444,7 +447,7 @@ jobs:
           set -euo pipefail
           npm sbom --workspace @octopus-reef/verification --sbom-format cyclonedx > verification-package.cdx.json
           npm sbom --workspace @octopus-reef/control-plane --sbom-format cyclonedx > control-plane-package.cdx.json
-          cp release/verification-0.3.0/candidate-report.json candidate-report.json
+          cp release/verification-0.4.0/candidate-report.json candidate-report.json
           jq -n \
             --slurpfile candidate candidate-report.json \
             --slurpfile packageGate verification-package-gate.json \
@@ -479,7 +482,8 @@ jobs:
             preflight-test-summary.json \
             packages/verification/migrations/0001_verification.sql \
             packages/verification/migrations/0002_materialization.sql \
-            docs/DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md \
+            packages/verification/migrations/0003_builder_v1_binding.sql \
+            docs/DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md \
             candidate-report.json \
             > preflight-checks.sha256
       - uses: actions/upload-artifact@v4
@@ -509,7 +513,8 @@ jobs:
             preflight-test-summary.json
             packages/verification/migrations/0001_verification.sql
             packages/verification/migrations/0002_materialization.sql
-            docs/DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md
+            packages/verification/migrations/0003_builder_v1_binding.sql
+            docs/DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md
             preflight-checks.sha256
             candidate-report.json
 
@@ -823,7 +828,7 @@ jobs:
           node scripts/write-verification-remote-profile.mjs "$PROFILE_DIGEST" golden-profile.json
           jq -e --arg digest "$PROFILE_DIGEST" '
             .ref == "verification-profile:golden-next-fastapi-postgres" and
-            .version == "1.1.0" and
+            .version == "1.2.0" and
             .sandboxImageDigest == $digest and
             (.checks | length == 8) and
             (.checks | all(.[]; .required == true and .tool.imageDigest == $digest))
@@ -868,8 +873,8 @@ jobs:
           set -euo pipefail
           migration_digest="$(jq -r '.migrationSetDigest' release-assets/verification-package-gate.json)"
           jq -e '
-            .schemaHead == "0002_materialization" and
-            (.migrationBindings | length == 2) and
+            .schemaHead == "0003_builder_v1_binding" and
+            (.migrationBindings | length == 3) and
             (.migrationBindings | all(.[]; .exactBytes == true))
           ' release-assets/verification-package-gate.json
           profile_ref="$(jq -r '.ref' golden-profile.json)"
@@ -893,9 +898,9 @@ jobs:
             --slurpfile control control-plane-registry.json \
             --slurpfile verification verification-registry.json \
             '{
-              schemaVersion: "reef.verification-release.v2",
-              package: {name: "@octopus-reef/control-plane", version: "0.3.0"},
-              internalPackage: {name: "@octopus-reef/verification", version: "0.3.0"},
+              schemaVersion: "reef.verification-release.v3",
+              package: {name: "@octopus-reef/control-plane", version: "0.4.0"},
+              internalPackage: {name: "@octopus-reef/verification", version: "0.4.0"},
               gitTag: $gitTag,
               gitCommit: $gitCommit,
               apiImage: {repository: $apiRepository, manifestDigest: $apiDigest},
@@ -915,7 +920,7 @@ jobs:
                   gitHead: $verification[0].gitHead
                 }
               },
-              schemaHead: "0002_materialization",
+              schemaHead: "0003_builder_v1_binding",
               migrationSetDigest: $migrationSetDigest,
               migrationDigestAlgorithm: $gate[0].migrationDigestAlgorithm,
               migrationBindings: (
@@ -923,22 +928,25 @@ jobs:
                 map(. + {releaseAsset: (.asset | split("/") | last)})
               ),
               materializationContract: {
-                contractVersion: "1.0.0",
+                contractVersion: "2.0.0",
                 requestSchema: "octopus.reef.external-materialization-request/v1",
-                builderInventorySchema: "octopus.builder.source-bundle/v1",
-                runtimeDescriptorSchema: "octopus.reef.materialization-descriptor/v1",
-                publicIdentitySchema: "octopus.reef.materialization/v1",
-                builderDigestCanonicalization: "lowercase sha256: plus octopus-evidence canonicalHash over the displayed Builder inventory fields excluding sourceBundleDigest",
+                builderDescriptorSchema: "octopus.builder.source-bundle/v1",
+                builderBindingSchema: "octopus.reef.builder-source-bundle-binding/v1",
+                runtimeDescriptorSchema: "octopus.reef.materialization-descriptor/v2",
+                publicIdentitySchema: "octopus.reef.materialization/v2",
+                builderDigestCanonicalization: "sha256(UTF-8 JSON.stringify({schemaVersion,files:[{path,contentDigest,sizeBytes}] sorted by ECMAScript string path comparison}))",
+                builderBindingCanonicalization: "lowercase sha256: plus octopus-evidence canonicalHash over the binding excluding bindingRef and bindingDigest",
                 runtimeDescriptorCanonicalization: "lowercase sha256: plus octopus-evidence canonicalHash over the complete runtime descriptor excluding descriptorDigest",
-                entryOrdering: "strict ascending UTF-8 path bytes",
+                entryOrdering: "strict ascending ECMAScript string path comparison",
                 unicodeNormalization: "NFC",
                 pathSemantics: "portable-nfc-casefold-v1 = NFC(lowercase(uppercase(NFC(path)))) using locale-independent ECMAScript casing",
-                authoritativeSourceBundleDigest: "Builder-owned and candidate-bound",
+                authoritativeBuilderSourceBundleDigest: "Builder-owned exact descriptor digest",
+                builderSourceBundleBindingDigest: "Reef-owned tenant/candidate/path-policy binding",
                 runtimeDescriptorDigest: "Reef-owned and attempt-bound",
                 defaultLimits: {
-                  maxFiles: 20000,
+                  maxFiles: 10000,
                   maxFileBytes: 16777216,
-                  maxTotalBytes: 536870912,
+                  maxTotalBytes: 134217728,
                   maxPathBytes: 1024
                 }
               },
@@ -955,13 +963,13 @@ jobs:
               },
               healthContract: {
                 live: {path: "/health/live", response: {status: "live"}},
-                ready: {path: "/health/ready", response: {status: "ready"}, dependency: "PostgreSQL schema head"},
+                ready: {path: "/health/ready", response: {status: "ready"}, dependency: "PostgreSQL schema head 0003_builder_v1_binding"},
                 sandboxReady: {path: "/readyz", response: {ready: true, service: "reef-verification-sandbox"}}
               },
               profile: {ref: $profileRef, version: $profileVersion, digest: $profileDigest},
               typedClientContract: "/v1/verifications",
               evidenceContract: "octopus-evidence@0.2.0/store-untrusting",
-              compatibilityPolicy: "DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md",
+              compatibilityPolicy: "DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md",
               testSummary: "preflight-test-summary.json",
               scanEvidence: {
                 prePublish: "preflight-*.trivy.json",
@@ -973,8 +981,13 @@ jobs:
                 npm: "npm publish --provenance",
                 oci: "BuildKit mode=max provenance and SBOM attestation manifests"
               },
+              releaseIdentityPolicy: {
+                githubImmutableRelease: true,
+                publicationFlow: "draft with complete assets, then public final publish",
+                fallbackIdentity: "annotated tag object + peeled commit + npm integrity/gitHead + OCI manifest digests + release-bundle.sha256"
+              },
               knownUnverified: $candidate[0].knownUnverified,
-              status: "public-candidate-awaiting-detached-audit",
+              status: "public-final-ready-for-fresh-independent-audit",
               candidateReport: $candidate[0],
               independentAudit: {
                 required: true,
@@ -983,7 +996,7 @@ jobs:
             }' > verification-release-record.json
           sha256sum verification-release-record.json > verification-release-record.sha256
 
-      - name: Create immutable public prerelease awaiting registry/tag/digest black-box audit
+      - name: Create public final digest-bound Release for fresh independent audit
         env:
           GH_TOKEN: ${{ github.token }}
           API_DIGEST: ${{ steps.api_identity.outputs.digest }}
@@ -1004,7 +1017,7 @@ jobs:
           and reef-verification worker. Pin package, tag and images exactly; mutable
           tags and partial artifacts are not compatible release identities.
 
-          This immutable public candidate includes canonical decimal cursors,
+          This public final release includes canonical decimal cursors,
           store-untrusting Evidence identity binding, and the versioned external
           materialization Port. Status: READY FOR FRESH INDEPENDENT AUDIT.
           It is not a Builder GO decision.
@@ -1016,7 +1029,8 @@ jobs:
           cp release-assets/preflight-*.json .
           cp release-assets/packages/verification/migrations/0001_verification.sql .
           cp release-assets/packages/verification/migrations/0002_materialization.sql .
-          cp release-assets/docs/DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md .
+          cp release-assets/packages/verification/migrations/0003_builder_v1_binding.sql .
+          cp release-assets/docs/DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md .
           recovery="$(mktemp -d)"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             asset_count="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')"
@@ -1065,7 +1079,8 @@ jobs:
             preflight-test-summary.json \
             0001_verification.sql \
             0002_materialization.sql \
-            DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md \
+            0003_builder_v1_binding.sql \
+            DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md \
             candidate-report.json \
             > release-bundle.sha256
           sha256sum release-bundle.sha256 > release-bundle.sha256.sha256
@@ -1078,7 +1093,7 @@ jobs:
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" \
               --verify-tag \
-              --prerelease \
+              --draft \
               --title "@octopus-reef/control-plane ${VERSION} deterministic verification" \
               --notes-file release-notes.md
           fi
@@ -1101,8 +1116,8 @@ jobs:
             preflight-remote-golden.trivy.json preflight-remote-golden-arm64.trivy.json
             api-image.trivy.json worker-image.trivy.json profile-image.trivy.json
             preflight-test-summary.json
-            0001_verification.sql 0002_materialization.sql
-            DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md
+            0001_verification.sql 0002_materialization.sql 0003_builder_v1_binding.sql
+            DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md
             candidate-report.json
             release-bundle.sha256 release-bundle.sha256.sha256
           )
@@ -1111,15 +1126,28 @@ jobs:
               gh release upload "$GITHUB_REF_NAME" "$asset"
             fi
           done
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" --jq '.id')"
+          if test "$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" --jq '.draft')" = true; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              -F draft=false \
+              -F prerelease=false \
+              >/dev/null
+          fi
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
+            --jq 'select(.draft == false and .prerelease == false and .immutable == true)'
 
-      - name: Prove the candidate bundle is anonymously public
+      - name: Prove the final bundle is anonymously public
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh release view "$GITHUB_REF_NAME" \
             --json isDraft,isPrerelease \
-            --jq 'select(.isDraft == false and .isPrerelease == true)'
+            --jq 'select(.isDraft == false and .isPrerelease == false)'
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
+            --jq 'select(.immutable == true)'
           anonymous="$(mktemp -d)"
           trap 'rm -rf "$anonymous"' EXIT
           curl --fail --silent --show-error \
