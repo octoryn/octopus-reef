@@ -427,19 +427,9 @@ export class DockerVerificationSandboxProvisioner implements VerificationSandbox
   }
 
   async destroy(sandbox: VerificationSandbox): Promise<void> {
-    const released = await runProcess(
-      [
-        "docker",
-        "exec",
-        sandbox.id,
-        "sh",
-        "-c",
-        'find /workspace -xdev -user "$(id -u)" -exec chmod g+rwX -- {} +',
-      ],
-      process.cwd(),
+    const released = await releaseDockerWorkspace(
+      sandbox.id,
       this.#dockerEnvironment,
-      30_000,
-      1024 * 1024,
       new AbortController().signal,
     );
     await runProcess(
@@ -502,7 +492,7 @@ class DockerVerificationSandbox extends LocalVerificationSandbox {
     }
   }
 
-  override execute(
+  override async execute(
     check: VerificationCheckDefinition,
     environment: Readonly<Record<string, string>>,
     signal: AbortSignal,
@@ -515,7 +505,7 @@ class DockerVerificationSandbox extends LocalVerificationSandbox {
       "--env",
       `${name}=${value}`,
     ]);
-    return runProcess(
+    const result = await runProcess(
       [
         "docker",
         "exec",
@@ -541,7 +531,56 @@ class DockerVerificationSandbox extends LocalVerificationSandbox {
         killer.unref();
       },
     );
+    const released = await releaseDockerWorkspace(
+      this.id,
+      this.#dockerEnvironment,
+      signal,
+    );
+    if (released.exitCode !== 0) {
+      throw new Error(
+        `Docker sandbox could not release command outputs for ${check.checkRef} (exit ${released.exitCode})`,
+      );
+    }
+    return result;
   }
+
+  override async readFile(
+    path: string,
+    maxBytes: number,
+    signal: AbortSignal,
+  ): Promise<Uint8Array | undefined> {
+    const released = await releaseDockerWorkspace(
+      this.id,
+      this.#dockerEnvironment,
+      signal,
+    );
+    if (released.exitCode !== 0) {
+      throw new Error("Docker sandbox could not release expected artifacts");
+    }
+    return super.readFile(path, maxBytes, signal);
+  }
+}
+
+function releaseDockerWorkspace(
+  sandboxId: string,
+  dockerEnvironment: Readonly<Record<string, string>>,
+  signal: AbortSignal,
+): Promise<VerificationCommandResult> {
+  return runProcess(
+    [
+      "docker",
+      "exec",
+      sandboxId,
+      "sh",
+      "-c",
+      'find /workspace -xdev -user "$(id -u)" ! -type l -exec chmod g+rwX -- {} +',
+    ],
+    process.cwd(),
+    dockerEnvironment,
+    30_000,
+    1024 * 1024,
+    signal,
+  );
 }
 
 async function spawnBounded(

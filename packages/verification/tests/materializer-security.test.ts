@@ -4,6 +4,7 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -127,6 +128,70 @@ test("Docker sandbox rejects root and keeps its host root private", (t) => {
   assert.doesNotThrow(
     () => new DockerVerificationSandboxProvisioner({ root, user: "node" }),
   );
+});
+
+test("Docker sandbox releases private command outputs before artifact reads", async (t) => {
+  if (process.getuid?.() === undefined || process.getuid() === 0) {
+    t.skip("a non-root POSIX host identity is required");
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), "reef-verification-docker-release-"));
+  const bin = join(root, "bin");
+  const log = join(root, "docker.log");
+  mkdirSync(bin, { mode: 0o700 });
+  writeFileSync(
+    join(bin, "docker"),
+    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$DOCKER_HOST"\n',
+    { mode: 0o755 },
+  );
+  const originalPath = process.env["PATH"];
+  process.env["PATH"] = `${bin}:${originalPath ?? ""}`;
+  t.after(() => {
+    if (originalPath === undefined) delete process.env["PATH"];
+    else process.env["PATH"] = originalPath;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const provisioner = new DockerVerificationSandboxProvisioner({
+    root: join(root, "workspaces"),
+    user: "node",
+    dockerHost: log,
+  });
+  const sandbox = await provisioner.provision(
+    {
+      ...run(descriptor([baseEntry])),
+      imageDigest: sha(Buffer.from("sandbox-image")),
+    },
+    new AbortController().signal,
+  );
+  const signal = new AbortController().signal;
+  await sandbox.execute(
+    {
+      checkRef: "private-output",
+      required: true,
+      argv: ["true"],
+      workingDirectory: ".",
+      timeoutMs: 1_000,
+      outputLimitBytes: 1_024,
+      environment: {},
+      tool: {
+        name: "fake",
+        version: "1.0.0",
+        imageDigest: sha(Buffer.from("sandbox-image")),
+      },
+    },
+    {},
+    signal,
+  );
+  assert.equal(await sandbox.readFile("missing.log", 1_024, signal), undefined);
+  await provisioner.destroy(sandbox);
+
+  const releases = readFileSync(log, "utf8")
+    .split("\n")
+    .filter((line) => line.includes("find /workspace -xdev"));
+  assert.equal(releases.length, 3);
+  assert.ok(releases.every((line) => line.includes("chmod g+rwX")));
+  assert.ok(releases.every((line) => line.includes("! -type l")));
 });
 
 async function materialize(
