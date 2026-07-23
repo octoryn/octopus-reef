@@ -1,0 +1,158 @@
+{
+  "schemaVersion": "reef.verification-independent-audit.v1",
+  "decision": "GO",
+  "auditedAt": "2026-07-23T04:37:14Z",
+  "gitCommit": "0f48f1eba430db0919e94736639d329db7774bb8",
+  "recovery": {
+    "tag": "verification-sandbox-v0.2.0",
+    "commit": "4bf9a9ccb9913cf43d739837534bd9ac6e9510d7",
+    "workflowRun": "https://github.com/octoryn/octopus-reef/actions/runs/29979710381",
+    "passed": true
+  },
+  "registryPackageTests": {
+    "passed": true,
+    "cleanPublicInstall": true,
+    "auditHighCritical": 0,
+    "registrySignaturesVerified": 58,
+    "registryAttestationsVerified": 13,
+    "controlPlane": {
+      "coordinate": "@octopus-reef/control-plane@0.2.0",
+      "integrity": "sha512-ONfW0k+nV7tRzwLJ4iW9dBq3LV0KnTzPk/xUqp9exTWoFanKLmEke6XUEzaybHrQCeUO+deyBDep6XP+hyL8yg==",
+      "shasum": "896c2bee7eb413e1b63e5c4a1ce4cba89400a495",
+      "gitHead": "0f48f1eba430db0919e94736639d329db7774bb8",
+      "verificationDependency": "0.2.0"
+    },
+    "verification": {
+      "coordinate": "@octopus-reef/verification@0.2.0",
+      "integrity": "sha512-Kb2Iax8Ny8WGXNte3PmJ6FpAZ+lrSkj/OrYeiJ00jwS/d5dn/O5VlfPpPxBmj/5bH3FJZTjTvovLs0ZMALXKbw==",
+      "shasum": "59b89b1f8afc328a37c6593296b5db39cda59724",
+      "gitHead": "0f48f1eba430db0919e94736639d329db7774bb8",
+      "evidenceDependency": "^0.2.0"
+    }
+  },
+  "gitTagTests": {
+    "passed": true,
+    "tag": "control-plane-v0.2.0",
+    "peeledCommit": "0f48f1eba430db0919e94736639d329db7774bb8",
+    "packageGitHeadsMatch": true,
+    "recoveryHistoryRetained": true
+  },
+  "imageDigestTests": {
+    "passed": true,
+    "anonymousManifestRead": true,
+    "anonymousPull": true,
+    "ociProvenanceManifests": true,
+    "sbomAttached": true,
+    "publishedHighCriticalScanFindings": 0,
+    "api": {
+      "ref": "ghcr.io/octoryn/octopus-reef-verification-api@sha256:5c92606b97fda21b3e9070a1e669a2f50f0a9685c174c74c6a5670f4674b82ac",
+      "entrypoint": "reef-verification api",
+      "readiness": "passed against PostgreSQL 17",
+      "rdsGlobalCaSha256": "e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3"
+    },
+    "worker": {
+      "ref": "ghcr.io/octoryn/octopus-reef-verification-worker@sha256:e40c3c53ee9ed73ac5671b1d74008cadf9dcbbb3174ecf7aede1e3488307e388",
+      "entrypoint": "reef-verification worker"
+    },
+    "remoteSandbox": {
+      "ref": "ghcr.io/octoryn/octopus-reef-verification-golden-stack@sha256:8a3b628bf1f4d2bf781d2774268dcb5cd8896826135fb884eafae382253d6a33",
+      "entrypoint": "node /opt/reef-verification/sandbox-runner.js",
+      "authenticatedWriteExecuteRead": true,
+      "dockerGoldenStack": true,
+      "fargateCommandBridgePresent": true
+    }
+  },
+  "workerPlatforms": ["linux/amd64", "linux/arm64"],
+  "trustedProfileTests": {
+    "passed": true,
+    "ref": "verification-profile:golden-next-fastapi-postgres",
+    "version": "1.0.1",
+    "digest": "sha256:31d1b974aa7ed6d9afaef3ca141e7d1edbd847da0b62fc11f1e8c5bac22a899f",
+    "sandboxImageDigest": "sha256:8a3b628bf1f4d2bf781d2774268dcb5cd8896826135fb884eafae382253d6a33",
+    "requiredChecks": 8,
+    "canonicalDigestVerified": true,
+    "unknownFieldRejected": true,
+    "processInjectionEnvironmentRejected": true,
+    "callerCommandCredentialSurfaceAbsent": true
+  },
+  "typedClientTests": {
+    "passed": true,
+    "api": "/v1/verifications",
+    "methods": [
+      "createRun",
+      "getRun",
+      "streamRunEvents",
+      "retryRun",
+      "cancelRun",
+      "resolveEvidence"
+    ],
+    "tenantHeaders": true,
+    "idempotencyHeaderAndBody": true,
+    "runtimeSchemaValidation": true,
+    "typedRetryable503": true,
+    "exactDecimalCursor": true,
+    "lastEventId": true,
+    "terminalCursorImmediateEof": true,
+    "eventIdentityBinding": true
+  },
+  "tenantBindingTests": {
+    "passed": true,
+    "offlineRs256Jwks": true,
+    "verifiedSubjectOrganisationProjectPermissionBinding": true,
+    "unboundTenantRejected": true,
+    "crossTenantRunArtifactEvidenceIsolation": true
+  },
+  "evidenceStoreUntrustingTests": {
+    "passed": true,
+    "implementation": "octopus-evidence@0.2.0",
+    "createEvidence": true,
+    "verifyEvidence": true,
+    "canonicalDigestRecomputedWithoutServerSecret": true,
+    "tamperedEvidenceRejected": true,
+    "runCandidateSourceProfileIdentityBound": true
+  },
+  "durabilityTests": {
+    "passed": true,
+    "postgres16": true,
+    "postgres17": true,
+    "migrationSetDigest": "sha256:31ce57261255474ff4bda0bee336264347a222289058c7a3fa83104284477098",
+    "schemaHead": "0001_verification",
+    "transactionalOutbox": true,
+    "duplicateDelivery": true,
+    "leaseTakeover": true,
+    "fencing": true,
+    "processCrashResume": true,
+    "cancelAbortSignal": true,
+    "tenantIsolation": true
+  },
+  "executionSemanticsTests": {
+    "passed": true,
+    "hostileBundleRejected": true,
+    "dockerNetworkNone": true,
+    "readOnlyRoot": true,
+    "capabilitiesDropped": true,
+    "hostAndOtherWorkspaceUnavailable": true,
+    "awsImdsCredentialAccessAbsent": true,
+    "realNextFastApiPostgresBundle": true,
+    "failedRequiredTestCompletesWithFailedVerdict": true,
+    "infrastructureFailureIsOperationalFailed": true,
+    "boundedOutputArtifactTestEvidenceRefs": true
+  },
+  "knownUnverified": [
+    {
+      "id": "live-aws-environment",
+      "scope": "ECS/Fargate, SQS, S3, Secrets Manager and RDS in a customer AWS account",
+      "reason": "Adapters, immutable bridge image, task definition and least-privilege policy are delivered, but no customer AWS account was authorized for this audit."
+    },
+    {
+      "id": "environment-owned-ecr-mirror",
+      "scope": "private ECR mirror and VPC endpoint policy",
+      "reason": "The deployment owner must preserve and verify the published OCI manifest digest when mirroring the public sandbox image."
+    },
+    {
+      "id": "assurance-scope",
+      "scope": "compliance certification and penetration testing",
+      "reason": "Evidence proves deterministic execution identity and results; it is not a certification or penetration-test report."
+    }
+  ]
+}
