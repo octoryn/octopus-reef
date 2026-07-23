@@ -1,8 +1,8 @@
 {
   "schemaVersion": "reef.verification-candidate-report.v1",
   "decision": "READY_FOR_INDEPENDENT_AUDIT",
-  "implementationCommit": "1e95b1016bd6a3e52e90c870bcd05d92bd531f0e",
-  "generatedAt": "2026-07-23T09:26:51Z",
+  "implementationCommit": "f65a24d4e94e7cf0b945f5ef37741776fe8b1834",
+  "generatedAt": "2026-07-23T09:42:50Z",
   "baseline": {
     "annotatedTag": "control-plane-v0.2.2",
     "peeledCommit": "2b1cbf07f25128109c1efaeca613fa2c0227244d"
