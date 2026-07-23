@@ -1,9 +1,9 @@
 {
   "schemaVersion": "reef.verification-candidate-report.v1",
   "decision": "READY_FOR_INDEPENDENT_AUDIT",
-  "implementationCommit": "1d29172a91732a198abbf7ce07db9d2b9e4876d6",
+  "implementationCommit": "7f4e973ccd4d82d0b309781f996e4936f1f7d484",
   "recoveredFromCommit": "5d73dd32bcf00393ab359c38e165bac86d62e942",
-  "preparedAt": "2026-07-23T01:58:38Z",
+  "preparedAt": "2026-07-23T02:12:59Z",
   "releaseIdentity": {
     "publicPackage": "@octopus-reef/control-plane@0.2.0",
     "formalRuntimePackage": "@octopus-reef/verification@0.2.0",
@@ -71,6 +71,14 @@
       "failure": "The current scanner found 12 fixed Debian findings (10 HIGH, 2 CRITICAL) and 30 fixed findings (27 HIGH, 3 CRITICAL) in the Node base image's global npm runtime.",
       "publishedArtifacts": [],
       "disposition": "API, Worker and Golden images now use the Node 22.22.2 multi-architecture OCI index by digest and upgrade Debian packages. API/Worker remove unused npm; Golden atomically installs npm 12.0.1 in a separate prefix. All three rebuilt images passed local Trivy 0.70.0 scans with zero HIGH and zero CRITICAL findings, then Golden and Compose acceptance passed again."
+    },
+    {
+      "runId": 29973301670,
+      "tagCommit": "45af38a7af2df32e806002c55873cbbf96d9faa2",
+      "stage": "Trivy HIGH/CRITICAL and secret scan of the preflight Golden Stack sandbox",
+      "failure": "The Debian ssl-cert dependency generated its documented snakeoil private key during PostgreSQL installation; the image did not use the key, but a public trusted-profile sandbox must not contain any private key.",
+      "publishedArtifacts": [],
+      "disposition": "The same package-install layer now removes the generated key and companion certificate. The rebuilt image contains neither path, passed Trivy 0.70.0 with zero HIGH/CRITICAL vulnerabilities and zero HIGH/CRITICAL secrets, and passed the real isolated Next.js/FastAPI/PostgreSQL profile again. No ignore rule was added."
     }
   ],
   "prepublishGates": {
@@ -98,7 +106,8 @@
       "scanner": "Trivy 0.70.0",
       "images": ["api", "worker", "golden-stack"],
       "high": 0,
-      "critical": 0
+      "critical": 0,
+      "highCriticalSecrets": 0
     },
     "migrationSetDigest": "sha256:31ce57261255474ff4bda0bee336264347a222289058c7a3fa83104284477098"
   },
@@ -117,12 +126,12 @@
   },
   "isolatedDockerTests": {
     "passed": true,
-    "sandboxImage": "sha256:600b966fb8b8398561f4d2457bce4cf4ab26ded1f1ca290f53593a439cfa22ea",
+    "sandboxImage": "sha256:98b0765a211e8559f7a9caf7db7cb8d4f5af0b1652b38d55b4189145d6bb9ff4",
     "localPlatform": "linux/arm64",
     "tests": 1,
     "failed": 0,
     "skipped": 0,
-    "durationMs": 69720,
+    "durationMs": 76338,
     "coverage": [
       "real Next.js production build and tests",
       "real FastAPI dependency install and pytest",
