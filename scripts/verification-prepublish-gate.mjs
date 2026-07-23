@@ -116,6 +116,10 @@ assert(
   goldenDockerfile.includes("npm@12.0.1"),
   "Golden Stack image omits the pinned patched npm runtime",
 );
+assert(
+  goldenDockerfile.includes("/etc/ssl/private/ssl-cert-snakeoil.key"),
+  "Golden Stack image does not remove the package-generated snakeoil private key",
+);
 
 const goldenAcceptance = text(
   "packages/verification/tests/docker-golden-stack.integration.test.ts",
