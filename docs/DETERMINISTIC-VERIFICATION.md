@@ -10,8 +10,8 @@ Builder deliverable and never advances Builder Project State.
 Builder pins these public packages exactly:
 
 ```text
-@octopus-reef/control-plane@0.4.0
-@octopus-reef/verification@0.4.0
+@octopus-reef/control-plane@0.4.1
+@octopus-reef/verification@0.4.1
 @octopus-reef/engine@0.2.1
 @octopus-reef/protocol@0.1.1
 @octopus-reef/agent@0.2.3
@@ -27,12 +27,13 @@ The Builder-facing exports are:
 @octopus-reef/control-plane/verification/materialization
 ```
 
-HTTP v1 is `/v1/verifications`. Patch releases in the 0.2 line may make
+HTTP v1 is `/v1/verifications`. Patch releases in the 0.4 line may make
 backward-compatible fixes. A closed request key, state, identity, cursor, or
 Evidence schema break requires a new minor or major API/package line.
 
-The PostgreSQL schema head is `0003_builder_v1_binding`. Run migrations before
-API or Worker rollout:
+The PostgreSQL schema head is
+`0004_materialization_identity_total_check`. Run migrations before API or
+Worker rollout:
 
 ```text
 reef-verification migrate
@@ -41,8 +42,13 @@ reef-verification worker
 ```
 
 The migration set digest and immutable image manifest digests are published in
-the `control-plane-v0.4.0` GitHub Release record. Deploy images by manifest
+the `control-plane-v0.4.1` GitHub Release record. Deploy images by manifest
 digest, never by a mutable tag.
+
+Migration 0004 replaces the 0.4.0 materialization identity `CHECK` with a total
+boolean expression. Only an all-NULL tuple, complete historical v1 tuple, or
+complete v2 tuple is valid; partial or malformed tuples fail with SQLSTATE
+`23514`. Follow `docs/DETERMINISTIC-VERIFICATION-0.4.1-MIGRATION.md`.
 
 ## Public protocol
 
@@ -163,7 +169,9 @@ for the minimal remote deployment and least-privilege boundary.
 
 See
 [DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md](./DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md)
-for the mandatory exact-version cutover from 0.3.0.
+for the 0.3.0 schema-ownership cutover, then
+[DETERMINISTIC-VERIFICATION-0.4.1-MIGRATION.md](./DETERMINISTIC-VERIFICATION-0.4.1-MIGRATION.md)
+for the mandatory total-constraint patch.
 
 ## Builder boundary
 

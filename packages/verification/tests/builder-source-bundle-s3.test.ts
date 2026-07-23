@@ -357,7 +357,7 @@ function run(): VerificationRun {
     sourceBundleRef: descriptor.bundleRef,
     sourceBundleDigest: descriptor.digest,
     verificationProfileRef: "verification-profile:golden-eight",
-    verificationProfileVersion: "0.4.0",
+    verificationProfileVersion: "0.4.1",
     verificationProfileDigest: sha("golden-eight-profile"),
     runRef: "verification:builder-v1-fixture",
     idempotencyKey: "builder-v1-fixture",

@@ -10,12 +10,12 @@ permissions:
   security-events: write
 
 concurrency:
-  group: deterministic-verification-0.4.0-${{ github.sha }}
+  group: deterministic-verification-0.4.1-${{ github.sha }}
   cancel-in-progress: false
 
 env:
-  VERSION: 0.4.0
-  RELEASE_TAG: control-plane-v0.4.0
+  VERSION: 0.4.1
+  RELEASE_TAG: control-plane-v0.4.1
   API_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-api
   WORKER_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-worker
   PROFILE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-golden-stack
@@ -461,15 +461,24 @@ jobs:
               realPostgresTests: {
                 passed: true,
                 versions: ["16", "17"],
-                migrationFrom: "0.3.0",
-                schemaHead: "0003_builder_v1_binding",
+                migrationFrom: ["0.3.0", "0.4.0"],
+                schemaHead: "0004_materialization_identity_total_check",
                 restart: true,
                 concurrency: true,
                 idempotency: true,
                 leaseFencing: true,
                 tenantIsolation: true,
                 largeCursor: true,
-                materializationPersistence: true
+                materializationPersistence: true,
+                materializationIdentityTotalCheck: {
+                  onlyOneFieldsRejected: 11,
+                  completeV1MissingEachFieldRejected: true,
+                  completeV2MissingEachFieldRejected: true,
+                  malformedAndNullMixRejectedWith23514: true,
+                  allNullAccepted: true,
+                  completeV1Accepted: true,
+                  completeV2Accepted: true
+                }
               },
               isolatedDockerTests: {
                 passed: true,
@@ -528,7 +537,8 @@ jobs:
             packages/verification/migrations/0001_verification.sql \
             packages/verification/migrations/0002_materialization.sql \
             packages/verification/migrations/0003_builder_v1_binding.sql \
-            docs/DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md \
+            packages/verification/migrations/0004_materialization_identity_total_check.sql \
+            docs/DETERMINISTIC-VERIFICATION-0.4.1-MIGRATION.md \
             candidate-report.json \
             > preflight-checks.sha256
       - uses: actions/upload-artifact@v4
@@ -559,7 +569,8 @@ jobs:
             packages/verification/migrations/0001_verification.sql
             packages/verification/migrations/0002_materialization.sql
             packages/verification/migrations/0003_builder_v1_binding.sql
-            docs/DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md
+            packages/verification/migrations/0004_materialization_identity_total_check.sql
+            docs/DETERMINISTIC-VERIFICATION-0.4.1-MIGRATION.md
             preflight-checks.sha256
             candidate-report.json
 
@@ -888,7 +899,7 @@ jobs:
           node scripts/write-verification-remote-profile.mjs "$PROFILE_DIGEST" golden-profile.json
           jq -e --arg digest "$PROFILE_DIGEST" '
             .ref == "verification-profile:golden-next-fastapi-postgres" and
-            .version == "1.2.0" and
+            .version == "1.2.1" and
             .sandboxImageDigest == $digest and
             (.checks | length == 8) and
             (.checks | all(.[]; .required == true and .tool.imageDigest == $digest))
@@ -910,7 +921,7 @@ jobs:
           if npm view "@octopus-reef/control-plane@${VERSION}" --json > control-plane-existing.json 2>/dev/null; then
             test "$(jq -r '.gitHead' control-plane-existing.json)" = "$GITHUB_SHA"
             test "$(jq -r '.dist.integrity' control-plane-existing.json)" = "$expected_control_integrity"
-            test "$(jq -r '.dependencies[\"@octopus-reef/verification\"]' control-plane-existing.json)" = "$VERSION"
+            test "$(jq -r '.dependencies["@octopus-reef/verification"]' control-plane-existing.json)" = "$VERSION"
           else
             npm publish --provenance --access public --workspace @octopus-reef/control-plane
           fi
@@ -933,8 +944,8 @@ jobs:
           set -euo pipefail
           migration_digest="$(jq -r '.migrationSetDigest' release-assets/verification-package-gate.json)"
           jq -e '
-            .schemaHead == "0003_builder_v1_binding" and
-            (.migrationBindings | length == 3) and
+            .schemaHead == "0004_materialization_identity_total_check" and
+            (.migrationBindings | length == 4) and
             (.migrationBindings | all(.[]; .exactBytes == true))
           ' release-assets/verification-package-gate.json
           profile_ref="$(jq -r '.ref' golden-profile.json)"
@@ -958,9 +969,9 @@ jobs:
             --slurpfile control control-plane-registry.json \
             --slurpfile verification verification-registry.json \
             '{
-              schemaVersion: "reef.verification-release.v3",
-              package: {name: "@octopus-reef/control-plane", version: "0.4.0"},
-              internalPackage: {name: "@octopus-reef/verification", version: "0.4.0"},
+              schemaVersion: "reef.verification-release.v4",
+              package: {name: "@octopus-reef/control-plane", version: "0.4.1"},
+              internalPackage: {name: "@octopus-reef/verification", version: "0.4.1"},
               gitTag: $gitTag,
               gitCommit: $gitCommit,
               apiImage: {repository: $apiRepository, manifestDigest: $apiDigest},
@@ -980,7 +991,7 @@ jobs:
                   gitHead: $verification[0].gitHead
                 }
               },
-              schemaHead: "0003_builder_v1_binding",
+              schemaHead: "0004_materialization_identity_total_check",
               migrationSetDigest: $migrationSetDigest,
               migrationDigestAlgorithm: $gate[0].migrationDigestAlgorithm,
               migrationBindings: (
@@ -1010,6 +1021,13 @@ jobs:
                   maxPathBytes: 1024
                 }
               },
+              materializationIdentityCheck: {
+                migration: "0004_materialization_identity_total_check",
+                semantics: "total boolean CHECK; all-null, complete v1, or complete v2 only",
+                partialTupleResult: false,
+                nullComparisonResult: false,
+                violationSqlState: "23514"
+              },
               workloadAuthContract: {
                 jwt: "offline deployment-owned JWKS; RS256 only",
                 tenantBinding: "organisationRef exact and projectRef explicit membership",
@@ -1023,13 +1041,13 @@ jobs:
               },
               healthContract: {
                 live: {path: "/health/live", response: {status: "live"}},
-                ready: {path: "/health/ready", response: {status: "ready"}, dependency: "PostgreSQL schema head 0003_builder_v1_binding"},
+                ready: {path: "/health/ready", response: {status: "ready"}, dependency: "PostgreSQL schema head 0004_materialization_identity_total_check"},
                 sandboxReady: {path: "/readyz", response: {ready: true, service: "reef-verification-sandbox"}}
               },
               profile: {ref: $profileRef, version: $profileVersion, digest: $profileDigest},
               typedClientContract: "/v1/verifications",
               evidenceContract: "octopus-evidence@0.2.0/store-untrusting",
-              compatibilityPolicy: "DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md",
+              compatibilityPolicy: "DETERMINISTIC-VERIFICATION-0.4.1-MIGRATION.md",
               testSummary: "preflight-test-summary.json",
               scanEvidence: {
                 prePublish: "preflight-*.trivy.json",
@@ -1079,7 +1097,9 @@ jobs:
 
           This public final release includes canonical decimal cursors,
           store-untrusting Evidence identity binding, and the versioned external
-          materialization Port. Status: READY FOR FRESH INDEPENDENT AUDIT.
+          materialization Port. PostgreSQL migration 0004 makes the materialization
+          identity CHECK total and rejects every partial tuple. Status: READY FOR
+          FRESH INDEPENDENT AUDIT.
           It is not a Builder GO decision.
           EOF
           cp release-assets/verification-package-gate.json .
@@ -1090,7 +1110,8 @@ jobs:
           cp release-assets/packages/verification/migrations/0001_verification.sql .
           cp release-assets/packages/verification/migrations/0002_materialization.sql .
           cp release-assets/packages/verification/migrations/0003_builder_v1_binding.sql .
-          cp release-assets/docs/DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md .
+          cp release-assets/packages/verification/migrations/0004_materialization_identity_total_check.sql .
+          cp release-assets/docs/DETERMINISTIC-VERIFICATION-0.4.1-MIGRATION.md .
           recovery="$(mktemp -d)"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             asset_count="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')"
@@ -1140,7 +1161,8 @@ jobs:
             0001_verification.sql \
             0002_materialization.sql \
             0003_builder_v1_binding.sql \
-            DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md \
+            0004_materialization_identity_total_check.sql \
+            DETERMINISTIC-VERIFICATION-0.4.1-MIGRATION.md \
             candidate-report.json \
             > release-bundle.sha256
           sha256sum release-bundle.sha256 > release-bundle.sha256.sha256
@@ -1177,7 +1199,8 @@ jobs:
             api-image.trivy.json worker-image.trivy.json profile-image.trivy.json
             preflight-test-summary.json
             0001_verification.sql 0002_materialization.sql 0003_builder_v1_binding.sql
-            DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md
+            0004_materialization_identity_total_check.sql
+            DETERMINISTIC-VERIFICATION-0.4.1-MIGRATION.md
             candidate-report.json
             release-bundle.sha256 release-bundle.sha256.sha256
           )

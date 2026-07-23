@@ -222,10 +222,23 @@ test(
       await insertConstraintFixture(pool, "all-null");
       await insertConstraintFixture(pool, "complete-v1");
       await insertConstraintFixture(pool, "complete-v2");
+      await insertConstraintFixture(pool, "invalid-partial");
       await updateMaterialization(pool, "complete-v1", v1);
       await updateMaterialization(pool, "complete-v2", v2);
+      await updateMaterialization(
+        pool,
+        "invalid-partial",
+        materializationTuple({
+          materialization_ref: v2.materialization_ref,
+        }),
+      );
       await assert.rejects(store.ready(), /readiness failed/);
 
+      await assertMaterializationConstraintViolation(
+        pool.query(VERIFICATION_MIGRATIONS[3]!.sql),
+        "0.4 partial row blocks migration",
+      );
+      await updateMaterialization(pool, "invalid-partial", allNull);
       await pool.query(VERIFICATION_MIGRATIONS[3]!.sql);
       await store.ready();
 

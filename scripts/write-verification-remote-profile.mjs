@@ -14,7 +14,7 @@ const original = createGoldenStackProfile(imageDigest);
 const { digest: _originalDigest, ...unsigned } = original;
 const profile = defineTrustedProfile({
   ...unsigned,
-  version: "1.2.0",
+  version: "1.2.1",
 });
 writeFileSync(output, `${JSON.stringify(profile, null, 2)}\n`, {
   encoding: "utf8",

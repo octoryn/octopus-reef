@@ -77,13 +77,13 @@ network isolation and minimum IAM policy.
 Compatibility and a remote deployment example are documented in
 `docs/CONTROL-PLANE-COMPATIBILITY.md`.
 
-## Deterministic Verification Runs in 0.4.0
+## Deterministic Verification Runs in 0.4.1
 
-`@octopus-reef/control-plane@0.4.0` formally exposes the separate verification
+`@octopus-reef/control-plane@0.4.1` formally exposes the separate verification
 runtime from `@octopus-reef/control-plane/verification`, with its typed client
 at `@octopus-reef/control-plane/verification/client` and production adapters at
 the corresponding `verification/*` subpaths. The package declares the exact
-compatible `@octopus-reef/verification@0.4.0` dependency. The versioned
+compatible `@octopus-reef/verification@0.4.1` dependency. The versioned
 external materialization Port is exported at
 `@octopus-reef/control-plane/verification/materialization`.
 The exact Builder v1 S3 adapter is exported at
@@ -100,6 +100,13 @@ has no package range, duck typing, or legacy materialization fallback. Builder
 and server deployments must follow
 `docs/DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md` and pin both packages,
 trusted profile, tag, and images exactly.
+
+The 0.4.0→0.4.1 patch adds
+`0004_materialization_identity_total_check`. Deployments must run that exact
+migration before the 0.4.1 API/Worker rollout so any partial persisted
+materialization tuple fails closed rather than satisfying a PostgreSQL `CHECK`
+through three-valued `UNKNOWN`. Follow
+`docs/DETERMINISTIC-VERIFICATION-0.4.1-MIGRATION.md`.
 
 Reef review approval is scoped to an `AgentRun`: it may resume that run, but it
 never approves a Builder deliverable or advances Builder Project State. Builder

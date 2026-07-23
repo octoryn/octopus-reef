@@ -5,10 +5,10 @@ It is independent from `AgentRun`: it does not load a model, Agent kernel, Git
 workspace, or review/approval workflow.
 
 The formal 0.4 API is also exposed by
-`@octopus-reef/control-plane@0.4.0/verification` and its subpaths. Consumers
+`@octopus-reef/control-plane@0.4.1/verification` and its subpaths. Consumers
 that use the Builder compatibility contract should pin
-`@octopus-reef/control-plane@0.4.0` exactly. The control-plane package declares
-an exact dependency on this package at 0.4.0; a workspace-only package is not a
+`@octopus-reef/control-plane@0.4.1` exactly. The control-plane package declares
+an exact dependency on this package at 0.4.1; a workspace-only package is not a
 compatible release.
 
 ## Public contract
@@ -215,18 +215,28 @@ configuration-name inventory are documented in
 The existing 0.1.x AgentRun surface remains separate and unchanged. Importing
 the verification subpaths does not alias or reinterpret an AgentRun.
 
-Version 0.4.0 is a breaking correction to 0.3.0. The 0.3 runtime used the
+The 0.4 line is a breaking correction to 0.3.0. The 0.3 runtime used the
 Builder-owned schema name for a different extended object and digest meaning.
 That shape is incompatible and superseded: 0.4 has no fallback, duck typing,
 relabel, or automatic reinterpretation. Drain or cancel all non-terminal 0.3
-runs under the immutable 0.3 runtime, migrate PostgreSQL to
-`0003_builder_v1_binding`, install both 0.4.0 packages exactly, configure the
-trusted Builder v1 source adapter, then roll API and Worker together. Historical
-0.3 rows remain byte-preserved; a 0.4 worker refuses to process their colliding
-materialization identity.
+runs under the immutable 0.3 runtime, migrate PostgreSQL in order through
+`0003_builder_v1_binding` and
+`0004_materialization_identity_total_check`, install both 0.4.1 packages
+exactly, configure the trusted Builder v1 source adapter, then roll API and
+Worker together. Historical 0.3 rows remain byte-preserved; a 0.4 worker
+refuses to process their colliding materialization identity.
+
+Version 0.4.1 adds schema head
+`0004_materialization_identity_total_check`. It preserves all 0.4 wire
+contracts while replacing the 0.4.0 PostgreSQL `CHECK` with a total boolean
+constraint: all-NULL, complete v1, and complete v2 tuples pass; every partial
+or malformed tuple fails with SQLSTATE `23514`. Follow
+`docs/DETERMINISTIC-VERIFICATION-0.4.1-MIGRATION.md` before rolling the 0.4.1
+API and Worker.
 
 The complete ordered cutover and rollback constraints are documented in
-`docs/DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md`.
+`docs/DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md` and
+`docs/DETERMINISTIC-VERIFICATION-0.4.1-MIGRATION.md`.
 
 Release candidates must pass the checked-in pre-publish gate, real PostgreSQL
 and isolated Docker acceptance, clean tarball installation, package/image

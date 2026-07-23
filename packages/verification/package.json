@@ -1,6 +1,6 @@
 {
   "name": "@octopus-reef/verification",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Deterministic, durable and tenant-isolated verification control plane for immutable source candidates.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",

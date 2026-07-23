@@ -15,19 +15,19 @@ assert(
   "control-plane package identity drifted",
 );
 assert(
-  controlPlane.version === "0.4.0",
-  "control-plane release must be exactly 0.4.0",
+  controlPlane.version === "0.4.1",
+  "control-plane release must be exactly 0.4.1",
 );
 assert(
   verification.name === "@octopus-reef/verification",
   "verification package identity drifted",
 );
 assert(
-  verification.version === "0.4.0",
-  "verification release must be exactly 0.4.0",
+  verification.version === "0.4.1",
+  "verification release must be exactly 0.4.1",
 );
 assert(
-  controlPlane.dependencies?.["@octopus-reef/verification"] === "0.4.0",
+  controlPlane.dependencies?.["@octopus-reef/verification"] === "0.4.1",
   "control-plane must declare the exact formal verification compatibility version",
 );
 
@@ -116,21 +116,25 @@ for (const marker of [
   "PROFILE_REPOSITORY",
   "golden-profile.json",
   "npm rebuild better-sqlite3",
-  "0003_builder_v1_binding",
+  "0004_materialization_identity_total_check",
   "--draft",
   ".immutable == true",
-  'RELEASE_TAG: control-plane-v0.4.0',
+  'RELEASE_TAG: control-plane-v0.4.1',
   "git tag --annotate",
   'decision: "READY_FOR_FRESH_INDEPENDENT_AUDIT"',
 ])
   assert(workflow.includes(marker), `release workflow omits ${marker}`);
 assert(
   !workflow.includes("--prerelease"),
-  "0.4.0 Release must not be a prerelease",
+  "0.4.1 Release must not be a prerelease",
 );
 assert(
-  !workflow.includes('tags: ["control-plane-v0.4.0"]'),
-  "the full preflight must run before the 0.4.0 tag is created",
+  !workflow.includes('tags: ["control-plane-v0.4.1"]'),
+  "the full preflight must run before the 0.4.1 tag is created",
+);
+assert(
+  !workflow.includes('.dependencies[\\"@octopus-reef/verification\\"]'),
+  "npm recovery identity check must use a valid jq filter",
 );
 
 const verificationDockerfile = text("packages/verification/Dockerfile");
@@ -165,7 +169,7 @@ assert(
 );
 assert(
   text("scripts/write-verification-remote-profile.mjs").includes(
-    'version: "1.2.0"',
+    'version: "1.2.1"',
   ),
   "remote Golden Stack profile version drifted",
 );
@@ -219,7 +223,29 @@ const migrationAssets = [
     asset: "migrations/0003_builder_v1_binding.sql",
     sql: text("packages/verification/migrations/0003_builder_v1_binding.sql"),
   },
+  {
+    id: "0004_materialization_identity_total_check",
+    asset: "migrations/0004_materialization_identity_total_check.sql",
+    sql: text(
+      "packages/verification/migrations/0004_materialization_identity_total_check.sql",
+    ),
+  },
 ];
+const totalMaterializationCheck = migrationAssets[3]?.sql ?? "";
+for (const marker of [
+  "num_nonnulls(",
+  "CASE",
+  "= 0 THEN TRUE",
+  "= 6",
+  "= 11",
+  ") IS TRUE",
+  "ELSE FALSE",
+]) {
+  assert(
+    totalMaterializationCheck.includes(marker),
+    `total materialization identity migration omits ${marker}`,
+  );
+}
 const runtimeMigrationModule = await import(
   pathToFileURL(join(root, "packages/verification/dist/adapters/migrations.js"))
     .href
@@ -267,6 +293,14 @@ try {
       (file) => file.path === "migrations/0003_builder_v1_binding.sql",
     ),
     "verification tarball is missing its Builder v1 binding migration",
+  );
+  assert(
+    verificationPack.files.some(
+      (file) =>
+        file.path ===
+        "migrations/0004_materialization_identity_total_check.sql",
+    ),
+    "verification tarball is missing its total materialization identity migration",
   );
   assert(
     verificationPack.files.some((file) => file.path === "dist/bin.js"),
@@ -346,7 +380,7 @@ try {
   process.stdout.write(
     `${JSON.stringify(
       {
-        schemaHead: "0003_builder_v1_binding",
+        schemaHead: "0004_materialization_identity_total_check",
         migrationSetDigest,
         migrationDigestAlgorithm:
           "sha256(concat(runtime-ordered exact migration SQL bytes))",
