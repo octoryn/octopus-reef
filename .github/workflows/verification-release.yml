@@ -174,7 +174,7 @@ jobs:
             -f packages/verification/Dockerfile \
             -t reef-verification-worker:preflight-arm64 \
             .
-          docker buildx build --platform linux/arm64 --load \
+          docker build --platform linux/arm64 \
             --build-arg REEF_VERIFICATION_API_IMAGE=reef-verification-api:preflight-arm64 \
             -f packages/verification/Dockerfile.remote-sandbox \
             -t reef-verification-remote-sandbox:preflight-arm64 \
