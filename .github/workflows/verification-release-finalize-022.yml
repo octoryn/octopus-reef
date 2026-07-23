@@ -2,7 +2,7 @@ name: deterministic-verification-release-finalize-0.2.2
 
 on:
   push:
-    tags: ["verification-finalize-v0.2.2"]
+    tags: ["verification-finalize-v0.2.2-r2"]
 
 permissions:
   contents: write
@@ -36,11 +36,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "verification-finalize-v${VERSION}"
+          test "$GITHUB_REF_NAME" = "verification-finalize-v${VERSION}-r2"
           test -f "$AUDIT_PATH"
-          audit_parent="$(git rev-parse "$GITHUB_SHA^")"
-          test "$(git diff --name-only "$audit_parent" "$GITHUB_SHA" | wc -l | tr -d ' ')" = 1
-          test "$(git diff --name-only "$audit_parent" "$GITHUB_SHA")" = "$AUDIT_PATH"
+          audit_commit="$(git rev-parse "$GITHUB_SHA^")"
+          audit_parent="$(git rev-parse "$audit_commit^")"
+          test "$(git diff --name-only "$audit_parent" "$audit_commit" | wc -l | tr -d ' ')" = 1
+          test "$(git diff --name-only "$audit_parent" "$audit_commit")" = "$AUDIT_PATH"
+          test "$(git diff --name-only "$audit_commit" "$GITHUB_SHA" | wc -l | tr -d ' ')" = 1
+          test "$(git diff --name-only "$audit_commit" "$GITHUB_SHA")" = \
+            ".github/workflows/verification-release-finalize-022.yml"
 
           release_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
           jq -e --arg sha "$release_commit" '
@@ -98,7 +102,6 @@ jobs:
               .migrationSetDigest == $migration and
               .migrationBinding.exactBytes == true and
               .profile.version == "1.0.2" and
-              .profile.sandboxImageDigest == .profileImage.manifestDigest and
               (.platforms | sort == ["linux/amd64", "linux/arm64"])
             ' "$record"
           jq -e '
@@ -110,6 +113,18 @@ jobs:
               exactBytes: true
             }]
           ' "$gate"
+          jq -e \
+            --arg ref "$(jq -r '.profile.ref' "$record")" \
+            --arg version "$(jq -r '.profile.version' "$record")" \
+            --arg digest "$(jq -r '.profile.digest' "$record")" \
+            --arg image "$(jq -r '.profileImage.manifestDigest' "$record")" '
+              .ref == $ref and
+              .version == $version and
+              .digest == $digest and
+              .sandboxImageDigest == $image and
+              ([.checks[] | select(.required == true)] | length) == 8 and
+              ([.checks[].tool.imageDigest] | unique) == [$image]
+            ' release-assets/golden-profile.json
           for component in apiImage workerImage profileImage; do
             repository="$(jq -r --arg component "$component" '.[$component].repository' "$record")"
             digest="$(jq -r --arg component "$component" '.[$component].manifestDigest' "$record")"
