@@ -471,6 +471,13 @@ jobs:
                 largeCursor: true,
                 materializationPersistence: true,
                 materializationIdentityTotalCheck: {
+                  preMigrationInvalidRowScan: true,
+                  failClosedDiagnosticSqlState: "23514",
+                  constraintIntrospection: true,
+                  exhaustivePresenceMasks: {
+                    v1Rejected: 2046,
+                    v2Rejected: 2046
+                  },
                   onlyOneFieldsRejected: 11,
                   completeV1MissingEachFieldRejected: true,
                   completeV2MissingEachFieldRejected: true,
@@ -1024,6 +1031,9 @@ jobs:
               materializationIdentityCheck: {
                 migration: "0004_materialization_identity_total_check",
                 semantics: "total boolean CHECK; all-null, complete v1, or complete v2 only",
+                upgradeScan: "ACCESS EXCLUSIVE lock plus fail-closed scan before constraint replacement",
+                invalidUpgradeRows: "abort without rewrite/delete using SQLSTATE 23514",
+                exhaustivePresenceMasks: {v1Rejected: 2046, v2Rejected: 2046},
                 partialTupleResult: false,
                 nullComparisonResult: false,
                 violationSqlState: "23514"

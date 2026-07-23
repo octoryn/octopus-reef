@@ -33,11 +33,14 @@ boolean expression:
   zero entry count, or negative byte count evaluates to `FALSE`, never
   `UNKNOWN`, and fails with PostgreSQL SQLSTATE `23514`.
 
-The migration validates existing rows while adding the constraint. It does not
-repair, delete, relabel, or reinterpret an invalid partial tuple. If migration
-fails, keep API and Worker stopped, identify the affected run through
-deployment-controlled operational procedures, and resolve it under an
-explicitly reviewed data-recovery plan before retrying.
+The migration takes an `ACCESS EXCLUSIVE` table lock, evaluates the same total
+predicate over every existing row, and aborts with SQLSTATE `23514`, an invalid
+row count, and an explicit no-modification diagnostic before replacing the
+constraint. It does not repair, delete, relabel, or reinterpret an invalid
+partial tuple. If migration fails, the prior constraint remains in place. Keep
+API and Worker stopped, identify the affected run through deployment-controlled
+operational procedures, and resolve it under an explicitly reviewed
+data-recovery plan before retrying.
 
 ## Ordered upgrade
 

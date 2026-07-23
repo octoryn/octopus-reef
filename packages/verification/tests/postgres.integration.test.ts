@@ -237,10 +237,68 @@ test(
       await assertMaterializationConstraintViolation(
         pool.query(VERIFICATION_MIGRATIONS[3]!.sql),
         "0.4 partial row blocks migration",
+        /0004_materialization_identity_total_check aborted: 1 row\(s\) have a partial or invalid materialization identity/,
+      );
+      assert.doesNotMatch(
+        await materializationConstraintDefinition(pool),
+        /num_nonnulls/,
       );
       await updateMaterialization(pool, "invalid-partial", allNull);
       await pool.query(VERIFICATION_MIGRATIONS[3]!.sql);
       await store.ready();
+      const totalConstraint = await materializationConstraintDefinition(pool);
+      assert.match(totalConstraint, /num_nonnulls/);
+      assert.match(totalConstraint, /CASE/);
+      assert.match(totalConstraint, /IS TRUE/i);
+
+      const v1PresenceValues = materializationTuple({
+        ...v2,
+        materialization_schema_version: v1.materialization_schema_version,
+        materialization_ref: v1.materialization_ref,
+        materialization_descriptor_digest: v1.materialization_descriptor_digest,
+        authoritative_source_bundle_digest: builderDigest,
+      });
+      const v1CompleteMask = materializationPresenceMask([
+        "materialization_schema_version",
+        "materialization_ref",
+        "materialization_descriptor_digest",
+        "authoritative_source_bundle_digest",
+        "materialization_entry_count",
+        "materialization_total_bytes",
+      ]);
+      let rejectedV1PresenceMasks = 0;
+      for (let mask = 0; mask < 1 << materializationColumns.length; mask += 1) {
+        const tuple = materializationTupleForPresenceMask(
+          v1PresenceValues,
+          mask,
+        );
+        if (mask === 0 || mask === v1CompleteMask) {
+          await updateMaterialization(pool, "all-null", tuple);
+        } else {
+          await assertMaterializationConstraintViolation(
+            updateMaterialization(pool, "all-null", tuple),
+            `v1 presence mask ${mask.toString(2).padStart(11, "0")}`,
+          );
+          rejectedV1PresenceMasks += 1;
+        }
+      }
+      assert.equal(rejectedV1PresenceMasks, 2046);
+
+      const v2CompleteMask = (1 << materializationColumns.length) - 1;
+      let rejectedV2PresenceMasks = 0;
+      for (let mask = 0; mask <= v2CompleteMask; mask += 1) {
+        const tuple = materializationTupleForPresenceMask(v2, mask);
+        if (mask === 0 || mask === v2CompleteMask) {
+          await updateMaterialization(pool, "complete-v2", tuple);
+        } else {
+          await assertMaterializationConstraintViolation(
+            updateMaterialization(pool, "complete-v2", tuple),
+            `v2 presence mask ${mask.toString(2).padStart(11, "0")}`,
+          );
+          rejectedV2PresenceMasks += 1;
+        }
+      }
+      assert.equal(rejectedV2PresenceMasks, 2046);
 
       for (const column of materializationColumns) {
         await assertMaterializationConstraintViolation(
@@ -908,6 +966,7 @@ function updateMaterialization(
 async function assertMaterializationConstraintViolation(
   operation: Promise<unknown>,
   label: string,
+  expectedMessage?: RegExp,
 ): Promise<void> {
   await assert.rejects(
     operation,
@@ -917,8 +976,52 @@ async function assertMaterializationConstraintViolation(
         "23514",
         `${label} must fail with check_violation`,
       );
+      if (expectedMessage !== undefined) {
+        assert.match(
+          String((error as { readonly message?: unknown }).message),
+          expectedMessage,
+          `${label} must provide the fail-closed migration diagnostic`,
+        );
+      }
       return true;
     },
     label,
   );
+}
+
+function materializationTupleForPresenceMask(
+  values: MaterializationTuple,
+  mask: number,
+): MaterializationTuple {
+  return materializationTuple(
+    Object.fromEntries(
+      materializationColumns.map((column, index) => [
+        column,
+        (mask & (1 << index)) === 0 ? null : values[column],
+      ]),
+    ) as Partial<MaterializationTuple>,
+  );
+}
+
+function materializationPresenceMask(
+  present: readonly MaterializationColumn[],
+): number {
+  return present.reduce((mask, column) => {
+    const index = materializationColumns.indexOf(column);
+    assert.notEqual(index, -1);
+    return mask | (1 << index);
+  }, 0);
+}
+
+async function materializationConstraintDefinition(
+  pool: VerificationPgPoolLike,
+): Promise<string> {
+  const result = await pool.query<{ readonly definition: string }>(
+    `SELECT pg_get_constraintdef(oid) AS definition
+     FROM pg_constraint
+     WHERE conrelid='verification_runs'::regclass
+       AND conname='verification_runs_materialization_identity_check'`,
+  );
+  assert.equal(result.rows.length, 1);
+  return result.rows[0]!.definition;
 }

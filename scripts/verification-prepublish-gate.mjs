@@ -63,6 +63,15 @@ assert(
   ),
   "verification image entrypoint drifted",
 );
+assert(
+  dockerfile.includes(
+    "COPY packages/verification/migrations packages/verification/migrations",
+  ) &&
+    dockerfile.includes(
+      "COPY --from=build /app/packages/verification/migrations ./packages/verification/migrations",
+    ),
+  "verification API/Worker/migrate image must contain the exact published migration assets",
+);
 
 const readme = text("packages/verification/README.md");
 for (const method of [
@@ -240,6 +249,12 @@ for (const marker of [
   "= 11",
   ") IS TRUE",
   "ELSE FALSE",
+  "LOCK TABLE verification_runs IN ACCESS EXCLUSIVE MODE",
+  "SELECT count(*) FROM verification_runs WHERE NOT",
+  "ERRCODE = '23514'",
+  "No verification_runs rows were modified",
+  "DROP CONSTRAINT IF EXISTS verification_runs_materialization_identity_check",
+  "ADD CONSTRAINT verification_runs_materialization_identity_check",
 ]) {
   assert(
     totalMaterializationCheck.includes(marker),

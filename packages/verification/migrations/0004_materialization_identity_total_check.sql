@@ -1,9 +1,6 @@
-ALTER TABLE verification_runs
-  DROP CONSTRAINT IF EXISTS verification_runs_materialization_identity_check;
-
-ALTER TABLE verification_runs
-  ADD CONSTRAINT verification_runs_materialization_identity_check
-  CHECK (
+DO $migration$
+DECLARE
+  identity_predicate CONSTANT text := $predicate$
     (
       CASE
         WHEN num_nonnulls(
@@ -77,4 +74,31 @@ ALTER TABLE verification_runs
         ELSE FALSE
       END
     ) IS TRUE
+  $predicate$;
+  invalid_row_count bigint;
+BEGIN
+  EXECUTE 'LOCK TABLE verification_runs IN ACCESS EXCLUSIVE MODE';
+  EXECUTE format(
+    'SELECT count(*) FROM verification_runs WHERE NOT (%s)',
+    identity_predicate
+  ) INTO invalid_row_count;
+
+  IF invalid_row_count <> 0 THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '23514',
+      MESSAGE = format(
+        '0004_materialization_identity_total_check aborted: %s row(s) have a partial or invalid materialization identity',
+        invalid_row_count
+      ),
+      DETAIL = 'No verification_runs rows were modified; the prior constraint remains in place.',
+      HINT = 'Keep API and Worker stopped. Use an explicitly reviewed recovery procedure, then retry this exact migration.';
+  END IF;
+
+  EXECUTE
+    'ALTER TABLE verification_runs DROP CONSTRAINT IF EXISTS verification_runs_materialization_identity_check';
+  EXECUTE format(
+    'ALTER TABLE verification_runs ADD CONSTRAINT verification_runs_materialization_identity_check CHECK (%s)',
+    identity_predicate
   );
+END
+$migration$;
