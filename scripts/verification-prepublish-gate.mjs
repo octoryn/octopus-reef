@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const root = resolve(import.meta.dirname, "..");
 const controlPlane = json("packages/control-plane/package.json");
@@ -14,19 +15,19 @@ assert(
   "control-plane package identity drifted",
 );
 assert(
-  controlPlane.version === "0.2.0",
-  "control-plane release must be exactly 0.2.0",
+  controlPlane.version === "0.2.1",
+  "control-plane release must be exactly 0.2.1",
 );
 assert(
   verification.name === "@octopus-reef/verification",
   "verification package identity drifted",
 );
 assert(
-  verification.version === "0.2.0",
-  "verification release must be exactly 0.2.0",
+  verification.version === "0.2.1",
+  "verification release must be exactly 0.2.1",
 );
 assert(
-  controlPlane.dependencies?.["@octopus-reef/verification"] === "0.2.0",
+  controlPlane.dependencies?.["@octopus-reef/verification"] === "0.2.1",
   "control-plane must declare the exact formal verification compatibility version",
 );
 
@@ -122,6 +123,20 @@ assert(
   goldenDockerfile.includes("/etc/ssl/private/ssl-cert-snakeoil.key"),
   "Golden Stack image does not remove the package-generated snakeoil private key",
 );
+const remoteSandboxDockerfile = text(
+  "packages/verification/Dockerfile.remote-sandbox",
+);
+assert(
+  remoteSandboxDockerfile.includes("ARG REEF_VERIFICATION_API_IMAGE\n") &&
+    !remoteSandboxDockerfile.includes("ARG REEF_VERIFICATION_API_IMAGE="),
+  "remote sandbox must require the current immutable API image",
+);
+assert(
+  text("scripts/write-verification-remote-profile.mjs").includes(
+    'version: "1.0.2"',
+  ),
+  "remote Golden Stack profile version drifted",
+);
 
 const goldenAcceptance = text(
   "packages/verification/tests/docker-golden-stack.integration.test.ts",
@@ -154,6 +169,25 @@ for (const marker of [
 run("npm", ["run", "build", "--workspace", "@octopus-reef/verification"]);
 run("npx", ["tsc", "-b", "packages/control-plane", "--pretty", "false"]);
 run("npm", ["audit", "--audit-level=high"]);
+
+const migrationAsset = text(
+  "packages/verification/migrations/0001_verification.sql",
+);
+const runtimeMigrationModule = await import(
+  pathToFileURL(join(root, "packages/verification/dist/adapters/migrations.js"))
+    .href
+);
+const runtimeMigrations = runtimeMigrationModule.VERIFICATION_MIGRATIONS;
+assert(
+  Array.isArray(runtimeMigrations) &&
+    runtimeMigrations.length === 1 &&
+    runtimeMigrations[0]?.id === "0001_verification",
+  "runtime migration identity drifted",
+);
+assert(
+  runtimeMigrations[0].sql === migrationAsset,
+  "runtime migration bytes differ from the published migration asset",
+);
 
 const temporary = mkdtempSync(
   join(tmpdir(), "reef-verification-package-gate-"),
@@ -217,14 +251,21 @@ try {
     temporary,
   );
 
-  const migrationSetDigest = sha256(
-    text("packages/verification/migrations/0001_verification.sql"),
-  );
+  const migrationSetDigest = sha256(migrationAsset);
   process.stdout.write(
     `${JSON.stringify(
       {
         schemaHead: "0001_verification",
         migrationSetDigest,
+        migrationBindings: [
+          {
+            id: "0001_verification",
+            asset: "migrations/0001_verification.sql",
+            runtimeModule: "dist/adapters/migrations.js",
+            digest: migrationSetDigest,
+            exactBytes: true,
+          },
+        ],
         packages: {
           verification: packIdentity(verificationPack),
           controlPlane: packIdentity(controlPlanePack),

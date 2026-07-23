@@ -5,10 +5,10 @@ It is independent from `AgentRun`: it does not load a model, Agent kernel, Git
 workspace, or review/approval workflow.
 
 The formal 0.2 API is also exposed by
-`@octopus-reef/control-plane@0.2.0/verification` and its subpaths. Consumers
+`@octopus-reef/control-plane@0.2.1/verification` and its subpaths. Consumers
 that use the Builder compatibility contract should pin
-`@octopus-reef/control-plane@0.2.0` exactly. The control-plane package declares
-an exact dependency on this package at 0.2.0; a workspace-only package is not a
+`@octopus-reef/control-plane@0.2.1` exactly. The control-plane package declares
+an exact dependency on this package at 0.2.1; a workspace-only package is not a
 compatible release.
 
 ## Public contract
@@ -113,7 +113,7 @@ configuration-name inventory are documented in
 ## Compatibility
 
 The existing 0.1.x AgentRun surface remains separate and unchanged. Importing
-the verification subpaths does not alias or reinterpret an AgentRun. The 0.2.0
+the verification subpaths does not alias or reinterpret an AgentRun. The 0.2.1
 minor release adds the new Verification Run product surface; later patch
 releases may make backward-compatible fixes, while request/state/Evidence
 schema breaks require a new API and package minor or major version.

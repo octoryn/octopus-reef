@@ -2,7 +2,7 @@
 
 ## Published contract
 
-`@octopus-reef/control-plane` 0.2.0 is the current compatible release. It
+`@octopus-reef/control-plane` 0.2.1 is the current compatible release. It
 publishes two deliberately separate product contracts.
 
 The Agent Execution contract remains HTTP `/v1/runs` with AgentRun
@@ -27,7 +27,7 @@ overwritten by the release workflow.
 
 The Verification API, Worker, and remote sandbox digests, migration-set digest,
 trusted profile ref/version/digest, npm integrity, and known-unverified list are
-recorded in the `control-plane-v0.2.0` Release. Its full deployment contract is
+recorded in the `control-plane-v0.2.1` Release. Its full deployment contract is
 in `docs/DETERMINISTIC-VERIFICATION.md`.
 
 ## Versioning

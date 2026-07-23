@@ -4,7 +4,7 @@ name: release
 # AND an NPM_TOKEN secret is configured. Nothing publishes on ordinary pushes.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]*"]
   workflow_dispatch:
 
 jobs:
