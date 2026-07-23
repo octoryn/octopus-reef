@@ -28,6 +28,24 @@ import {
   verificationRunIdentity,
 } from "./identity.js";
 
+export type {
+  ExternalMaterializationPort,
+  ResolvedExternalMaterialization,
+  SourceBundleMaterializer,
+  SourceBundleStore,
+} from "./ports.js";
+export type {
+  BuilderSourceBundleBindingV1,
+  BuilderSourceBundleDescriptorV1,
+  ExternalMaterializationRequestV1,
+  RuntimeMaterializationDescriptorV2,
+  VerificationMaterialization,
+} from "./types.js";
+export {
+  computeBuilderSourceBundleDigest,
+  parseBuilderSourceBundleDescriptor,
+} from "./validation.js";
+
 export const BUILDER_SOURCE_BUNDLE_SCHEMA_VERSION =
   "octopus.builder.source-bundle/v1" as const;
 export const EXTERNAL_MATERIALIZATION_REQUEST_SCHEMA_VERSION =
