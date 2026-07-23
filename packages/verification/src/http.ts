@@ -204,10 +204,20 @@ function tenantHeaders(request: IncomingMessage): VerificationTenant {
   if (
     organisationRef === undefined ||
     projectRef === undefined ||
-    organisationRef.length > 1024 ||
-    projectRef.length > 1024 ||
-    !organisationRef.includes(":") ||
-    !projectRef.includes(":")
+    organisationRef.length === 0 ||
+    projectRef.length === 0 ||
+    Buffer.byteLength(organisationRef, "utf8") > 1024 ||
+    Buffer.byteLength(projectRef, "utf8") > 1024 ||
+    organisationRef !== organisationRef.trim() ||
+    projectRef !== projectRef.trim() ||
+    organisationRef.startsWith("/") ||
+    projectRef.startsWith("/") ||
+    organisationRef.includes("://") ||
+    projectRef.includes("://") ||
+    organisationRef.includes("\\") ||
+    projectRef.includes("\\") ||
+    /\p{Cc}/u.test(organisationRef) ||
+    /\p{Cc}/u.test(projectRef)
   ) {
     throw new InvalidVerificationRequestError(
       "bounded x-organisation-ref and x-project-ref headers are required",

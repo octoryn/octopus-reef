@@ -255,7 +255,7 @@ function boundedString(value: unknown, name: string, maximum: number): string {
     typeof value !== "string" ||
     value === "" ||
     value !== value.trim() ||
-    value.length > maximum ||
+    Buffer.byteLength(value, "utf8") > maximum ||
     /\p{Cc}/u.test(value)
   ) {
     throw new Error(`${name} is invalid`);
@@ -265,7 +265,7 @@ function boundedString(value: unknown, name: string, maximum: number): string {
 
 function opaqueRef(value: unknown, name: string): string {
   const result = boundedString(value, name, 1024);
-  if (!result.includes(":"))
+  if (result.startsWith("/") || result.includes("://") || result.includes("\\"))
     throw new Error(`${name} is not an opaque reference`);
   return result;
 }

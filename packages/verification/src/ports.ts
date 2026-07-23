@@ -161,7 +161,7 @@ export interface SourceBundleStore {
 }
 
 export interface ResolvedExternalMaterialization {
-  readonly inventory: unknown;
+  readonly descriptor: unknown;
   read(path: string, signal: AbortSignal): Promise<Uint8Array>;
 }
 

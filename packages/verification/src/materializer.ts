@@ -8,9 +8,10 @@ import type {
   SourceBundleStore,
 } from "./ports.js";
 import type {
-  BuilderSourceBundleInventoryV1,
+  BuilderSourceBundleBindingV1,
+  BuilderSourceBundleDescriptorV1,
   ExternalMaterializationRequestV1,
-  RuntimeMaterializationDescriptorV1,
+  RuntimeMaterializationDescriptorV2,
   VerificationMaterialization,
   VerificationRun,
   VerificationSandbox,
@@ -19,11 +20,10 @@ import {
   assertDigest,
   assertRelativePath,
   computeBuilderSourceBundleDigest,
-  parseBuilderSourceBundleInventory,
+  parseBuilderSourceBundleDescriptor,
   strictObject,
 } from "./validation.js";
 import {
-  assertVerificationRunIdentity,
   parseVerificationRunIdentity,
   verificationRunIdentity,
 } from "./identity.js";
@@ -33,10 +33,12 @@ export const BUILDER_SOURCE_BUNDLE_SCHEMA_VERSION =
 export const EXTERNAL_MATERIALIZATION_REQUEST_SCHEMA_VERSION =
   "octopus.reef.external-materialization-request/v1" as const;
 export const RUNTIME_MATERIALIZATION_DESCRIPTOR_SCHEMA_VERSION =
-  "octopus.reef.materialization-descriptor/v1" as const;
+  "octopus.reef.materialization-descriptor/v2" as const;
+export const BUILDER_SOURCE_BUNDLE_BINDING_SCHEMA_VERSION =
+  "octopus.reef.builder-source-bundle-binding/v1" as const;
 export const MATERIALIZATION_SCHEMA_VERSION =
-  "octopus.reef.materialization/v1" as const;
-export const MATERIALIZATION_CONTRACT_VERSION = "1.0.0" as const;
+  "octopus.reef.materialization/v2" as const;
+export const MATERIALIZATION_CONTRACT_VERSION = "2.0.0" as const;
 
 export interface MaterializationLimits {
   readonly maxFiles: number;
@@ -47,9 +49,9 @@ export interface MaterializationLimits {
 
 export const DEFAULT_MATERIALIZATION_LIMITS: Readonly<MaterializationLimits> =
   Object.freeze({
-    maxFiles: 20_000,
+    maxFiles: 10_000,
     maxFileBytes: 16 * 1024 * 1024,
-    maxTotalBytes: 512 * 1024 * 1024,
+    maxTotalBytes: 128 * 1024 * 1024,
     maxPathBytes: 1024,
   });
 
@@ -83,12 +85,12 @@ export class SourceBundleStoreMaterializationBridge implements ExternalMateriali
       organisationRef: request.organisationRef,
       projectRef: request.projectRef,
     };
-    const inventory = await this.store.descriptor(
+    const descriptor = await this.store.descriptor(
       tenant,
       request.sourceBundleRef,
     );
     return {
-      inventory,
+      descriptor,
       read: (path, readSignal) => {
         abort(readSignal);
         return this.store.content(tenant, request.sourceBundleRef, path);
@@ -142,15 +144,17 @@ export class DeterministicSourceBundleMaterializer implements SourceBundleMateri
     abort(signal);
     const request = externalMaterializationRequest(run);
     const resolved = await this.#port.resolve(request, signal);
-    const inventory = parseBuilderSourceBundleInventory(resolved.inventory);
-    const { entries, totalBytes } = validateInventory(
-      inventory,
+    const builderDescriptor = parseBuilderSourceBundleDescriptor(
+      resolved.descriptor,
+    );
+    const { inventory, totalBytes } = validateBuilderDescriptor(
+      builderDescriptor,
       run,
       this.#limits,
     );
     const descriptor = runtimeMaterializationDescriptor(
       run,
-      entries,
+      inventory,
       this.#limits,
     );
     const materialization = materializationIdentity(descriptor, totalBytes);
@@ -167,14 +171,14 @@ export class DeterministicSourceBundleMaterializer implements SourceBundleMateri
       readonly path: string;
       readonly content: Uint8Array;
     }[] = [];
-    for (const entry of entries) {
+    for (const entry of inventory) {
       abort(signal);
       const content = await resolved.read(entry.path, signal);
-      if (content.byteLength !== entry.size) {
+      if (content.byteLength !== entry.sizeBytes) {
         throw new Error("source materialization size mismatch");
       }
       const actual = sha256(content);
-      if (actual !== entry.digest) {
+      if (actual !== entry.contentDigest) {
         throw new Error("source materialization digest mismatch");
       }
       staged.push({ path: entry.path, content });
@@ -257,88 +261,106 @@ export function externalMaterializationRequest(
 }
 
 export function computeRuntimeMaterializationDescriptorDigest(
-  descriptor: Omit<RuntimeMaterializationDescriptorV1, "descriptorDigest">,
+  descriptor: Omit<RuntimeMaterializationDescriptorV2, "descriptorDigest">,
 ): string {
   return `sha256:${canonicalHash(descriptor as never)}`;
 }
 
+export function computeBuilderSourceBundleBindingDigest(
+  binding: Omit<BuilderSourceBundleBindingV1, "bindingRef" | "bindingDigest">,
+): string {
+  return `sha256:${canonicalHash(binding as never)}`;
+}
+
+export function builderSourceBundleBinding(
+  run: VerificationRun,
+): BuilderSourceBundleBindingV1 {
+  const unsigned = {
+    schemaVersion: BUILDER_SOURCE_BUNDLE_BINDING_SCHEMA_VERSION,
+    organisationRef: run.organisationRef,
+    projectRef: run.projectRef,
+    candidateRef: run.candidateRef,
+    candidateDigest: run.candidateDigest,
+    sourceBundleRef: run.sourceBundleRef,
+    sourceBundleDigest: run.sourceBundleDigest,
+    pathPolicy: {
+      unicodeNormalization: "NFC" as const,
+      pathSemantics: "portable-nfc-casefold-v1" as const,
+    },
+  } satisfies Omit<
+    BuilderSourceBundleBindingV1,
+    "bindingRef" | "bindingDigest"
+  >;
+  const bindingDigest = computeBuilderSourceBundleBindingDigest(unsigned);
+  return {
+    ...unsigned,
+    bindingRef: `builder-source-bundle-binding:${bindingDigest.slice("sha256:".length)}`,
+    bindingDigest,
+  };
+}
+
 export function runtimeMaterializationDescriptor(
   run: VerificationRun,
-  entries: BuilderSourceBundleInventoryV1["entries"],
+  inventory: BuilderSourceBundleDescriptorV1["inventory"],
   limits: Readonly<MaterializationLimits> = DEFAULT_MATERIALIZATION_LIMITS,
-): RuntimeMaterializationDescriptorV1 {
+): RuntimeMaterializationDescriptorV2 {
+  const binding = builderSourceBundleBinding(run);
   const unsigned = {
     schemaVersion: RUNTIME_MATERIALIZATION_DESCRIPTOR_SCHEMA_VERSION,
     contractVersion: MATERIALIZATION_CONTRACT_VERSION,
     identity: verificationRunIdentity(run),
     attempt: run.attempt,
-    authoritativeSourceBundle: {
+    authoritativeBuilderSourceBundle: {
       schemaVersion: BUILDER_SOURCE_BUNDLE_SCHEMA_VERSION,
-      ref: run.sourceBundleRef,
+      bundleRef: run.sourceBundleRef,
       digest: run.sourceBundleDigest,
+    },
+    reefBinding: {
+      schemaVersion: BUILDER_SOURCE_BUNDLE_BINDING_SCHEMA_VERSION,
+      ref: binding.bindingRef,
+      digest: binding.bindingDigest,
     },
     policy: {
       unicodeNormalization: "NFC" as const,
       pathSemantics: "portable-nfc-casefold-v1" as const,
       ...limits,
     },
-    entries,
-  } satisfies Omit<RuntimeMaterializationDescriptorV1, "descriptorDigest">;
+    inventory,
+  } satisfies Omit<RuntimeMaterializationDescriptorV2, "descriptorDigest">;
   return {
     ...unsigned,
     descriptorDigest: computeRuntimeMaterializationDescriptorDigest(unsigned),
   };
 }
 
-function validateInventory(
-  inventory: BuilderSourceBundleInventoryV1,
+function validateBuilderDescriptor(
+  descriptor: BuilderSourceBundleDescriptorV1,
   run: VerificationRun,
   limits: Readonly<MaterializationLimits>,
 ): {
-  readonly entries: BuilderSourceBundleInventoryV1["entries"];
+  readonly inventory: BuilderSourceBundleDescriptorV1["inventory"];
   readonly totalBytes: number;
 } {
-  const inventoryIdentity = parseVerificationRunIdentity(
-    {
-      ...inventory,
-      verificationProfileRef: run.verificationProfileRef,
-      verificationProfileVersion: run.verificationProfileVersion,
-      verificationProfileDigest: run.verificationProfileDigest,
-      runRef: run.runRef,
-    },
-    "Builder source bundle identity",
-  );
-  assertVerificationRunIdentity(
-    inventoryIdentity,
-    verificationRunIdentity(run),
-    "Builder source bundle identity",
-  );
   if (
-    inventory.schemaVersion !== BUILDER_SOURCE_BUNDLE_SCHEMA_VERSION ||
-    inventory.unicodeNormalization !== "NFC" ||
-    inventory.pathSemantics !== "portable-nfc-casefold-v1"
+    descriptor.schemaVersion !== BUILDER_SOURCE_BUNDLE_SCHEMA_VERSION ||
+    descriptor.organisationRef !== run.organisationRef ||
+    descriptor.projectRef !== run.projectRef ||
+    descriptor.bundleRef !== run.sourceBundleRef ||
+    descriptor.digest !== run.sourceBundleDigest
   ) {
-    throw new Error("unsupported Builder source bundle inventory");
+    throw new Error("Builder source bundle descriptor identity mismatch");
   }
   if (
-    inventory.entries.length < 1 ||
-    inventory.entries.length > limits.maxFiles
+    descriptor.inventory.length < 1 ||
+    descriptor.inventory.length > limits.maxFiles
   ) {
     throw new Error("source bundle file count is outside limits");
   }
-  const authoritativeDigest = computeBuilderSourceBundleDigest({
-    schemaVersion: inventory.schemaVersion,
-    organisationRef: inventory.organisationRef,
-    projectRef: inventory.projectRef,
-    candidateRef: inventory.candidateRef,
-    candidateDigest: inventory.candidateDigest,
-    sourceBundleRef: inventory.sourceBundleRef,
-    unicodeNormalization: inventory.unicodeNormalization,
-    pathSemantics: inventory.pathSemantics,
-    entries: inventory.entries,
-  });
+  const authoritativeDigest = computeBuilderSourceBundleDigest(
+    descriptor.inventory,
+  );
   if (
-    authoritativeDigest !== inventory.sourceBundleDigest ||
+    authoritativeDigest !== descriptor.digest ||
     authoritativeDigest !== run.sourceBundleDigest
   ) {
     throw new Error("authoritative Builder source bundle digest mismatch");
@@ -347,19 +369,12 @@ function validateInventory(
   const seen = new Set<string>();
   let previousPath: string | undefined;
   let totalBytes = 0;
-  const entries = inventory.entries.map((entry) => {
-    if (entry.kind !== "file") {
-      throw new Error("source bundle entry is not a regular file");
-    }
+  const inventory = descriptor.inventory.map((entry) => {
     const path = assertRelativePath(entry.path, "source bundle path");
-    if (
-      previousPath !== undefined &&
-      Buffer.compare(
-        Buffer.from(previousPath, "utf8"),
-        Buffer.from(path, "utf8"),
-      ) >= 0
-    ) {
-      throw new Error("source bundle entries are not uniquely byte-sorted");
+    if (previousPath !== undefined && previousPath >= path) {
+      throw new Error(
+        "source bundle entries are not uniquely ECMAScript-string-sorted",
+      );
     }
     previousPath = path;
     const collisionKey = portableCaseFold(path);
@@ -371,14 +386,14 @@ function validateInventory(
       throw new Error("source path exceeds byte limit");
     }
     if (
-      !Number.isSafeInteger(entry.size) ||
-      entry.size < 0 ||
-      entry.size > limits.maxFileBytes
+      !Number.isSafeInteger(entry.sizeBytes) ||
+      entry.sizeBytes < 0 ||
+      entry.sizeBytes > limits.maxFileBytes
     ) {
       throw new Error("source file exceeds size limit");
     }
-    assertDigest(entry.digest, "source entry digest");
-    totalBytes += entry.size;
+    assertDigest(entry.contentDigest, "source entry digest");
+    totalBytes += entry.sizeBytes;
     if (
       !Number.isSafeInteger(totalBytes) ||
       totalBytes > limits.maxTotalBytes
@@ -386,13 +401,12 @@ function validateInventory(
       throw new Error("source bundle exceeds total byte limit");
     }
     return {
-      kind: "file" as const,
       path,
-      size: entry.size,
-      digest: entry.digest,
+      contentDigest: entry.contentDigest,
+      sizeBytes: entry.sizeBytes,
     };
   });
-  return { entries, totalBytes };
+  return { inventory, totalBytes };
 }
 
 /**
@@ -405,7 +419,7 @@ export function portableCaseFold(path: string): string {
 }
 
 function materializationIdentity(
-  descriptor: RuntimeMaterializationDescriptorV1,
+  descriptor: RuntimeMaterializationDescriptorV2,
   totalBytes: number,
 ): VerificationMaterialization {
   const digest = descriptor.descriptorDigest;
@@ -413,10 +427,15 @@ function materializationIdentity(
   return {
     schemaVersion: MATERIALIZATION_SCHEMA_VERSION,
     ref: `materialization:${digest.slice("sha256:".length)}`,
+    runtimeDescriptorRef: `materialization-descriptor:${digest.slice("sha256:".length)}`,
     runtimeDescriptorDigest: digest,
-    authoritativeSourceBundleDigest:
-      descriptor.authoritativeSourceBundle.digest,
-    entryCount: descriptor.entries.length,
+    builderSourceBundleRef:
+      descriptor.authoritativeBuilderSourceBundle.bundleRef,
+    builderSourceBundleDigest:
+      descriptor.authoritativeBuilderSourceBundle.digest,
+    builderSourceBundleBindingRef: descriptor.reefBinding.ref,
+    builderSourceBundleBindingDigest: descriptor.reefBinding.digest,
+    entryCount: descriptor.inventory.length,
     totalBytes,
   };
 }

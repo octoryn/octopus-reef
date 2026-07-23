@@ -120,10 +120,14 @@ test("Evidence materialization ref cannot replace its canonical descriptor diges
   const run: VerificationRun = {
     ...base,
     materialization: {
-      schemaVersion: "octopus.reef.materialization/v1",
+      schemaVersion: "octopus.reef.materialization/v2",
       ref: `materialization:${"a".repeat(64)}`,
+      runtimeDescriptorRef: `materialization-descriptor:${"b".repeat(64)}`,
       runtimeDescriptorDigest: `sha256:${"b".repeat(64)}`,
-      authoritativeSourceBundleDigest: base.sourceBundleDigest,
+      builderSourceBundleRef: base.sourceBundleRef,
+      builderSourceBundleDigest: base.sourceBundleDigest,
+      builderSourceBundleBindingRef: `builder-source-bundle-binding:${"c".repeat(64)}`,
+      builderSourceBundleBindingDigest: `sha256:${"c".repeat(64)}`,
       entryCount: 1,
       totalBytes: 1,
     },

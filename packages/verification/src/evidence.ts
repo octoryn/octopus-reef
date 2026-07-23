@@ -228,6 +228,7 @@ export function verificationEvidenceBinding(evidence: Evidence): {
   );
   const materialization = parseEvidenceMaterialization(
     content["materialization"],
+    identity.sourceBundleRef,
     identity.sourceBundleDigest,
   );
   const profile = object(
@@ -313,6 +314,7 @@ export function verificationEvidenceBinding(evidence: Evidence): {
 
 function parseEvidenceMaterialization(
   value: unknown,
+  sourceBundleRef: string,
   sourceBundleDigest: string,
 ): VerificationMaterialization | undefined {
   if (value === null || value === undefined) return undefined;
@@ -320,8 +322,12 @@ function parseEvidenceMaterialization(
   const expected = new Set([
     "schemaVersion",
     "ref",
+    "runtimeDescriptorRef",
     "runtimeDescriptorDigest",
-    "authoritativeSourceBundleDigest",
+    "builderSourceBundleRef",
+    "builderSourceBundleDigest",
+    "builderSourceBundleBindingRef",
+    "builderSourceBundleBindingDigest",
     "entryCount",
     "totalBytes",
   ]);
@@ -329,7 +335,7 @@ function parseEvidenceMaterialization(
   if (
     keys.length !== expected.size ||
     keys.some((key) => !expected.has(key)) ||
-    record["schemaVersion"] !== "octopus.reef.materialization/v1" ||
+    record["schemaVersion"] !== "octopus.reef.materialization/v2" ||
     typeof record["ref"] !== "string" ||
     !/^materialization:[0-9a-f]{64}$/.test(record["ref"])
   ) {
@@ -339,23 +345,54 @@ function parseEvidenceMaterialization(
     record["runtimeDescriptorDigest"],
     "verification Evidence materialization descriptor digest",
   );
-  const authoritativeSourceBundleDigest = text(
-    record["authoritativeSourceBundleDigest"],
-    "verification Evidence authoritative source bundle digest",
+  const runtimeDescriptorRef = text(
+    record["runtimeDescriptorRef"],
+    "verification Evidence materialization descriptor ref",
+  );
+  const builderSourceBundleRef = text(
+    record["builderSourceBundleRef"],
+    "verification Evidence Builder source bundle ref",
+  );
+  const builderSourceBundleDigest = text(
+    record["builderSourceBundleDigest"],
+    "verification Evidence Builder source bundle digest",
+  );
+  const builderSourceBundleBindingRef = text(
+    record["builderSourceBundleBindingRef"],
+    "verification Evidence Builder binding ref",
+  );
+  const builderSourceBundleBindingDigest = text(
+    record["builderSourceBundleBindingDigest"],
+    "verification Evidence Builder binding digest",
   );
   assertDigest(runtimeDescriptorDigest);
-  assertDigest(authoritativeSourceBundleDigest);
+  assertDigest(builderSourceBundleDigest);
+  assertDigest(builderSourceBundleBindingDigest);
   if (
     record["ref"] !==
-    `materialization:${runtimeDescriptorDigest.slice("sha256:".length)}`
+      `materialization:${runtimeDescriptorDigest.slice("sha256:".length)}` ||
+    runtimeDescriptorRef !==
+      `materialization-descriptor:${runtimeDescriptorDigest.slice("sha256:".length)}`
   ) {
     throw new Error(
       "verification Evidence materialization ref/digest mismatch",
     );
   }
-  if (authoritativeSourceBundleDigest !== sourceBundleDigest) {
+  if (
+    builderSourceBundleRef !== sourceBundleRef ||
+    builderSourceBundleRef !== `source-bundle:${builderSourceBundleDigest}` ||
+    builderSourceBundleDigest !== sourceBundleDigest
+  ) {
     throw new Error(
       "verification Evidence materialization/source digest mismatch",
+    );
+  }
+  if (
+    builderSourceBundleBindingRef !==
+    `builder-source-bundle-binding:${builderSourceBundleBindingDigest.slice("sha256:".length)}`
+  ) {
+    throw new Error(
+      "verification Evidence materialization binding ref/digest mismatch",
     );
   }
   const entryCount = record["entryCount"];
@@ -369,10 +406,14 @@ function parseEvidenceMaterialization(
     throw new Error("verification Evidence materialization counts are invalid");
   }
   return {
-    schemaVersion: "octopus.reef.materialization/v1",
+    schemaVersion: "octopus.reef.materialization/v2",
     ref: record["ref"],
+    runtimeDescriptorRef,
     runtimeDescriptorDigest,
-    authoritativeSourceBundleDigest,
+    builderSourceBundleRef,
+    builderSourceBundleDigest,
+    builderSourceBundleBindingRef,
+    builderSourceBundleBindingDigest,
     entryCount: Number(entryCount),
     totalBytes: Number(totalBytes),
   };

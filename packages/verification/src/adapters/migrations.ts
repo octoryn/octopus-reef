@@ -20,4 +20,11 @@ export const VERIFICATION_MIGRATIONS: readonly VerificationMigration[] = [
       "utf8",
     ),
   },
+  {
+    id: "0003_builder_v1_binding",
+    sql: readFileSync(
+      new URL("../../migrations/0003_builder_v1_binding.sql", import.meta.url),
+      "utf8",
+    ),
+  },
 ];

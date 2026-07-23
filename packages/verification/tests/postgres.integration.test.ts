@@ -13,7 +13,7 @@ import {
   VerificationDispatchPublisher,
   VerificationService,
   VerificationWorkerProcessCrash,
-  computeBundleDigest,
+  computeBuilderSourceBundleDigest,
   defineTrustedProfile,
   type SourceBundleDescriptor,
   type VerificationRunRequest,
@@ -22,6 +22,7 @@ import {
   PostgresVerificationStore,
   type VerificationPgPoolLike,
 } from "../src/adapters/postgres.js";
+import { VERIFICATION_MIGRATIONS } from "../src/adapters/migrations.js";
 import {
   EnvironmentProfileSecretResolver,
   LocalSourceBundleStore,
@@ -31,6 +32,130 @@ import {
 } from "../src/adapters/local.js";
 
 const databaseUrl = process.env["REEF_TEST_POSTGRES_URL"];
+
+test(
+  "real PostgreSQL migrates 0.3 rows without reinterpreting the colliding materialization",
+  {
+    skip:
+      databaseUrl === undefined
+        ? "REEF_TEST_POSTGRES_URL is not configured"
+        : false,
+  },
+  async () => {
+    const admin = postgresPool(databaseUrl!);
+    const schema = `reef_v030_upgrade_${process.pid}_${Date.now()}`;
+    await admin.query(`CREATE SCHEMA "${schema}"`);
+    const isolated = new URL(databaseUrl!);
+    isolated.searchParams.set("options", `-csearch_path=${schema}`);
+    const pool = postgresPool(isolated.toString());
+    const store = new PostgresVerificationStore(pool);
+    const digest = sha("0.3-source");
+    const now = new Date(0).toISOString();
+    const materialization = {
+      schemaVersion: "octopus.reef.materialization/v1",
+      ref: `materialization:${"a".repeat(64)}`,
+      runtimeDescriptorDigest: `sha256:${"a".repeat(64)}`,
+      authoritativeSourceBundleDigest: digest,
+      entryCount: 1,
+      totalBytes: 1,
+    };
+    const run = {
+      organisationRef: "organisation:0.3-upgrade",
+      projectRef: "project:0.3-upgrade",
+      candidateRef: "foundation-candidate:0.3-upgrade",
+      candidateDigest: sha("0.3-candidate"),
+      sourceBundleRef: `source-bundle:${digest}`,
+      sourceBundleDigest: digest,
+      verificationProfileRef: "verification-profile:0.3-upgrade",
+      verificationProfileVersion: "1.0.0",
+      verificationProfileDigest: sha("0.3-profile"),
+      runRef: "verification:0.3-upgrade",
+      idempotencyKey: "0.3-upgrade",
+      state: "failed",
+      version: 1,
+      attempt: 1,
+      eventCursor: "0",
+      createdAt: now,
+      updatedAt: now,
+      finishedAt: now,
+      checks: [],
+      failure: { code: "OLD_RUNTIME", message: "historical", retryable: false },
+      materialization,
+    };
+    try {
+      for (const migration of VERIFICATION_MIGRATIONS.slice(0, 2)) {
+        await pool.query(migration.sql);
+      }
+      await pool.query(
+        `INSERT INTO verification_runs (
+          organisation_ref, project_ref, run_ref, idempotency_key,
+          candidate_ref, candidate_digest, source_bundle_ref, source_bundle_digest,
+          verification_profile_ref, verification_profile_version, verification_profile_digest,
+          state, version, attempt, event_cursor, run_data, created_at, updated_at,
+          materialization_schema_version, materialization_ref,
+          materialization_descriptor_digest, authoritative_source_bundle_digest,
+          materialization_entry_count, materialization_total_bytes
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18,
+          $19,$20,$21,$22,$23,$24
+        )`,
+        [
+          run.organisationRef,
+          run.projectRef,
+          run.runRef,
+          run.idempotencyKey,
+          run.candidateRef,
+          run.candidateDigest,
+          run.sourceBundleRef,
+          run.sourceBundleDigest,
+          run.verificationProfileRef,
+          run.verificationProfileVersion,
+          run.verificationProfileDigest,
+          run.state,
+          run.version,
+          run.attempt,
+          run.eventCursor,
+          JSON.stringify(run),
+          run.createdAt,
+          run.updatedAt,
+          materialization.schemaVersion,
+          materialization.ref,
+          materialization.runtimeDescriptorDigest,
+          materialization.authoritativeSourceBundleDigest,
+          materialization.entryCount,
+          materialization.totalBytes,
+        ],
+      );
+      await store.migrate();
+      const preserved = await pool.query<{
+        readonly materialization_schema_version: string;
+        readonly materialization_ref: string;
+        readonly builder_source_bundle_ref: null;
+      }>(
+        `SELECT materialization_schema_version, materialization_ref,
+                builder_source_bundle_ref
+         FROM verification_runs
+         WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3`,
+        [run.organisationRef, run.projectRef, run.runRef],
+      );
+      assert.deepEqual(preserved.rows, [
+        {
+          materialization_schema_version: materialization.schemaVersion,
+          materialization_ref: materialization.ref,
+          builder_source_bundle_ref: null,
+        },
+      ]);
+      await assert.rejects(
+        store.get(run, run.runRef),
+        /0\.3 materialization contract is incompatible with 0\.4/,
+      );
+    } finally {
+      await pool.end();
+      await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await admin.end();
+    }
+  },
+);
 
 test(
   "real PostgreSQL serializes concurrent migration entrypoints",
@@ -334,24 +459,17 @@ function writeBundle(
   mkdirSync(root, { recursive: true });
   const content = Buffer.from("export const postgresFixture = true;\n");
   const entry = {
-    kind: "file" as const,
     path: "fixture.js",
-    size: content.byteLength,
-    digest: shaBytes(content),
+    sizeBytes: content.byteLength,
+    contentDigest: shaBytes(content),
   };
-  const unsigned = {
+  const bundleDigest = computeBuilderSourceBundleDigest([entry]);
+  const descriptor: SourceBundleDescriptor = {
     schemaVersion: "octopus.builder.source-bundle/v1" as const,
     ...tenant,
-    candidateRef: "foundation-candidate:pg",
-    candidateDigest: sha("candidate"),
-    sourceBundleRef: "source-bundle:pg",
-    unicodeNormalization: "NFC" as const,
-    pathSemantics: "portable-nfc-casefold-v1" as const,
-    entries: [entry],
-  };
-  const descriptor: SourceBundleDescriptor = {
-    ...unsigned,
-    sourceBundleDigest: computeBundleDigest(unsigned),
+    bundleRef: `source-bundle:${bundleDigest}`,
+    digest: bundleDigest,
+    inventory: [entry],
   };
   const tenantDirectory = hash(
     `${tenant.organisationRef}\0${tenant.projectRef}`,
@@ -360,14 +478,14 @@ function writeBundle(
     root,
     tenantDirectory,
     "bundles",
-    hash(descriptor.sourceBundleRef),
+    hash(descriptor.bundleRef),
     "descriptor.json",
   );
   const objectPath = join(
     root,
     tenantDirectory,
     "objects",
-    hash(`${descriptor.sourceBundleRef}\0${entry.path}`),
+    hash(`${descriptor.bundleRef}\0${entry.path}`),
   );
   mkdirSync(dirname(descriptorPath), { recursive: true });
   mkdirSync(dirname(objectPath), { recursive: true });
@@ -386,8 +504,8 @@ function request(
     ...tenant,
     candidateRef: "foundation-candidate:pg",
     candidateDigest: sha("candidate"),
-    sourceBundleRef: descriptor.sourceBundleRef,
-    sourceBundleDigest: descriptor.sourceBundleDigest,
+    sourceBundleRef: descriptor.bundleRef,
+    sourceBundleDigest: descriptor.digest,
     verificationProfileRef: profile.ref,
     verificationProfileVersion: profile.version,
     verificationProfileDigest: profile.digest,

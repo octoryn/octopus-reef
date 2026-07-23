@@ -180,43 +180,57 @@ export interface TrustedVerificationProfile {
   readonly checks: readonly VerificationCheckDefinition[];
 }
 
-export interface BuilderSourceBundleEntryV1 {
-  readonly kind: "file";
+export interface BuilderSourceBundleFileV1 {
   readonly path: string;
-  readonly size: number;
-  readonly digest: string;
+  readonly contentDigest: string;
+  readonly sizeBytes: number;
 }
 
 /**
- * The Builder-owned, candidate-bound neutral inventory. Reef verifies this
- * exact v1 digest contract but never redefines the candidate source digest.
+ * The exact Builder-owned public wire descriptor. Candidate and path-policy
+ * identity deliberately do not belong to this schema.
  */
-export interface BuilderSourceBundleInventoryV1 extends VerificationTenant {
+export interface BuilderSourceBundleDescriptorV1 extends VerificationTenant {
   readonly schemaVersion: "octopus.builder.source-bundle/v1";
+  readonly bundleRef: string;
+  readonly digest: string;
+  readonly inventory: readonly BuilderSourceBundleFileV1[];
+}
+
+/** @deprecated Use BuilderSourceBundleDescriptorV1. */
+export type SourceBundleDescriptor = BuilderSourceBundleDescriptorV1;
+
+export interface BuilderSourceBundleBindingV1 extends VerificationTenant {
+  readonly schemaVersion: "octopus.reef.builder-source-bundle-binding/v1";
   readonly candidateRef: string;
   readonly candidateDigest: string;
   readonly sourceBundleRef: string;
   readonly sourceBundleDigest: string;
-  readonly unicodeNormalization: "NFC";
-  readonly pathSemantics: "portable-nfc-casefold-v1";
-  readonly entries: readonly BuilderSourceBundleEntryV1[];
+  readonly pathPolicy: {
+    readonly unicodeNormalization: "NFC";
+    readonly pathSemantics: "portable-nfc-casefold-v1";
+  };
+  readonly bindingRef: string;
+  readonly bindingDigest: string;
 }
-
-/** @deprecated Use BuilderSourceBundleInventoryV1. */
-export type SourceBundleDescriptor = BuilderSourceBundleInventoryV1;
 
 export interface ExternalMaterializationRequestV1 extends VerificationRunIdentity {
   readonly schemaVersion: "octopus.reef.external-materialization-request/v1";
   readonly attempt: number;
 }
 
-export interface RuntimeMaterializationDescriptorV1 {
-  readonly schemaVersion: "octopus.reef.materialization-descriptor/v1";
-  readonly contractVersion: "1.0.0";
+export interface RuntimeMaterializationDescriptorV2 {
+  readonly schemaVersion: "octopus.reef.materialization-descriptor/v2";
+  readonly contractVersion: "2.0.0";
   readonly identity: VerificationRunIdentity;
   readonly attempt: number;
-  readonly authoritativeSourceBundle: {
+  readonly authoritativeBuilderSourceBundle: {
     readonly schemaVersion: "octopus.builder.source-bundle/v1";
+    readonly bundleRef: string;
+    readonly digest: string;
+  };
+  readonly reefBinding: {
+    readonly schemaVersion: "octopus.reef.builder-source-bundle-binding/v1";
     readonly ref: string;
     readonly digest: string;
   };
@@ -228,15 +242,19 @@ export interface RuntimeMaterializationDescriptorV1 {
     readonly maxTotalBytes: number;
     readonly maxPathBytes: number;
   };
-  readonly entries: readonly BuilderSourceBundleEntryV1[];
+  readonly inventory: readonly BuilderSourceBundleFileV1[];
   readonly descriptorDigest: string;
 }
 
 export interface VerificationMaterialization {
-  readonly schemaVersion: "octopus.reef.materialization/v1";
+  readonly schemaVersion: "octopus.reef.materialization/v2";
   readonly ref: string;
+  readonly runtimeDescriptorRef: string;
   readonly runtimeDescriptorDigest: string;
-  readonly authoritativeSourceBundleDigest: string;
+  readonly builderSourceBundleRef: string;
+  readonly builderSourceBundleDigest: string;
+  readonly builderSourceBundleBindingRef: string;
+  readonly builderSourceBundleBindingDigest: string;
   readonly entryCount: number;
   readonly totalBytes: number;
 }

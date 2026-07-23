@@ -12,9 +12,9 @@ import {
   StaticVerificationProfileRegistry,
   VerificationDispatchPublisher,
   VerificationService,
-  computeBundleDigest,
+  computeBuilderSourceBundleDigest,
   createGoldenStackProfile,
-  type BuilderSourceBundleEntryV1,
+  type BuilderSourceBundleFileV1,
   type SourceBundleDescriptor,
   type VerificationRunRequest,
   type VerificationSandbox,
@@ -90,7 +90,7 @@ test(
           environment: {},
           tool: {
             name: "golden-stack-sandbox",
-            version: "0.3.0",
+            version: "0.4.0",
             imageDigest: sandboxImageDigest!,
           },
         },
@@ -155,8 +155,8 @@ test(
         ...tenant,
         candidateRef: "foundation-candidate:golden-stack",
         candidateDigest: sha(Buffer.from("generated-golden-stack-v1")),
-        sourceBundleRef: source.descriptor.sourceBundleRef,
-        sourceBundleDigest: source.descriptor.sourceBundleDigest,
+        sourceBundleRef: source.descriptor.bundleRef,
+        sourceBundleDigest: source.descriptor.digest,
         verificationProfileRef: profile.ref,
         verificationProfileVersion: profile.version,
         verificationProfileDigest: profile.digest,
@@ -276,34 +276,25 @@ function sourceBundle(
 } {
   const files = walk(root);
   const content: Record<string, Uint8Array> = {};
-  const entries: BuilderSourceBundleEntryV1[] = files
+  const inventory: BuilderSourceBundleFileV1[] = files
     .map((absolute) => {
       const path = relative(root, absolute).split(sep).join("/");
       const bytes = Uint8Array.from(readFileSync(absolute));
       const digest = sha(bytes);
       content[path] = bytes;
-      return { kind: "file", path, size: bytes.byteLength, digest };
+      return { path, sizeBytes: bytes.byteLength, contentDigest: digest };
     })
     .sort((left, right) =>
-      Buffer.compare(
-        Buffer.from(left.path, "utf8"),
-        Buffer.from(right.path, "utf8"),
-      ),
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
     );
-  const unsigned = {
-    schemaVersion: "octopus.builder.source-bundle/v1" as const,
-    ...tenant,
-    candidateRef: "foundation-candidate:golden-stack",
-    candidateDigest: sha(Buffer.from("generated-golden-stack-v1")),
-    sourceBundleRef: "source-bundle:golden-next-fastapi-postgres",
-    unicodeNormalization: "NFC" as const,
-    pathSemantics: "portable-nfc-casefold-v1" as const,
-    entries,
-  };
+  const digest = computeBuilderSourceBundleDigest(inventory);
   return {
     descriptor: {
-      ...unsigned,
-      sourceBundleDigest: computeBundleDigest(unsigned),
+      schemaVersion: "octopus.builder.source-bundle/v1" as const,
+      ...tenant,
+      bundleRef: `source-bundle:${digest}`,
+      digest,
+      inventory,
     },
     content,
   };

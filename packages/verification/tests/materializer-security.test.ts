@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import {
   DeterministicSourceBundleMaterializer,
-  computeBundleDigest,
+  computeBuilderSourceBundleDigest,
   externalMaterializationRequest,
   parseExternalMaterializationRequest,
   portableCaseFold,
@@ -39,10 +39,9 @@ const tenant = {
 };
 const content = Buffer.from("export const safe = true;\n", "utf8");
 const baseEntry = {
-  kind: "file" as const,
   path: "src/index.ts",
-  size: content.byteLength,
-  digest: sha(content),
+  sizeBytes: content.byteLength,
+  contentDigest: sha(content),
 };
 
 test("source bundle runtime parser rejects hostile paths, URL refs and entry types", async () => {
@@ -52,16 +51,16 @@ test("source bundle runtime parser rejects hostile paths, URL refs and entry typ
       archiveUrl: "https://storage.invalid/bundle.tar",
     },
     ...["symlink", "hardlink", "fifo", "device", "socket"].map((kind) =>
-      descriptor([{ ...baseEntry, kind } as never]),
+      unsafeDescriptor([{ ...baseEntry, kind } as never]),
     ),
-    descriptor([{ ...baseEntry, path: "/etc/passwd" }]),
-    descriptor([{ ...baseEntry, path: "C:/Windows/system.ini" }]),
-    descriptor([{ ...baseEntry, path: "../escape" }]),
-    descriptor([{ ...baseEntry, path: "src\\escape.ts" }]),
-    descriptor([{ ...baseEntry, path: "src/e\u0301.ts" }]),
-    descriptor([{ ...baseEntry, path: "src/trailing." }]),
-    descriptor([{ ...baseEntry, path: "src/trailing " }]),
-    descriptor([
+    unsafeDescriptor([{ ...baseEntry, path: "/etc/passwd" }]),
+    unsafeDescriptor([{ ...baseEntry, path: "C:/Windows/system.ini" }]),
+    unsafeDescriptor([{ ...baseEntry, path: "../escape" }]),
+    unsafeDescriptor([{ ...baseEntry, path: "src\\escape.ts" }]),
+    unsafeDescriptor([{ ...baseEntry, path: "src/e\u0301.ts" }]),
+    unsafeDescriptor([{ ...baseEntry, path: "src/trailing." }]),
+    unsafeDescriptor([{ ...baseEntry, path: "src/trailing " }]),
+    unsafeDescriptor([
       { ...baseEntry, contentRef: "https://storage.invalid/object" } as never,
     ]),
   ];
@@ -110,6 +109,18 @@ test("materializer rejects case-ambiguous paths and verifies every byte before w
   assert.equal(portableCaseFold("straße.ts"), portableCaseFold("STRASSE.ts"));
 });
 
+test("materializer preserves Builder v1 ECMAScript path ordering for non-ASCII paths", async () => {
+  const inventory = descriptor([
+    { ...baseEntry, path: "\u{10000}.ts" },
+    { ...baseEntry, path: "\uE000.ts" },
+  ]);
+  const writes: string[] = [];
+
+  await materialize(inventory, writes);
+
+  assert.deepEqual(writes, ["\u{10000}.ts", "\uE000.ts"]);
+});
+
 test("external materialization request is exact, bounded, tenant-bound, and location-free", async () => {
   const inventory = descriptor([baseEntry]);
   const verification = run(inventory);
@@ -143,7 +154,7 @@ test("external materialization request is exact, bounded, tenant-bound, and loca
     resolve: async (request) => {
       captured = request;
       return {
-        inventory,
+        descriptor: inventory,
         read: async () => content,
       };
     },
@@ -154,13 +165,10 @@ test("external materialization request is exact, bounded, tenant-bound, and loca
   }).materialize(verification, sandbox(writes), new AbortController().signal);
   assert.deepEqual(captured, expected);
   assert.deepEqual(writes, [baseEntry.path]);
-  assert.equal(
-    materialization.authoritativeSourceBundleDigest,
-    inventory.sourceBundleDigest,
-  );
+  assert.equal(materialization.builderSourceBundleDigest, inventory.digest);
   assert.notEqual(
     materialization.runtimeDescriptorDigest,
-    materialization.authoritativeSourceBundleDigest,
+    materialization.builderSourceBundleDigest,
   );
   assert.equal(
     materialization.ref,
@@ -200,41 +208,40 @@ test("materialization enforces count, path, file, total, and authoritative diges
 
   const replaced = {
     ...descriptor([baseEntry]),
-    sourceBundleDigest: sha(Buffer.from("replacement")),
+    digest: sha(Buffer.from("replacement")),
   };
   await assert.rejects(
     materialize(replaced, []),
-    /authoritative Builder source bundle digest mismatch/,
+    /Builder source bundle (?:ref\/digest|authoritative digest) mismatch/,
   );
 });
 
 test("materialization fails closed on cross-identity and descriptor replacement", async () => {
   const inventory = descriptor([baseEntry]);
-  const { sourceBundleDigest: ignored, ...crossTenantInput } = {
+  const crossTenant = {
     ...inventory,
     organisationRef: "organisation:attacker",
   };
-  void ignored;
-  const crossTenant = {
-    ...crossTenantInput,
-    sourceBundleDigest: computeBundleDigest(crossTenantInput),
-  };
   await assert.rejects(
     materialize(crossTenant, []),
-    /Builder source bundle identity mismatch: organisationRef/,
+    /Builder source bundle descriptor identity mismatch/,
   );
 
   const verification = run(inventory);
   const descriptorIdentity = runtimeMaterializationDescriptor(
     verification,
-    inventory.entries,
+    inventory.inventory,
   );
   const replacement: VerificationMaterialization = {
-    schemaVersion: "octopus.reef.materialization/v1",
+    schemaVersion: "octopus.reef.materialization/v2",
     ref: `materialization:${"a".repeat(64)}`,
+    runtimeDescriptorRef: `materialization-descriptor:${"a".repeat(64)}`,
     runtimeDescriptorDigest: `sha256:${"a".repeat(64)}`,
-    authoritativeSourceBundleDigest: inventory.sourceBundleDigest,
-    entryCount: descriptorIdentity.entries.length,
+    builderSourceBundleRef: inventory.bundleRef,
+    builderSourceBundleDigest: inventory.digest,
+    builderSourceBundleBindingRef: `builder-source-bundle-binding:${"b".repeat(64)}`,
+    builderSourceBundleBindingDigest: `sha256:${"b".repeat(64)}`,
+    entryCount: descriptorIdentity.inventory.length,
     totalBytes: content.byteLength,
   };
   const writes: string[] = [];
@@ -459,19 +466,25 @@ function sandbox(writes: string[]): VerificationSandbox {
 }
 
 function descriptor(
-  entries: SourceBundleDescriptor["entries"],
+  inventory: SourceBundleDescriptor["inventory"],
 ): SourceBundleDescriptor {
-  const unsigned = {
+  const sorted = [...inventory].sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+  const digest = computeBuilderSourceBundleDigest(sorted);
+  return {
     schemaVersion: "octopus.builder.source-bundle/v1" as const,
     ...tenant,
-    candidateRef: "foundation-candidate:materializer",
-    candidateDigest: sha(Buffer.from("candidate")),
-    sourceBundleRef: "source-bundle:materializer",
-    unicodeNormalization: "NFC" as const,
-    pathSemantics: "portable-nfc-casefold-v1" as const,
-    entries,
+    bundleRef: `source-bundle:${digest}`,
+    digest,
+    inventory: sorted,
   };
-  return { ...unsigned, sourceBundleDigest: computeBundleDigest(unsigned) };
+}
+
+function unsafeDescriptor(
+  inventory: readonly Record<string, unknown>[],
+): unknown {
+  return { ...descriptor([baseEntry]), inventory };
 }
 
 function run(bundle: SourceBundleDescriptor): VerificationRun {
@@ -480,8 +493,8 @@ function run(bundle: SourceBundleDescriptor): VerificationRun {
     ...tenant,
     candidateRef: "foundation-candidate:materializer",
     candidateDigest: sha(Buffer.from("candidate")),
-    sourceBundleRef: bundle.sourceBundleRef,
-    sourceBundleDigest: bundle.sourceBundleDigest,
+    sourceBundleRef: bundle.bundleRef,
+    sourceBundleDigest: bundle.digest,
     verificationProfileRef: "verification-profile:materializer",
     verificationProfileVersion: "1.0.0",
     verificationProfileDigest: sha(Buffer.from("profile")),

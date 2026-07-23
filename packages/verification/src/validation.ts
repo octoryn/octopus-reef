@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { canonicalHash } from "octopus-evidence";
 import type {
-  BuilderSourceBundleInventoryV1,
+  BuilderSourceBundleDescriptorV1,
+  BuilderSourceBundleFileV1,
   SourceBundleDescriptor,
   TrustedVerificationProfile,
   VerificationRunRequest,
@@ -45,16 +47,16 @@ const SOURCE_BUNDLE_DESCRIPTOR_KEYS = new Set([
   "schemaVersion",
   "organisationRef",
   "projectRef",
-  "candidateRef",
-  "candidateDigest",
-  "sourceBundleRef",
-  "sourceBundleDigest",
-  "unicodeNormalization",
-  "pathSemantics",
-  "entries",
+  "bundleRef",
+  "digest",
+  "inventory",
 ]);
 
-const SOURCE_BUNDLE_ENTRY_KEYS = new Set(["kind", "path", "size", "digest"]);
+const SOURCE_BUNDLE_ENTRY_KEYS = new Set([
+  "path",
+  "contentDigest",
+  "sizeBytes",
+]);
 
 export function parseVerificationRunRequest(
   value: unknown,
@@ -107,10 +109,11 @@ function parseVerificationRunRequestValue(
     verificationProfileRef: request.verificationProfileRef,
   })) {
     if (
-      ref.length > 1024 ||
-      !ref.includes(":") ||
+      Buffer.byteLength(ref, "utf8") > 1024 ||
+      ref.startsWith("/") ||
       ref.includes("://") ||
       ref.includes("\\") ||
+      ref !== ref.trim() ||
       /\p{Cc}/u.test(ref)
     ) {
       throw new Error(`${name} must be a bounded opaque reference`);
@@ -137,13 +140,13 @@ export function assertTenantBinding(
 export function parseSourceBundleDescriptor(
   value: unknown,
 ): SourceBundleDescriptor {
-  return parseBuilderSourceBundleInventory(value);
+  return parseBuilderSourceBundleDescriptor(value);
 }
 
 /** Strict parser for the Builder-owned octopus.builder.source-bundle/v1. */
-export function parseBuilderSourceBundleInventory(
+export function parseBuilderSourceBundleDescriptor(
   value: unknown,
-): BuilderSourceBundleInventoryV1 {
+): BuilderSourceBundleDescriptorV1 {
   try {
     const descriptor = strictObject(value, "source bundle descriptor");
     exactKeys(
@@ -154,58 +157,63 @@ export function parseBuilderSourceBundleInventory(
     if (descriptor["schemaVersion"] !== "octopus.builder.source-bundle/v1") {
       throw new Error("unsupported source bundle schemaVersion");
     }
-    if (descriptor["unicodeNormalization"] !== "NFC") {
-      throw new Error("source bundle must use NFC Unicode normalization");
+    const organisationRef = builderScopeReference(
+      descriptor,
+      "organisationRef",
+    );
+    const projectRef = builderScopeReference(descriptor, "projectRef");
+    const bundleRef = nonempty(descriptor, "bundleRef");
+    const descriptorDigest = digest(descriptor, "digest");
+    if (
+      !/^source-bundle:sha256:[0-9a-f]{64}$/.test(bundleRef) ||
+      bundleRef !== `source-bundle:${descriptorDigest}`
+    ) {
+      throw new Error("Builder source bundle ref/digest mismatch");
     }
-    if (descriptor["pathSemantics"] !== "portable-nfc-casefold-v1") {
-      throw new Error("unsupported source bundle pathSemantics");
-    }
-    const organisationRef = opaqueReference(descriptor, "organisationRef");
-    const projectRef = opaqueReference(descriptor, "projectRef");
-    const candidateRef = opaqueReference(descriptor, "candidateRef");
-    const candidateDigest = digest(descriptor, "candidateDigest");
-    const sourceBundleRef = opaqueReference(descriptor, "sourceBundleRef");
-    const sourceBundleDigest = digest(descriptor, "sourceBundleDigest");
-    const rawEntries = descriptor["entries"];
+    const rawEntries = descriptor["inventory"];
     if (!Array.isArray(rawEntries))
-      throw new Error("source bundle entries must be an array");
-    const entries = rawEntries.map((rawEntry, index) => {
-      const entry = strictObject(rawEntry, `source bundle entry ${index}`);
+      throw new Error("source bundle inventory must be an array");
+    const inventory = rawEntries.map((rawEntry, index) => {
+      const entry = strictObject(rawEntry, `source bundle inventory ${index}`);
       exactKeys(
         entry,
         SOURCE_BUNDLE_ENTRY_KEYS,
-        `source bundle entry ${index}`,
+        `source bundle inventory ${index}`,
       );
-      if (entry["kind"] !== "file") {
-        throw new Error(`source bundle entry ${index} must be a regular file`);
-      }
-      const path = assertRelativePath(
+      const path = assertBuilderSourceBundlePath(
         nonempty(entry, "path"),
         "source bundle path",
       );
-      const size = entry["size"];
-      if (!Number.isSafeInteger(size) || Number(size) < 0) {
-        throw new Error(`source bundle entry ${index} size is invalid`);
+      const sizeBytes = entry["sizeBytes"];
+      if (!Number.isSafeInteger(sizeBytes) || Number(sizeBytes) < 0) {
+        throw new Error(`source bundle inventory ${index} size is invalid`);
       }
-      const entryDigest = digest(entry, "digest");
+      const contentDigest = digest(entry, "contentDigest");
       return {
-        kind: "file" as const,
         path,
-        size: Number(size),
-        digest: entryDigest,
+        contentDigest,
+        sizeBytes: Number(sizeBytes),
       };
     });
+    if (inventory.length === 0) {
+      throw new Error("source bundle inventory must not be empty");
+    }
+    for (let index = 1; index < inventory.length; index += 1) {
+      if (inventory[index - 1]!.path >= inventory[index]!.path) {
+        throw new Error("source bundle inventory is not canonically sorted");
+      }
+    }
+    const calculatedDigest = computeBuilderSourceBundleDigest(inventory);
+    if (calculatedDigest !== descriptorDigest) {
+      throw new Error("Builder source bundle authoritative digest mismatch");
+    }
     return {
       schemaVersion: "octopus.builder.source-bundle/v1",
       organisationRef,
       projectRef,
-      candidateRef,
-      candidateDigest,
-      sourceBundleRef,
-      sourceBundleDigest,
-      unicodeNormalization: "NFC",
-      pathSemantics: "portable-nfc-casefold-v1",
-      entries,
+      bundleRef,
+      digest: descriptorDigest,
+      inventory,
     };
   } catch (error) {
     if (error instanceof InvalidVerificationRequestError) throw error;
@@ -217,6 +225,10 @@ export function parseBuilderSourceBundleInventory(
     );
   }
 }
+
+/** @deprecated Use parseBuilderSourceBundleDescriptor. */
+export const parseBuilderSourceBundleInventory =
+  parseBuilderSourceBundleDescriptor;
 
 export function profileCanonicalInput(
   profile: Omit<TrustedVerificationProfile, "digest">,
@@ -238,25 +250,57 @@ export function computeProfileDigest(
 }
 
 export function computeBundleDigest(
-  descriptor: Omit<SourceBundleDescriptor, "sourceBundleDigest">,
+  descriptor: Omit<SourceBundleDescriptor, "digest" | "bundleRef">,
 ): string {
-  return computeBuilderSourceBundleDigest(descriptor);
+  return computeBuilderSourceBundleDigest(descriptor.inventory);
 }
 
 export function computeBuilderSourceBundleDigest(
-  descriptor: Omit<BuilderSourceBundleInventoryV1, "sourceBundleDigest">,
+  inventory: readonly BuilderSourceBundleFileV1[],
 ): string {
-  return `sha256:${canonicalHash({
-    schemaVersion: descriptor.schemaVersion,
-    organisationRef: descriptor.organisationRef,
-    projectRef: descriptor.projectRef,
-    candidateRef: descriptor.candidateRef,
-    candidateDigest: descriptor.candidateDigest,
-    sourceBundleRef: descriptor.sourceBundleRef,
-    unicodeNormalization: descriptor.unicodeNormalization,
-    pathSemantics: descriptor.pathSemantics,
-    entries: descriptor.entries,
-  } as never)}`;
+  const files = inventory
+    .map((file) => ({
+      path: assertBuilderSourceBundlePath(
+        file.path,
+        "Builder source bundle path",
+      ),
+      contentDigest: checkedDigest(
+        file.contentDigest,
+        "Builder source bundle contentDigest",
+      ),
+      sizeBytes: checkedSize(file.sizeBytes),
+    }))
+    .sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+    );
+  for (let index = 1; index < files.length; index += 1) {
+    if (files[index - 1]!.path === files[index]!.path) {
+      throw new Error("Builder source bundle contains duplicate paths");
+    }
+  }
+  const bytes = JSON.stringify({
+    schemaVersion: "octopus.builder.source-bundle/v1",
+    files: files.map((file) => ({
+      path: file.path,
+      contentDigest: file.contentDigest,
+      sizeBytes: file.sizeBytes,
+    })),
+  });
+  return `sha256:${createHash("sha256").update(bytes, "utf8").digest("hex")}`;
+}
+
+function checkedDigest(value: string, name: string): string {
+  assertDigest(value, name);
+  return value;
+}
+
+function checkedSize(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      "Builder source bundle sizeBytes must be a non-negative safe integer",
+    );
+  }
+  return value;
 }
 
 export function assertDigest(value: string, name = "digest"): void {
@@ -287,6 +331,31 @@ export function assertRelativePath(value: string, name = "path"): string {
     /^[A-Za-z]:/.test(value)
   ) {
     throw new Error(`${name} is not a canonical NFC relative path`);
+  }
+  return value;
+}
+
+/**
+ * Builder v1's exact published path validator. Reef's stricter portable path
+ * policy is applied separately by the materializer and recorded in the Reef
+ * source-bundle binding.
+ */
+export function assertBuilderSourceBundlePath(
+  value: string,
+  name = "Builder source bundle path",
+): string {
+  const segments = value.split("/");
+  if (
+    value.length === 0 ||
+    Buffer.byteLength(value, "utf8") > 1024 ||
+    value.includes("\\") ||
+    value.startsWith("/") ||
+    value.normalize("NFC") !== value ||
+    /\p{Cc}/u.test(value) ||
+    segments.some((part) => part === "" || part === "." || part === "..") ||
+    /^[A-Za-z]:$/.test(segments[0] ?? "")
+  ) {
+    throw new Error(`${name} is not a Builder v1 canonical relative path`);
   }
   return value;
 }
@@ -346,17 +415,17 @@ function exactKeys(
   }
 }
 
-function opaqueReference(record: Record<string, unknown>, key: string): string {
+function builderScopeReference(
+  record: Record<string, unknown>,
+  key: string,
+): string {
   const value = nonempty(record, key);
   if (
-    value.length > 1024 ||
-    !value.includes(":") ||
-    value.includes("://") ||
-    value.includes("\\") ||
+    Buffer.byteLength(value, "utf8") > 512 ||
     value !== value.trim() ||
     /\p{Cc}/u.test(value)
   ) {
-    throw new Error(`${key} must be a bounded opaque reference`);
+    throw new Error(`${key} must be a canonical Builder v1 scope reference`);
   }
   return value;
 }

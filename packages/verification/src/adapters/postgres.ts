@@ -76,8 +76,13 @@ interface RunRow {
   readonly fencing_token: string | number | null;
   readonly materialization_schema_version: string | null;
   readonly materialization_ref: string | null;
+  readonly materialization_descriptor_ref: string | null;
   readonly materialization_descriptor_digest: string | null;
   readonly authoritative_source_bundle_digest: string | null;
+  readonly builder_source_bundle_ref: string | null;
+  readonly builder_source_bundle_digest: string | null;
+  readonly builder_source_bundle_binding_ref: string | null;
+  readonly builder_source_bundle_binding_digest: string | null;
   readonly materialization_entry_count: string | number | null;
   readonly materialization_total_bytes: string | number | null;
 }
@@ -179,10 +184,24 @@ export class PostgresVerificationStore
   }
 
   async ready(): Promise<void> {
-    const result = await this.#pool.query<{ readonly ok: number }>(
-      "SELECT 1 AS ok",
+    const result = await this.#pool.query<{ readonly ok: boolean }>(
+      `SELECT
+        EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema=current_schema()
+            AND table_name='verification_runs'
+            AND column_name='builder_source_bundle_binding_digest'
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM pg_constraint
+          WHERE conrelid='verification_runs'::regclass
+            AND conname='verification_runs_materialization_identity_check'
+            AND pg_get_constraintdef(oid) LIKE '%octopus.reef.materialization/v2%'
+        ) AS ok`,
     );
-    if (result.rows[0]?.ok !== 1)
+    if (result.rows[0]?.ok !== true)
       throw new Error("verification PostgreSQL readiness failed");
   }
 
@@ -253,7 +272,10 @@ export class PostgresVerificationStore
     const result = await this.#pool.query<RunRow>(
       `SELECT run_data, version, state, lease_owner, lease_expires_at, fencing_token,
               materialization_schema_version, materialization_ref,
-              materialization_descriptor_digest, authoritative_source_bundle_digest,
+              materialization_descriptor_ref, materialization_descriptor_digest,
+              authoritative_source_bundle_digest, builder_source_bundle_ref,
+              builder_source_bundle_digest, builder_source_bundle_binding_ref,
+              builder_source_bundle_binding_digest,
               materialization_entry_count, materialization_total_bytes
        FROM verification_runs WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3`,
       [tenant.organisationRef, tenant.projectRef, runRef],
@@ -681,7 +703,10 @@ export class PostgresVerificationStore
     const result = await client.query<RunRow>(
       `SELECT run_data, version, state, lease_owner, lease_expires_at, fencing_token,
               materialization_schema_version, materialization_ref,
-              materialization_descriptor_digest, authoritative_source_bundle_digest,
+              materialization_descriptor_ref, materialization_descriptor_digest,
+              authoritative_source_bundle_digest, builder_source_bundle_ref,
+              builder_source_bundle_digest, builder_source_bundle_binding_ref,
+              builder_source_bundle_binding_digest,
               materialization_entry_count, materialization_total_bytes
        FROM verification_runs WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3
        FOR UPDATE`,
@@ -701,7 +726,10 @@ export class PostgresVerificationStore
     const result = await client.query<RunRow>(
       `SELECT run_data, version, state, lease_owner, lease_expires_at, fencing_token,
               materialization_schema_version, materialization_ref,
-              materialization_descriptor_digest, authoritative_source_bundle_digest,
+              materialization_descriptor_ref, materialization_descriptor_digest,
+              authoritative_source_bundle_digest, builder_source_bundle_ref,
+              builder_source_bundle_digest, builder_source_bundle_binding_ref,
+              builder_source_bundle_binding_digest,
               materialization_entry_count, materialization_total_bytes
        FROM verification_runs WHERE organisation_ref=$1 AND project_ref=$2 AND idempotency_key=$3
        ${lock ? "FOR UPDATE" : ""}`,
@@ -770,9 +798,14 @@ export class PostgresVerificationStore
          run_data=$8::jsonb, lease_owner=$9, lease_expires_at=$10,
          fencing_token=$11, updated_at=$12,
          materialization_schema_version=$13, materialization_ref=$14,
-         materialization_descriptor_digest=$15,
-         authoritative_source_bundle_digest=$16,
-         materialization_entry_count=$17, materialization_total_bytes=$18
+         materialization_descriptor_ref=$15,
+         materialization_descriptor_digest=$16,
+         authoritative_source_bundle_digest=$17,
+         builder_source_bundle_ref=$18,
+         builder_source_bundle_digest=$19,
+         builder_source_bundle_binding_ref=$20,
+         builder_source_bundle_binding_digest=$21,
+         materialization_entry_count=$22, materialization_total_bytes=$23
        WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3`,
       [
         run.organisationRef,
@@ -789,8 +822,13 @@ export class PostgresVerificationStore
         run.updatedAt,
         run.materialization?.schemaVersion ?? null,
         run.materialization?.ref ?? null,
+        run.materialization?.runtimeDescriptorRef ?? null,
         run.materialization?.runtimeDescriptorDigest ?? null,
-        run.materialization?.authoritativeSourceBundleDigest ?? null,
+        run.materialization?.builderSourceBundleDigest ?? null,
+        run.materialization?.builderSourceBundleRef ?? null,
+        run.materialization?.builderSourceBundleDigest ?? null,
+        run.materialization?.builderSourceBundleBindingRef ?? null,
+        run.materialization?.builderSourceBundleBindingDigest ?? null,
         run.materialization?.entryCount ?? null,
         run.materialization?.totalBytes ?? null,
       ],
@@ -819,6 +857,13 @@ export class PostgresVerificationStore
 }
 
 function runFromRow(row: RunRow): VerificationRun {
+  if (
+    row.materialization_schema_version === "octopus.reef.materialization/v1"
+  ) {
+    throw new Error(
+      "persisted 0.3 materialization contract is incompatible with 0.4; process the run with the immutable 0.3 runtime",
+    );
+  }
   if (
     row.run_data === null ||
     typeof row.run_data !== "object" ||
@@ -858,20 +903,43 @@ function materializationFromRow(
   const values = [
     row.materialization_schema_version,
     row.materialization_ref,
+    row.materialization_descriptor_ref,
     row.materialization_descriptor_digest,
     row.authoritative_source_bundle_digest,
+    row.builder_source_bundle_ref,
+    row.builder_source_bundle_digest,
+    row.builder_source_bundle_binding_ref,
+    row.builder_source_bundle_binding_digest,
     row.materialization_entry_count,
     row.materialization_total_bytes,
   ];
   if (values.every((value) => value === null)) return undefined;
+  if (
+    row.materialization_schema_version === "octopus.reef.materialization/v1"
+  ) {
+    throw new Error(
+      "persisted 0.3 materialization contract is incompatible with 0.4; process the run with the immutable 0.3 runtime",
+    );
+  }
   if (values.some((value) => value === null)) {
     throw new Error("persisted verification materialization is partial");
+  }
+  if (
+    row.authoritative_source_bundle_digest !== row.builder_source_bundle_digest
+  ) {
+    throw new Error(
+      "persisted Builder source bundle digest columns do not match",
+    );
   }
   return parseVerificationMaterializationResponse({
     schemaVersion: row.materialization_schema_version,
     ref: row.materialization_ref,
+    runtimeDescriptorRef: row.materialization_descriptor_ref,
     runtimeDescriptorDigest: row.materialization_descriptor_digest,
-    authoritativeSourceBundleDigest: row.authoritative_source_bundle_digest,
+    builderSourceBundleRef: row.builder_source_bundle_ref,
+    builderSourceBundleDigest: row.builder_source_bundle_digest,
+    builderSourceBundleBindingRef: row.builder_source_bundle_binding_ref,
+    builderSourceBundleBindingDigest: row.builder_source_bundle_binding_digest,
     entryCount: safePersistedCount(
       row.materialization_entry_count,
       "materialization entry count",

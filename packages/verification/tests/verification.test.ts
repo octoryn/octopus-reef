@@ -17,7 +17,7 @@ import {
   VerificationDispatchPublisher,
   VerificationService,
   VerificationWorkerProcessCrash,
-  computeBundleDigest,
+  computeBuilderSourceBundleDigest,
   defineTrustedProfile,
   type SourceBundleDescriptor,
   type TrustedVerificationProfile,
@@ -454,32 +454,25 @@ async function fixture(
   });
   const content = Buffer.from("export const fixture = true;\n");
   const entry = {
-    kind: "file" as const,
     path: "fixture.js",
-    size: content.byteLength,
-    digest: sha(content),
+    sizeBytes: content.byteLength,
+    contentDigest: sha(content),
   };
-  const unsigned = {
+  const bundleDigest = computeBuilderSourceBundleDigest([entry]);
+  const descriptor: SourceBundleDescriptor = {
     schemaVersion: "octopus.builder.source-bundle/v1" as const,
     ...tenant,
-    candidateRef: "foundation-candidate:fixture",
-    candidateDigest: sha(Buffer.from("candidate")),
-    sourceBundleRef: "source-bundle:fixture",
-    unicodeNormalization: "NFC" as const,
-    pathSemantics: "portable-nfc-casefold-v1" as const,
-    entries: [entry],
-  };
-  const descriptor: SourceBundleDescriptor = {
-    ...unsigned,
-    sourceBundleDigest: computeBundleDigest(unsigned),
+    bundleRef: `source-bundle:${bundleDigest}`,
+    digest: bundleDigest,
+    inventory: [entry],
   };
   source.add(descriptor, { [entry.path]: content });
   const request: VerificationRunRequest = {
     ...tenant,
     candidateRef: "foundation-candidate:fixture",
     candidateDigest: sha(Buffer.from("candidate")),
-    sourceBundleRef: descriptor.sourceBundleRef,
-    sourceBundleDigest: descriptor.sourceBundleDigest,
+    sourceBundleRef: descriptor.bundleRef,
+    sourceBundleDigest: descriptor.digest,
     verificationProfileRef: profile.ref,
     verificationProfileVersion: profile.version,
     verificationProfileDigest: profile.digest,

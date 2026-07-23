@@ -119,8 +119,8 @@ async function runWorker(): Promise<void> {
     queue: createProductionVerificationQueue(store),
     profiles,
     materializer: new DeterministicSourceBundleMaterializer({
-      store: objects.source,
-      maxFiles: integer(process.env, "REEF_VERIFICATION_MAX_FILES", 20_000),
+      port: objects.materialization,
+      maxFiles: integer(process.env, "REEF_VERIFICATION_MAX_FILES", 10_000),
       maxFileBytes: integer(
         process.env,
         "REEF_VERIFICATION_MAX_FILE_BYTES",
@@ -129,7 +129,7 @@ async function runWorker(): Promise<void> {
       maxTotalBytes: integer(
         process.env,
         "REEF_VERIFICATION_MAX_TOTAL_BYTES",
-        512 * 1024 * 1024,
+        128 * 1024 * 1024,
       ),
     }),
     sandboxes: createProductionVerificationSandbox(),

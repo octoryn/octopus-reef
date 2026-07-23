@@ -117,7 +117,7 @@ function text(
   if (
     typeof value !== "string" ||
     value.length === 0 ||
-    value.length > 1024 ||
+    Buffer.byteLength(value, "utf8") > 1024 ||
     value !== value.trim() ||
     /\p{Cc}/u.test(value)
   ) {
@@ -132,7 +132,7 @@ function opaque(
   name: string,
 ): string {
   const value = text(record, key, name);
-  if (!value.includes(":") || value.includes("://") || value.includes("\\")) {
+  if (value.startsWith("/") || value.includes("://") || value.includes("\\")) {
     throw new Error(`${name} ${key} must be a bounded opaque reference`);
   }
   return value;

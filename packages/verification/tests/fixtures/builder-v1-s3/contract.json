@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "octopus.reef.builder-v1-golden-fixture/v1",
+  "builderSourceCommitInspected": "6994b56ef368b3c829573e0ca823f6c534934e2b",
+  "builderAlgorithmSource": "lib/manufacturing/source-bundle-store.ts",
+  "builderFixtureSource": "tests/source-bundle-store.test.mjs",
+  "builderS3LayoutSource": "lib/manufacturing/adapters/aws-s3-source-bundle-store.ts",
+  "canonicalInventoryJson": "{\"schemaVersion\":\"octopus.builder.source-bundle/v1\",\"files\":[{\"path\":\"README.md\",\"contentDigest\":\"sha256:3ff7d0ee673d132b4c46e68fe806da4a31269d1d95a6219a91d5fa7eb25e9b69\",\"sizeBytes\":22},{\"path\":\"src/app.ts\",\"contentDigest\":\"sha256:4c9a2a851c102d1e1fe2ebb20defb6a0332b9b5c431a0fd644fe21712c412c6a\",\"sizeBytes\":27}]}",
+  "authoritativeDigest": "sha256:dc4f26d4717eb33cb448a4edc1fa8150c4f140fb7db5cad9fe3e1503ce25333d",
+  "descriptorUtf8Bytes": 591,
+  "descriptorKey": "manufacturing/source-bundles/v1/org=c0eeb5a74c7d8dd310e05c584b24e006a059c4c7d331c41cd6b829cdb93724f4/project=def6abf0565ec1578516f3d9533bf24db6eae61d360d1f74c4e3ab7dfa1165f8/bundles/dc4f26d4717eb33cb448a4edc1fa8150c4f140fb7db5cad9fe3e1503ce25333d/descriptor.json",
+  "blobKeys": [
+    "manufacturing/source-bundles/v1/org=c0eeb5a74c7d8dd310e05c584b24e006a059c4c7d331c41cd6b829cdb93724f4/project=def6abf0565ec1578516f3d9533bf24db6eae61d360d1f74c4e3ab7dfa1165f8/bundles/dc4f26d4717eb33cb448a4edc1fa8150c4f140fb7db5cad9fe3e1503ce25333d/blobs/3ff7d0ee673d132b4c46e68fe806da4a31269d1d95a6219a91d5fa7eb25e9b69",
+    "manufacturing/source-bundles/v1/org=c0eeb5a74c7d8dd310e05c584b24e006a059c4c7d331c41cd6b829cdb93724f4/project=def6abf0565ec1578516f3d9533bf24db6eae61d360d1f74c4e3ab7dfa1165f8/bundles/dc4f26d4717eb33cb448a4edc1fa8150c4f140fb7db5cad9fe3e1503ce25333d/blobs/4c9a2a851c102d1e1fe2ebb20defb6a0332b9b5c431a0fd644fe21712c412c6a"
+  ]
+}

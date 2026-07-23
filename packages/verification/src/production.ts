@@ -1,12 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import type {
-  SourceBundleStore,
+  ExternalMaterializationPort,
   VerificationArtifactStore,
   VerificationEvidenceStore,
   VerificationQueue,
   VerificationSandboxProvisioner,
   VerificationSecretResolver,
 } from "./ports.js";
+import { SourceBundleStoreMaterializationBridge } from "./materializer.js";
 import {
   StaticVerificationProfileRegistry,
   type TrustedVerificationProfileRegistry,
@@ -28,6 +29,7 @@ import {
   AwsSecretsManagerVerificationSecretResolver,
   AwsSqsVerificationQueue,
 } from "./adapters/aws.js";
+import { AwsS3BuilderSourceBundleMaterializationPort } from "./adapters/builder-source-bundle-s3.js";
 import type {
   PostgresVerificationStore,
   VerificationPostgresConnectionOptions,
@@ -142,7 +144,7 @@ export function createProductionVerificationQueue(
 }
 
 export interface ProductionVerificationObjectStores {
-  readonly source: SourceBundleStore;
+  readonly materialization: ExternalMaterializationPort;
   readonly artifacts: VerificationArtifactStore;
   readonly evidence: VerificationEvidenceStore;
 }
@@ -165,7 +167,31 @@ export function createProductionVerificationObjectStores(
           }),
     });
     return {
-      source: shared,
+      materialization: new AwsS3BuilderSourceBundleMaterializationPort({
+        resolver: {
+          resolve: () => ({
+            bucket: required(
+              environment,
+              "REEF_VERIFICATION_BUILDER_SOURCE_S3_BUCKET",
+            ),
+            expectedBucketOwner: required(
+              environment,
+              "REEF_VERIFICATION_BUILDER_SOURCE_S3_EXPECTED_BUCKET_OWNER",
+            ),
+            ...(optional(
+              environment,
+              "REEF_VERIFICATION_BUILDER_SOURCE_S3_PREFIX",
+            ) === undefined
+              ? {}
+              : {
+                  prefix: optional(
+                    environment,
+                    "REEF_VERIFICATION_BUILDER_SOURCE_S3_PREFIX",
+                  )!,
+                }),
+          }),
+        },
+      }),
       artifacts: new AwsS3VerificationArtifactStore(shared),
       evidence: new AwsS3VerificationEvidenceStore(shared),
     };
@@ -180,7 +206,9 @@ export function createProductionVerificationObjectStores(
       optional(environment, "REEF_VERIFICATION_DATA_ROOT") ??
       "/var/lib/reef-verification";
     return {
-      source: new LocalSourceBundleStore(`${root}/source`),
+      materialization: new SourceBundleStoreMaterializationBridge(
+        new LocalSourceBundleStore(`${root}/source`),
+      ),
       artifacts: new LocalVerificationArtifactStore(`${root}/artifacts`),
       evidence: new LocalVerificationEvidenceStore(`${root}/evidence`),
     };

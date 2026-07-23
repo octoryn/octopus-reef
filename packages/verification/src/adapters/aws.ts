@@ -279,14 +279,14 @@ export class AwsS3VerificationStore implements SourceBundleStore {
         this.#key(
           tenant,
           "source-objects",
-          hash(`${descriptor.sourceBundleRef}\0${path}`),
+          hash(`${descriptor.bundleRef}\0${path}`),
         ),
         bytes,
         "application/octet-stream",
       );
     }
     await this.#put(
-      this.#key(tenant, "source-descriptors", hash(descriptor.sourceBundleRef)),
+      this.#key(tenant, "source-descriptors", hash(descriptor.bundleRef)),
       Buffer.from(JSON.stringify(descriptor), "utf8"),
       "application/json",
     );

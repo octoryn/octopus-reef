@@ -559,17 +559,14 @@ export class MemorySourceBundleStore implements SourceBundleStore {
   ): void {
     const tenant = tenantOf(descriptor);
     this.#descriptors.set(
-      bundleKey(tenant, descriptor.sourceBundleRef),
+      bundleKey(tenant, descriptor.bundleRef),
       clone(descriptor),
     );
     for (const [path, value] of Object.entries(content)) {
-      this.#content.set(
-        bundleKey(tenant, `${descriptor.sourceBundleRef}\0${path}`),
-        {
-          tenant: clone(tenant),
-          value: Uint8Array.from(value),
-        },
-      );
+      this.#content.set(bundleKey(tenant, `${descriptor.bundleRef}\0${path}`), {
+        tenant: clone(tenant),
+        value: Uint8Array.from(value),
+      });
     }
   }
 

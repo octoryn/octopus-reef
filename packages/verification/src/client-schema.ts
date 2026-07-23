@@ -51,8 +51,9 @@ export function parseVerificationRunResponse(value: unknown): VerificationRun {
   );
   if (
     materialization !== undefined &&
-    materialization.authoritativeSourceBundleDigest !==
-      runIdentity.sourceBundleDigest
+    (materialization.builderSourceBundleRef !== runIdentity.sourceBundleRef ||
+      materialization.builderSourceBundleDigest !==
+        runIdentity.sourceBundleDigest)
   ) {
     throw new Error(
       "verification materialization/source bundle digest mismatch",
@@ -162,8 +163,8 @@ export function parseVerificationEventResponse(
       ),
     );
     if (
-      materialization.authoritativeSourceBundleDigest !==
-      identity.sourceBundleDigest
+      materialization.builderSourceBundleRef !== identity.sourceBundleRef ||
+      materialization.builderSourceBundleDigest !== identity.sourceBundleDigest
     ) {
       throw new Error(
         "verification materialized event/source bundle digest mismatch",
@@ -264,8 +265,12 @@ export function parseVerificationMaterializationResponse(
   const expected = new Set([
     "schemaVersion",
     "ref",
+    "runtimeDescriptorRef",
     "runtimeDescriptorDigest",
-    "authoritativeSourceBundleDigest",
+    "builderSourceBundleRef",
+    "builderSourceBundleDigest",
+    "builderSourceBundleBindingRef",
+    "builderSourceBundleBindingDigest",
     "entryCount",
     "totalBytes",
   ]);
@@ -274,7 +279,7 @@ export function parseVerificationMaterializationResponse(
       "verification materialization contains missing or unsupported fields",
     );
   }
-  if (value["schemaVersion"] !== "octopus.reef.materialization/v1") {
+  if (value["schemaVersion"] !== "octopus.reef.materialization/v2") {
     throw new Error("unsupported verification materialization version");
   }
   if (
@@ -284,15 +289,31 @@ export function parseVerificationMaterializationResponse(
     throw new Error("verification materialization ref is not canonical");
   }
   const runtimeDescriptorDigest = digest(value, "runtimeDescriptorDigest");
+  const runtimeDescriptorRef = nonempty(value, "runtimeDescriptorRef");
   if (
     value["ref"] !==
-    `materialization:${runtimeDescriptorDigest.slice("sha256:".length)}`
+      `materialization:${runtimeDescriptorDigest.slice("sha256:".length)}` ||
+    runtimeDescriptorRef !==
+      `materialization-descriptor:${runtimeDescriptorDigest.slice("sha256:".length)}`
   ) {
     throw new Error(
       "verification materialization ref/descriptor digest mismatch",
     );
   }
-  digest(value, "authoritativeSourceBundleDigest");
+  const builderSourceBundleDigest = digest(value, "builderSourceBundleDigest");
+  if (
+    value["builderSourceBundleRef"] !==
+    `source-bundle:${builderSourceBundleDigest}`
+  ) {
+    throw new Error("verification Builder source bundle ref/digest mismatch");
+  }
+  const bindingDigest = digest(value, "builderSourceBundleBindingDigest");
+  if (
+    value["builderSourceBundleBindingRef"] !==
+    `builder-source-bundle-binding:${bindingDigest.slice("sha256:".length)}`
+  ) {
+    throw new Error("verification Builder binding ref/digest mismatch");
+  }
   positiveInteger(value, "entryCount");
   nonnegativeInteger(value, "totalBytes");
   return value as unknown as VerificationMaterialization;
@@ -527,9 +548,14 @@ function sameMaterialization(
   return (
     left.schemaVersion === right.schemaVersion &&
     left.ref === right.ref &&
+    left.runtimeDescriptorRef === right.runtimeDescriptorRef &&
     left.runtimeDescriptorDigest === right.runtimeDescriptorDigest &&
-    left.authoritativeSourceBundleDigest ===
-      right.authoritativeSourceBundleDigest &&
+    left.builderSourceBundleRef === right.builderSourceBundleRef &&
+    left.builderSourceBundleDigest === right.builderSourceBundleDigest &&
+    left.builderSourceBundleBindingRef ===
+      right.builderSourceBundleBindingRef &&
+    left.builderSourceBundleBindingDigest ===
+      right.builderSourceBundleBindingDigest &&
     left.entryCount === right.entryCount &&
     left.totalBytes === right.totalBytes
   );
