@@ -1,0 +1,125 @@
+{
+  "schemaVersion": "reef.verification-candidate-report.v1",
+  "decision": "READY_FOR_INDEPENDENT_AUDIT",
+  "implementationCommit": "0e0d3ea702d767b385a18e0f2e9a0b561c572af0",
+  "preparedAt": "2026-07-23T05:07:38Z",
+  "releaseIdentity": {
+    "publicPackage": "@octopus-reef/control-plane@0.2.1",
+    "formalRuntimePackage": "@octopus-reef/verification@0.2.1",
+    "gitTag": "control-plane-v0.2.1",
+    "api": "/v1/verifications"
+  },
+  "supersedes": {
+    "release": "control-plane-v0.2.0",
+    "reason": "The 0.2.0 release record hashed a packaged SQL asset that differed from the migration bytes executed by PostgresVerificationStore.",
+    "disposition": "0.2.1 preserves the ordinary queue index actually installed by 0.2.0 and makes the published SQL asset the only runtime migration source."
+  },
+  "prepublishGates": {
+    "passed": true,
+    "node": "22.23.1",
+    "fullSourceTests": {
+      "tests": 228,
+      "passed": 222,
+      "failed": 0,
+      "skipped": 6,
+      "note": "Release-relevant PostgreSQL and Docker integrations were executed separately in isolated infrastructure."
+    },
+    "dependencyAudit": {
+      "high": 0,
+      "critical": 0,
+      "moderate": 4,
+      "moderateScope": "Unrelated MCP-facing workspace packages; neither published Verification package has an MCP runtime dependency."
+    },
+    "migrationSetDigest": "sha256:41cda5e66bf8d2247bc817ff38048b69118520bd32401c665bb81c14a92808cb",
+    "migrationBindings": [
+      {
+        "id": "0001_verification",
+        "asset": "migrations/0001_verification.sql",
+        "runtimeModule": "dist/adapters/migrations.js",
+        "digest": "sha256:41cda5e66bf8d2247bc817ff38048b69118520bd32401c665bb81c14a92808cb",
+        "exactBytes": true
+      }
+    ],
+    "githubCi": {
+      "run": "https://github.com/octoryn/octopus-reef/actions/runs/29981252267",
+      "sourceAndPackage": true,
+      "dockerBuildAndSmoke": true
+    },
+    "workflowLint": {
+      "tool": "actionlint 1.7.12",
+      "passed": true
+    }
+  },
+  "realPostgresTests": {
+    "passed": true,
+    "versions": ["16.14", "17.10"],
+    "migrationRunsPerVersion": 3,
+    "databaseRestartPerVersion": true,
+    "runtimeIndex": "CREATE INDEX verification_queue_claim_idx ON public.verification_queue USING btree (available_at, created_at)",
+    "coverage": [
+      "concurrent migration serialization",
+      "restart recovery",
+      "duplicate delivery",
+      "lease takeover and fencing",
+      "tenant isolation"
+    ]
+  },
+  "isolatedDockerTests": {
+    "passed": true,
+    "localPlatform": "linux/arm64",
+    "apiLiveAndReady": true,
+    "workerOneShot": true,
+    "authenticatedRemoteBridge": true,
+    "hostileBridgePathRejected": true,
+    "goldenStack": {
+      "passed": true,
+      "components": ["Next.js", "FastAPI", "PostgreSQL"],
+      "requiredChecks": 8
+    },
+    "trivy": {
+      "version": "0.70.0",
+      "images": ["api", "worker", "remote-golden-stack"],
+      "fixedHigh": 0,
+      "fixedCritical": 0,
+      "highCriticalSecrets": 0
+    }
+  },
+  "cleanPackageInstall": {
+    "passed": true,
+    "verification": {
+      "shasum": "255a4bb388836de8e9f65f3a914adb6bcfa3a269",
+      "integrity": "sha512-aA+lTD2x35xwwGURuuXtZJbIcuAANiNvfru8XLw8WMY3AKRvRvD5ZzW+QbClfU9cDyFE5bFxm4IIXV7pHAcEyw=="
+    },
+    "controlPlane": {
+      "shasum": "d6188f330562ea7a0953e9d8141598eff03351fb",
+      "integrity": "sha512-nEhYL5/dNwGYCLL5Zp8QrRu0DqzscYNpzZ5SVlXCqSdpSE4DOXM7KHgX/PcWk7Rf8mCpr37p2DAMcOPhPEPrgg=="
+    },
+    "clientMethods": [
+      "createRun",
+      "getRun",
+      "streamRunEvents",
+      "retryRun",
+      "cancelRun",
+      "resolveEvidence"
+    ]
+  },
+  "atomicBundle": {
+    "passed": true,
+    "candidateVisibility": "public-prerelease",
+    "checksumRoot": "sha256(release-bundle.sha256)",
+    "auditBinding": "detached",
+    "finalizationMutationPolicy": "attach independent-audit.json and update Release metadata only; audited assets are not rewritten"
+  },
+  "knownUnverified": [
+    {
+      "id": "live-customer-aws-environment",
+      "scope": "A customer-owned ECS, SQS, S3, Secrets Manager and RDS deployment",
+      "reason": "The release gates adapter contracts, task definition, authenticated remote bridge and immutable images. Customer account deployment remains a deployment-owner compatibility review, not a package publication gate."
+    },
+    {
+      "id": "assurance-scope",
+      "scope": "Compliance certification and penetration testing",
+      "reason": "Release evidence proves the stated deterministic runtime and artifact identities; it is not a certification or penetration-test report."
+    }
+  ]
+}
