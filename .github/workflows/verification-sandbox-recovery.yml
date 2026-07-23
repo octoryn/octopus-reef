@@ -1,0 +1,382 @@
+name: deterministic-verification-sandbox-recovery
+
+on:
+  push:
+    tags: ["verification-sandbox-v0.2.0"]
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+concurrency:
+  group: deterministic-verification-0.2.0
+  cancel-in-progress: false
+
+env:
+  VERSION: 0.2.0
+  RELEASE_TAG: control-plane-v0.2.0
+  RELEASE_COMMIT: 0f48f1eba430db0919e94736639d329db7774bb8
+  SANDBOX_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-golden-stack
+  SANDBOX_TAG: fargate-0.2.0
+
+jobs:
+  preflight:
+    name: remote sandbox irreversible-publish preflight
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: reef_verification
+          POSTGRES_PASSWORD: reef-verification-sandbox-recovery
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U reef_verification -d postgres"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.17.1"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Prove immutable release identity and unused sandbox tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "verification-sandbox-v${VERSION}"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+          git merge-base --is-ancestor "$RELEASE_COMMIT" "$GITHUB_SHA"
+          test "$(npm view "@octopus-reef/control-plane@${VERSION}" gitHead)" = "$RELEASE_COMMIT"
+          test "$(npm view "@octopus-reef/verification@${VERSION}" gitHead)" = "$RELEASE_COMMIT"
+          gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft == true' | grep -Fx true
+          ! docker manifest inspect "${SANDBOX_REPOSITORY}:${SANDBOX_TAG}" >/dev/null 2>&1
+
+      - name: Install locked tree and build Verification
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm rebuild better-sqlite3
+          npm run build --workspace @octopus-reef/verification
+          npm run typecheck --workspace @octopus-reef/verification
+          npx eslint packages/verification/src packages/verification/tests
+          npm audit --audit-level=high
+
+      - name: Build remote sandbox candidate
+        run: |
+          set -euo pipefail
+          docker build \
+            --file packages/verification/Dockerfile.remote-sandbox \
+            --tag reef-verification-remote-sandbox:preflight \
+            .
+          test "$(docker image inspect reef-verification-remote-sandbox:preflight --format '{{.Config.User}}')" = node
+          test "$(docker image inspect reef-verification-remote-sandbox:preflight --format '{{json .Config.Entrypoint}}')" = '["docker-entrypoint.sh"]'
+          test "$(docker image inspect reef-verification-remote-sandbox:preflight --format '{{json .Config.Cmd}}')" = '["node","/opt/reef-verification/sandbox-runner.js"]'
+          docker run --rm --entrypoint sh reef-verification-remote-sandbox:preflight -c \
+            'test -f /opt/reef-verification/sandbox-runner.js && test ! -e /etc/ssl/private/ssl-cert-snakeoil.key'
+
+      - name: Remote bridge authentication and confinement gate
+        run: |
+          set -euo pipefail
+          node --import tsx --test \
+            --test-name-pattern='remote sandbox bridge' \
+            packages/verification/tests/sandbox-runner.test.ts
+          workspace="$(mktemp -d "${RUNNER_TEMP}/reef-remote-sandbox.XXXXXX")"
+          chmod 0777 "$workspace"
+          token=verification-sandbox-preflight-token-at-least-32-bytes
+          docker run --detach --name reef-verification-remote-sandbox-preflight \
+            --publish 127.0.0.1:18081:8081 \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 512 \
+            --memory 3g \
+            --cpus 2 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m,uid=1000,gid=1000 \
+            --mount "type=bind,src=${workspace},dst=/workspace" \
+            --env "REEF_VERIFICATION_SANDBOX_AUTH_TOKEN=${token}" \
+            reef-verification-remote-sandbox:preflight
+          cleanup() {
+            docker rm --force reef-verification-remote-sandbox-preflight >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          curl --fail --silent --show-error \
+            --retry 20 --retry-all-errors --retry-delay 1 \
+            http://127.0.0.1:18081/readyz | jq -e '.ready == true'
+          curl --fail --silent --show-error \
+            --header "authorization: Bearer ${token}" \
+            --header 'content-type: application/json' \
+            --data '{"path":"input.txt","contentBase64":"aW1tdXRhYmxlIGlucHV0Cg=="}' \
+            http://127.0.0.1:18081/v1/files/write | jq -e '.written == 16'
+          curl --fail --silent --show-error \
+            --header "authorization: Bearer ${token}" \
+            --header 'content-type: application/json' \
+            --data '{"argv":["node","-e","const fs=require(\"node:fs\");fs.writeFileSync(\"output.txt\",fs.readFileSync(\"input.txt\",\"utf8\").trim()+\":ok\")"],"workingDirectory":".","timeoutMs":5000,"outputLimitBytes":65536,"environment":{}}' \
+            http://127.0.0.1:18081/v1/execute | jq -e '.exitCode == 0 and .timedOut == false'
+          curl --fail --silent --show-error \
+            --header "authorization: Bearer ${token}" \
+            --header 'content-type: application/json' \
+            --data '{"path":"output.txt","maxBytes":1024}' \
+            http://127.0.0.1:18081/v1/files/read |
+            jq -e '.found == true and .contentBase64 == "aW1tdXRhYmxlIGlucHV0Om9r"'
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --header 'authorization: Bearer wrong-token-that-is-at-least-32-bytes' \
+            --header 'content-type: application/json' \
+            --data '{"path":"output.txt","maxBytes":1024}' \
+            http://127.0.0.1:18081/v1/files/read)" = 401
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --header "authorization: Bearer ${token}" \
+            --header 'content-type: application/json' \
+            --data '{"path":"../escape","contentBase64":"bm8="}' \
+            http://127.0.0.1:18081/v1/files/write)" = 400
+
+      - name: Real PostgreSQL and Golden Stack execution gate
+        env:
+          ADMIN_URL: postgresql://reef_verification:reef-verification-sandbox-recovery@127.0.0.1:5432/postgres
+        run: |
+          set -euo pipefail
+          node --input-type=module --eval '
+            import pg from "pg";
+            const client = new pg.Client({connectionString: process.env.ADMIN_URL});
+            await client.connect();
+            await client.query("CREATE DATABASE reef_verification_core");
+            await client.query("CREATE DATABASE reef_verification_golden");
+            await client.end();
+          '
+          REEF_TEST_POSTGRES_URL='postgresql://reef_verification:reef-verification-sandbox-recovery@127.0.0.1:5432/reef_verification_core' \
+            node --import tsx --test packages/verification/tests/postgres.integration.test.ts
+          sandbox_digest="$(docker image inspect reef-verification-remote-sandbox:preflight --format '{{.Id}}')"
+          REEF_TEST_POSTGRES_URL='postgresql://reef_verification:reef-verification-sandbox-recovery@127.0.0.1:5432/reef_verification_golden' \
+          REEF_TEST_DOCKER_IMAGE="$sandbox_digest" \
+            node --import tsx --test packages/verification/tests/docker-golden-stack.integration.test.ts
+
+      - name: Scan remote sandbox before publication
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: reef-verification-remote-sandbox:preflight
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Bind preflight evidence
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg releaseTag "$RELEASE_TAG" \
+            --arg releaseCommit "$RELEASE_COMMIT" \
+            --arg recoveryTag "$GITHUB_REF_NAME" \
+            --arg recoveryCommit "$GITHUB_SHA" \
+            '{
+              schemaVersion: "reef.verification-sandbox-preflight.v1",
+              releaseTag: $releaseTag,
+              releaseCommit: $releaseCommit,
+              recoveryTag: $recoveryTag,
+              recoveryCommit: $recoveryCommit,
+              unitBridge: true,
+              imageBridge: true,
+              postgres16: true,
+              goldenStack: true,
+              vulnerabilityAndSecretScan: true
+            }' > remote-sandbox-preflight.json
+          sha256sum remote-sandbox-preflight.json > remote-sandbox-preflight.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verification-remote-sandbox-preflight-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            remote-sandbox-preflight.json
+            remote-sandbox-preflight.sha256
+
+  publish:
+    name: publish immutable remote sandbox recovery
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.17.1"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: verification-remote-sandbox-preflight-${{ github.sha }}
+          path: release-assets
+
+      - name: Reverify preflight
+        run: (cd release-assets && sha256sum --check remote-sandbox-preflight.sha256)
+
+      - name: Build and publish immutable multi-architecture remote sandbox
+        id: sandbox
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/verification/Dockerfile.remote-sandbox
+          platforms: linux/amd64,linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: |
+            ${{ env.SANDBOX_REPOSITORY }}:${{ env.SANDBOX_TAG }}
+            ${{ env.SANDBOX_REPOSITORY }}:fargate-sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.licenses=Apache-2.0
+            io.octopus-reef.verification.release-commit=${{ env.RELEASE_COMMIT }}
+
+      - name: Verify exact manifest platforms and OCI provenance
+        env:
+          SANDBOX_DIGEST: ${{ steps.sandbox.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect --raw \
+            "${SANDBOX_REPOSITORY}@${SANDBOX_DIGEST}" > remote-sandbox-manifest.json
+          jq -e '
+            ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | length) == 1 and
+            ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length) == 1 and
+            ([.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")] | length) >= 2
+          ' remote-sandbox-manifest.json
+          test "sha256:$(sha256sum remote-sandbox-manifest.json | awk '{print $1}')" = "$SANDBOX_DIGEST"
+
+      - name: Generate remote sandbox registry SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.SANDBOX_REPOSITORY }}@${{ steps.sandbox.outputs.digest }}
+          format: cyclonedx-json
+          output-file: remote-sandbox-image.cdx.json
+
+      - name: Scan published remote sandbox
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.SANDBOX_REPOSITORY }}@${{ steps.sandbox.outputs.digest }}
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Anonymous pull and exact public identity gate
+        env:
+          SANDBOX_DIGEST: ${{ steps.sandbox.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io
+          docker manifest inspect "${SANDBOX_REPOSITORY}@${SANDBOX_DIGEST}" >/dev/null
+          docker pull --platform linux/amd64 "${SANDBOX_REPOSITORY}@${SANDBOX_DIGEST}"
+
+      - name: Generate immutable remote profile
+        env:
+          SANDBOX_DIGEST: ${{ steps.sandbox.outputs.digest }}
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run build --workspace @octopus-reef/verification
+          node scripts/write-verification-remote-profile.mjs \
+            "$SANDBOX_DIGEST" golden-profile.json
+          jq -e --arg digest "$SANDBOX_DIGEST" '
+            .ref == "verification-profile:golden-next-fastapi-postgres" and
+            .version == "1.0.1" and
+            .sandboxImageDigest == $digest and
+            (.checks | length == 8) and
+            (.checks | all(.[]; .required == true and .tool.imageDigest == $digest))
+          ' golden-profile.json
+
+      - name: Update the immutable draft Release record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SANDBOX_DIGEST: ${{ steps.sandbox.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir current-release
+          gh release download "$RELEASE_TAG" --dir current-release
+          (cd current-release && sha256sum --check verification-release-record.sha256)
+          npm view "@octopus-reef/control-plane@${VERSION}" --json > control-plane-registry.json
+          npm view "@octopus-reef/verification@${VERSION}" --json > verification-registry.json
+          jq -n \
+            --arg releaseTag "$RELEASE_TAG" \
+            --arg releaseCommit "$RELEASE_COMMIT" \
+            --arg recoveryTag "$GITHUB_REF_NAME" \
+            --arg recoveryCommit "$GITHUB_SHA" \
+            --arg repository "$SANDBOX_REPOSITORY" \
+            --arg digest "$SANDBOX_DIGEST" \
+            '{
+              schemaVersion: "reef.verification-sandbox-recovery.v1",
+              releaseTag: $releaseTag,
+              releaseCommit: $releaseCommit,
+              recoveryTag: $recoveryTag,
+              recoveryCommit: $recoveryCommit,
+              repository: $repository,
+              manifestDigest: $digest,
+              platforms: ["linux/amd64", "linux/arm64"],
+              localDockerGoldenStackPassed: true,
+              authenticatedRemoteBridgePassed: true,
+              publicAnonymousPullPassed: true
+            }' > remote-sandbox-recovery.json
+          jq \
+            --arg repository "$SANDBOX_REPOSITORY" \
+            --arg digest "$SANDBOX_DIGEST" \
+            --arg recoveryTag "$GITHUB_REF_NAME" \
+            --arg recoveryCommit "$GITHUB_SHA" \
+            --slurpfile profile golden-profile.json \
+            --slurpfile control control-plane-registry.json \
+            --slurpfile verification verification-registry.json '
+              .supersededLocalOnlyProfileImage = .profileImage |
+              .profileImage = {repository: $repository, manifestDigest: $digest} |
+              .remoteSandboxImage = {
+                repository: $repository,
+                manifestDigest: $digest,
+                platforms: ["linux/amd64", "linux/arm64"],
+                supportedEntrypoint: "node /opt/reef-verification/sandbox-runner.js"
+              } |
+              .profile = $profile[0] |
+              .npm = {
+                controlPlane: {
+                  integrity: $control[0].dist.integrity,
+                  shasum: $control[0].dist.shasum,
+                  gitHead: $control[0].gitHead
+                },
+                verification: {
+                  integrity: $verification[0].dist.integrity,
+                  shasum: $verification[0].dist.shasum,
+                  gitHead: $verification[0].gitHead
+                }
+              } |
+              .productionGapClosure = {
+                recoveryTag: $recoveryTag,
+                recoveryCommit: $recoveryCommit,
+                issue: "The initial Golden Stack image supported Docker exec but did not start the ECS command bridge.",
+                disposition: "The replacement immutable profile image supports both Docker command override and the default authenticated Fargate bridge."
+              } |
+              .status = "candidate-awaiting-independent-audit"
+            ' current-release/verification-release-record.json > verification-release-record.json
+          sha256sum verification-release-record.json > verification-release-record.sha256
+          gh release upload "$RELEASE_TAG" --clobber \
+            verification-release-record.json \
+            verification-release-record.sha256 \
+            golden-profile.json \
+            remote-sandbox-manifest.json \
+            remote-sandbox-image.cdx.json \
+            remote-sandbox-recovery.json \
+            control-plane-registry.json \
+            verification-registry.json
