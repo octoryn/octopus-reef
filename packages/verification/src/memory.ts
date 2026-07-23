@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalHash, verifyEvidence, type Evidence } from "octopus-evidence";
+import {
+  compareVerificationDecimalCursors,
+  parseVerificationDecimalCursor,
+} from "./cursor.js";
 import type {
   SourceBundleStore,
   VerificationArtifactStore,
@@ -256,13 +260,15 @@ export class MemoryVerificationStore implements VerificationStore {
     afterCursor = "0",
     limit = 100,
   ): Promise<readonly VerificationEvent[]> {
-    if (!/^\d+$/.test(afterCursor))
-      throw new Error("invalid decimal event cursor");
+    const cursor = parseVerificationDecimalCursor(afterCursor);
     const events = this.#events.get(runKey(tenant, runRef)) ?? [];
     return Promise.resolve(
       clone(
         events
-          .filter((event) => BigInt(event.cursor) > BigInt(afterCursor))
+          .filter(
+            (event) =>
+              compareVerificationDecimalCursors(event.cursor, cursor) > 0,
+          )
           .slice(0, limit),
       ),
     );
@@ -336,7 +342,7 @@ export class MemoryVerificationStore implements VerificationStore {
       ...tenant,
       id: randomUUID(),
       runRef: run.runRef,
-      cursor: String(++this.#cursor),
+      cursor: parseVerificationDecimalCursor((++this.#cursor).toString(10)),
       type: input.type,
       data: clone(input.data),
       createdAt: input.createdAt,
@@ -603,7 +609,9 @@ function mutate(
       ? { sandboxRef: mutation.sandboxRef }
       : {}),
     version: current.version + 1,
-    eventCursor: mutation.eventCursor ?? eventCursor,
+    eventCursor: parseVerificationDecimalCursor(
+      mutation.eventCursor ?? eventCursor,
+    ),
     updatedAt,
   };
   if (mutation.clearLease) {

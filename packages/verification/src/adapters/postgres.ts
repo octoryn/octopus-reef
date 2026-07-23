@@ -19,6 +19,11 @@ import type {
   VerificationTenant,
 } from "../types.js";
 import { VERIFICATION_MIGRATIONS } from "./migrations.js";
+import {
+  parseVerificationDecimalCursor,
+  type VerificationDecimalCursor,
+} from "../cursor.js";
+import { parseVerificationRunResponse } from "../client-schema.js";
 
 export interface VerificationPgResult<Row> {
   readonly rows: Row[];
@@ -60,7 +65,7 @@ interface RunRow {
 }
 
 interface EventRow {
-  readonly cursor: string | number;
+  readonly cursor: string;
   readonly id: string;
   readonly organisation_ref: string;
   readonly project_ref: string;
@@ -432,8 +437,7 @@ export class PostgresVerificationStore
     afterCursor = "0",
     limit = 100,
   ): Promise<readonly VerificationEvent[]> {
-    if (!/^\d+$/.test(afterCursor))
-      throw new Error("invalid decimal event cursor");
+    const cursor = parseVerificationDecimalCursor(afterCursor);
     const result = await this.#pool.query<EventRow>(
       `SELECT cursor, id, organisation_ref, project_ref, run_ref, type, data, created_at
        FROM verification_events
@@ -443,7 +447,7 @@ export class PostgresVerificationStore
         tenant.organisationRef,
         tenant.projectRef,
         runRef,
-        afterCursor,
+        cursor,
         Math.max(1, Math.min(limit, 1000)),
       ],
     );
@@ -651,8 +655,8 @@ export class PostgresVerificationStore
     client: VerificationPgClientLike,
     run: VerificationRun,
     event: VerificationEventInput,
-  ): Promise<string> {
-    const result = await client.query<{ readonly cursor: string | number }>(
+  ): Promise<VerificationDecimalCursor> {
+    const result = await client.query<{ readonly cursor: string }>(
       `INSERT INTO verification_events (
         id, organisation_ref, project_ref, run_ref, idempotency_key, type, data, created_at
       ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8) RETURNING cursor`,
@@ -667,7 +671,10 @@ export class PostgresVerificationStore
         event.createdAt,
       ],
     );
-    return String(result.rows[0]!.cursor);
+    return parseVerificationDecimalCursor(
+      result.rows[0]!.cursor,
+      "persisted event cursor",
+    );
   }
 
   async #insertOutbox(
@@ -739,7 +746,7 @@ export class PostgresVerificationStore
 }
 
 function runFromRow(row: RunRow): VerificationRun {
-  return row.run_data as VerificationRun;
+  return parseVerificationRunResponse(row.run_data);
 }
 
 function mutable(
@@ -780,7 +787,10 @@ function applyMutation(
       ? {}
       : { sandboxRef: mutation.sandboxRef }),
     version: current.version + 1,
-    eventCursor: mutation.eventCursor ?? eventCursor,
+    eventCursor: parseVerificationDecimalCursor(
+      mutation.eventCursor ?? eventCursor,
+      "persisted run event cursor",
+    ),
     updatedAt,
   };
   if (mutation.clearLease) {
@@ -829,7 +839,10 @@ function eventFromRow(row: EventRow): VerificationEvent {
     projectRef: row.project_ref,
     id: row.id,
     runRef: row.run_ref,
-    cursor: String(row.cursor),
+    cursor: parseVerificationDecimalCursor(
+      row.cursor,
+      "persisted event cursor",
+    ),
     type: row.type,
     data: row.data,
     createdAt: iso(row.created_at),

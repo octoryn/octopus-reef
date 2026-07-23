@@ -21,6 +21,7 @@ import {
   parseVerificationRunRequest,
 } from "./validation.js";
 import { resolveEvidenceEnvelope } from "./evidence.js";
+import { parseVerificationDecimalCursor } from "./cursor.js";
 
 export interface VerificationServiceOptions {
   readonly store: VerificationStore;
@@ -63,7 +64,7 @@ export class VerificationService {
       state: "queued",
       version: 1,
       attempt: 1,
-      eventCursor: "0",
+      eventCursor: parseVerificationDecimalCursor("0"),
       createdAt: now,
       updatedAt: now,
       checks: [],
@@ -185,10 +186,9 @@ export class VerificationService {
     afterCursor = "0",
     limit = 100,
   ): Promise<readonly VerificationEvent[]> {
-    if (!/^\d+$/.test(afterCursor))
-      throw new Error("invalid decimal event cursor");
+    const cursor = parseVerificationDecimalCursor(afterCursor);
     await this.getRun(tenant, runRef);
-    return this.#store.events(tenant, runRef, afterCursor, limit);
+    return this.#store.events(tenant, runRef, cursor, limit);
   }
 
   resolveEvidence(

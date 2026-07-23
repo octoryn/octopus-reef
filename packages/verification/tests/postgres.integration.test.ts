@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -7,6 +8,7 @@ import test from "node:test";
 import {
   DeterministicSourceBundleMaterializer,
   DeterministicVerificationWorker,
+  MemoryEvidenceStore,
   StaticVerificationProfileRegistry,
   VerificationDispatchPublisher,
   VerificationService,
@@ -16,7 +18,10 @@ import {
   type SourceBundleDescriptor,
   type VerificationRunRequest,
 } from "../src/index.js";
-import { PostgresVerificationStore } from "../src/adapters/postgres.js";
+import {
+  PostgresVerificationStore,
+  type VerificationPgPoolLike,
+} from "../src/adapters/postgres.js";
 import {
   EnvironmentProfileSecretResolver,
   LocalSourceBundleStore,
@@ -192,6 +197,97 @@ test(
   },
 );
 
+test(
+  "real PostgreSQL preserves a cursor above Number.MAX_SAFE_INTEGER across restart",
+  {
+    skip:
+      databaseUrl === undefined
+        ? "REEF_TEST_POSTGRES_URL is not configured"
+        : false,
+  },
+  async () => {
+    const tenant = {
+      organisationRef: "organisation:pg-large-cursor",
+      projectRef: "project:pg-large-cursor",
+    };
+    const profile = defineTrustedProfile({
+      ref: "verification-profile:pg-large-cursor",
+      version: "1.0.0",
+      sandboxImageDigest: sha("large-cursor-sandbox"),
+      maxDurationMs: 60_000,
+      maxChecks: 1,
+      checks: [check("large-cursor", ["true"])],
+    });
+    const id = `verification:pg-large-cursor-${process.pid}-${Date.now()}`;
+    const key = `pg-large-cursor-${process.pid}-${Date.now()}`;
+
+    const firstPool = postgresPool(databaseUrl!);
+    const firstStore = new PostgresVerificationStore(firstPool);
+    await firstStore.migrate();
+    await firstPool.query(
+      `SELECT setval(
+        'verification_events_cursor_seq',
+        GREATEST(
+          (SELECT last_value FROM verification_events_cursor_seq),
+          9007199254740993::bigint
+        ),
+        true
+      )`,
+    );
+    const firstService = new VerificationService({
+      store: firstStore,
+      evidence: new MemoryEvidenceStore(),
+      profiles: new StaticVerificationProfileRegistry([profile]),
+      id: () => id,
+    });
+    const created = await firstService.createRun(tenant, {
+      ...tenant,
+      candidateRef: "foundation-candidate:pg-large-cursor",
+      candidateDigest: sha("large-cursor-candidate"),
+      sourceBundleRef: "source-bundle:pg-large-cursor",
+      sourceBundleDigest: sha("large-cursor-source"),
+      verificationProfileRef: profile.ref,
+      verificationProfileVersion: profile.version,
+      verificationProfileDigest: profile.digest,
+      idempotencyKey: key,
+    });
+    assert.ok(
+      BigInt(created.eventCursor) > BigInt(Number.MAX_SAFE_INTEGER),
+      created.eventCursor,
+    );
+    await firstPool.end();
+
+    const secondPool = postgresPool(databaseUrl!);
+    const secondStore = new PostgresVerificationStore(secondPool);
+    try {
+      const restarted = await secondStore.get(tenant, created.runRef);
+      assert.equal(restarted?.eventCursor, created.eventCursor);
+      const events = await secondStore.events(tenant, created.runRef, "0");
+      assert.equal(events.length, 1);
+      assert.equal(events[0]?.cursor, created.eventCursor);
+      for (const cursor of [
+        "01",
+        "+1",
+        "-0",
+        "",
+        "1e3",
+        "1.0",
+        " 1",
+        "1 ",
+        "١",
+        "１",
+      ]) {
+        await assert.rejects(
+          secondStore.events(tenant, created.runRef, cursor),
+          /canonical non-negative ASCII decimal/,
+        );
+      }
+    } finally {
+      await secondPool.end();
+    }
+  },
+);
+
 function makeWorker(
   store: PostgresVerificationStore,
   workerId: string,
@@ -306,4 +402,15 @@ function sha(value: string): string {
 }
 function shaBytes(value: Uint8Array): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function postgresPool(
+  connectionString: string,
+): VerificationPgPoolLike & { end(): Promise<void> } {
+  const { Pool } = createRequire(import.meta.url)("pg") as {
+    readonly Pool: new (options: {
+      readonly connectionString: string;
+    }) => VerificationPgPoolLike & { end(): Promise<void> };
+  };
+  return new Pool({ connectionString });
 }

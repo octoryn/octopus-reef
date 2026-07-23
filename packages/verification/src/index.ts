@@ -1,6 +1,7 @@
 export * from "./types.js";
 export * from "./ports.js";
 export * from "./errors.js";
+export * from "./cursor.js";
 export * from "./validation.js";
 export * from "./profile.js";
 export * from "./golden-profile.js";

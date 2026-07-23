@@ -13,8 +13,13 @@ import {
   verificationEventIdentity,
 } from "./client-schema.js";
 import { parseVerificationRunRequest } from "./validation.js";
+import {
+  compareVerificationDecimalCursors,
+  parseVerificationDecimalCursor,
+  type VerificationDecimalCursor,
+} from "./cursor.js";
 
-export type VerificationDecimalCursor = `${bigint}`;
+export type { VerificationDecimalCursor } from "./cursor.js";
 
 export interface VerificationHttpClientOptions {
   readonly baseUrl: string;
@@ -152,13 +157,14 @@ export class VerificationHttpClient {
     runRef: string,
     options: VerificationEventStreamOptions = {},
   ): AsyncIterable<VerificationEvent> {
-    let cursor = options.cursor ?? "0";
-    assertDecimalCursor(cursor);
+    let cursor = parseClientCursor(
+      options.cursor === undefined ? "0" : options.cursor,
+    );
     const reconnect = options.reconnect ?? true;
     let expectedRun = await this.getRun(runRef);
     if (
       isTerminalRun(expectedRun) &&
-      BigInt(cursor) >= BigInt(expectedRun.eventCursor)
+      compareVerificationDecimalCursors(cursor, expectedRun.eventCursor) >= 0
     )
       return;
     while (!options.signal?.aborted) {
@@ -198,8 +204,9 @@ export class VerificationHttpClient {
       let terminal = false;
       try {
         for await (const event of decodeSse(response.body)) {
-          assertDecimalCursor(event.cursor);
-          if (BigInt(event.cursor) <= BigInt(cursor)) continue;
+          const eventCursor = parseClientCursor(event.cursor);
+          if (compareVerificationDecimalCursors(eventCursor, cursor) <= 0)
+            continue;
           if (event.runRef !== runRef)
             throw new VerificationProtocolError("SSE run identity mismatch");
           assertTenant(event, this.#tenant);
@@ -215,7 +222,7 @@ export class VerificationHttpClient {
               error,
             );
           }
-          cursor = event.cursor as VerificationDecimalCursor;
+          cursor = eventCursor;
           yield event;
           if (TERMINAL_EVENTS.has(event.type)) terminal = true;
         }
@@ -231,8 +238,12 @@ export class VerificationHttpClient {
       if (terminal || !reconnect) return;
       expectedRun = await this.getRun(runRef);
       if (isTerminalRun(expectedRun)) {
-        if (BigInt(cursor) === BigInt(expectedRun.eventCursor)) return;
-        if (BigInt(cursor) > BigInt(expectedRun.eventCursor)) {
+        const comparison = compareVerificationDecimalCursors(
+          cursor,
+          expectedRun.eventCursor,
+        );
+        if (comparison === 0) return;
+        if (comparison > 0) {
           throw new VerificationProtocolError(
             "SSE cursor is ahead of the terminal verification run",
           );
@@ -397,7 +408,7 @@ function parseSseFrame(frame: string): VerificationEvent | undefined {
     else if (field === "data") data.push(value);
   }
   if (data.length === 0) return undefined;
-  assertDecimalCursor(id ?? "");
+  parseClientCursor(id ?? "");
   let parsed: unknown;
   try {
     parsed = JSON.parse(data.join("\n"));
@@ -486,12 +497,13 @@ function segment(value: string): string {
   return encodeURIComponent(value);
 }
 
-function assertDecimalCursor(
-  value: string,
-): asserts value is VerificationDecimalCursor {
-  if (!/^(?:0|[1-9]\d*)$/.test(value)) {
+function parseClientCursor(value: unknown): VerificationDecimalCursor {
+  try {
+    return parseVerificationDecimalCursor(value);
+  } catch (error) {
     throw new VerificationProtocolError(
       "event cursor must be canonical decimal",
+      error,
     );
   }
 }

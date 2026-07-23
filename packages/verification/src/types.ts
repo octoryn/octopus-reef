@@ -1,4 +1,5 @@
 import type { Evidence } from "octopus-evidence";
+import type { VerificationDecimalCursor } from "./cursor.js";
 
 export const VERIFICATION_STATES = [
   "queued",
@@ -90,7 +91,7 @@ export interface VerificationRun extends VerificationIdentity {
   /** Starts at one and increments only on explicit retry. */
   readonly attempt: number;
   /** Exact decimal cursor of the latest durable event. */
-  readonly eventCursor: string;
+  readonly eventCursor: VerificationDecimalCursor;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly startedAt?: string;
@@ -105,7 +106,7 @@ export interface VerificationRun extends VerificationIdentity {
 export interface VerificationEvent extends VerificationTenant {
   readonly id: string;
   readonly runRef: string;
-  readonly cursor: string;
+  readonly cursor: VerificationDecimalCursor;
   readonly type: string;
   readonly data: unknown;
   readonly createdAt: string;
@@ -233,7 +234,7 @@ export interface VerificationSandbox {
 export interface VerificationMutation {
   readonly state?: VerificationState;
   readonly attempt?: number;
-  readonly eventCursor?: string;
+  readonly eventCursor?: VerificationDecimalCursor;
   readonly checks?: readonly VerificationCheckResult[];
   readonly verdict?: VerificationVerdict;
   readonly failure?: VerificationFailure;

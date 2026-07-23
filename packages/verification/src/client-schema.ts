@@ -12,9 +12,9 @@ import {
   type VerificationToolIdentity,
   type VerificationVerdict,
 } from "./types.js";
+import { parseVerificationDecimalCursor } from "./cursor.js";
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
-const DECIMAL = /^(?:0|[1-9][0-9]*)$/;
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
 
 /** Runtime validation for data crossing the public HTTP client boundary. */
@@ -282,10 +282,7 @@ function digest(value: Record<string, unknown>, key: string): string {
 }
 
 function decimal(value: Record<string, unknown>, key: string): string {
-  const field = nonempty(value, key);
-  if (!DECIMAL.test(field))
-    throw new Error(`${key} must be a canonical decimal cursor`);
-  return field;
+  return parseVerificationDecimalCursor(value[key], key);
 }
 
 function boolean(value: Record<string, unknown>, key: string): boolean {
