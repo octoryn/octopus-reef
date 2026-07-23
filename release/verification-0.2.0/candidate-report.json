@@ -1,9 +1,9 @@
 {
   "schemaVersion": "reef.verification-candidate-report.v1",
   "decision": "READY_FOR_INDEPENDENT_AUDIT",
-  "implementationCommit": "6607d5b5813c7ed8024cf1260b4229b59abacfa7",
+  "implementationCommit": "b0f80bc4e1789d9a29515293869ceafba961f363",
   "recoveredFromCommit": "5d73dd32bcf00393ab359c38e165bac86d62e942",
-  "preparedAt": "2026-07-23T01:07:40Z",
+  "preparedAt": "2026-07-23T01:21:25Z",
   "releaseIdentity": {
     "publicPackage": "@octopus-reef/control-plane@0.2.0",
     "formalRuntimePackage": "@octopus-reef/verification@0.2.0",
@@ -39,14 +39,22 @@
       "failure": "PostgreSQL initdb correctly reset its private data directory to mode 0700, preventing the host runner from deleting the retained workspace.",
       "publishedArtifacts": [],
       "disposition": "Before container removal, the same non-root sandbox user now restores group rwX only on entries it owns; source files and paths outside that single workspace are excluded."
+    },
+    {
+      "runId": 29971048066,
+      "tagCommit": "7b1e16e2a8c0f4e61e88ce06512d32ac827d239f",
+      "stage": "isolated Golden Stack expected-artifact collection",
+      "failure": "PostgreSQL correctly created postgres.log with owner-only permissions, so the host Worker could not collect the optional expected artifact before sandbox teardown.",
+      "publishedArtifacts": [],
+      "disposition": "The non-root sandbox user now grants its private host group access after each command and immediately before artifact collection, while excluding symlinks and retaining a mode-0700 host root. The real Golden Stack passed after the fix."
     }
   ],
   "prepublishGates": {
     "passed": true,
     "command": "npm run verify:all && npm run release:smoke && node scripts/verification-prepublish-gate.mjs",
     "fullSourceTests": {
-      "tests": 225,
-      "passed": 219,
+      "tests": 226,
+      "passed": 220,
       "failed": 0,
       "skipped": 6,
       "note": "The six environment-gated integrations were executed separately with real PostgreSQL and Docker."
@@ -77,7 +85,7 @@
     "tests": 1,
     "failed": 0,
     "skipped": 0,
-    "durationMs": 45249,
+    "durationMs": 73733,
     "coverage": [
       "real Next.js production build and tests",
       "real FastAPI dependency install and pytest",
@@ -89,8 +97,8 @@
   "cleanPackageInstall": {
     "passed": true,
     "verification": {
-      "shasum": "66de4948c11d6eb4984727abb2bce010352139d9",
-      "integrity": "sha512-HxlAjs6GkjXgyDfkxkd4pWh8hARL0jetlYd41OeJFscMpc1ryOlCI2oexubmN/DWZbkZUKShUF4e6504S1Tb+g=="
+      "shasum": "504e2a5a7b752e3097b7bab099b6da29b720318a",
+      "integrity": "sha512-UxY0L4kXpS6yTVBRNDXk3YpVeRNO6toQK+iwDj0Dr6cyH0zfumk6Zh0bABF/MsmgUUv0T3gNlrjfCLIL5XA3Uw=="
     },
     "controlPlane": {
       "shasum": "00bf6f96c1e67048a7b7293529d5efcba1601955",
