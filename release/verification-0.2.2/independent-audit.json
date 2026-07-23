@@ -1,0 +1,126 @@
+{
+  "schemaVersion": "reef.verification-independent-audit.v2",
+  "decision": "GO for Builder compatibility review",
+  "auditedAt": "2026-07-23T05:56:44Z",
+  "auditorMode": "independent-read-only-public-black-box",
+  "gitCommit": "2b1cbf07f25128109c1efaeca613fa2c0227244d",
+  "bundleDigest": "sha256:3ed29bac79042b059c2346eef4ccdb53e548a736c36bf3291c5fc378d62b9b26",
+  "gates": [
+    {
+      "id": "npm-package-integrity-provenance-and-client",
+      "status": "GO",
+      "independentFacts": [
+        "Anonymous registry downloads of @octopus-reef/control-plane@0.2.2 and @octopus-reef/verification@0.2.2 recomputed to their published SHA-1 shasums and SHA-512 integrity values.",
+        "A clean Node 22 installation completed with zero npm audit vulnerabilities; npm audit signatures verified 58 registry signatures and 13 attestations with zero invalid or missing signatures.",
+        "The two target package SLSA subjects bind the exact package integrity, control-plane-v0.2.2 tag, 2b1cbf07f25128109c1efaeca613fa2c0227244d commit, release workflow and run 29981901353.",
+        "Runtime and TypeScript black-box tests passed create, get, decimal event streaming, retry, cancel and Evidence resolution.",
+        "@octopus-reef/verification exposes no AgentRun pause, resume, approve or reject capability and has no AgentKernel, model, Git or review product dependency."
+      ]
+    },
+    {
+      "id": "git-tag-recovery-release-and-checksums",
+      "status": "GO",
+      "independentFacts": [
+        "A fresh anonymous HTTPS clone resolved annotated tag control-plane-v0.2.2 to 2b1cbf07f25128109c1efaeca613fa2c0227244d.",
+        "The public graph resolves control-plane-v0.2.0 to 0f48f1eba430db0919e94736639d329db7774bb8 and recovery.3 to b9bccd0acfa6b5d856a8c861ecaf5fcd62ceb1e5, with formal 0.2.0 an ancestor of recovery.3 and recovery.3 an ancestor of 0.2.2.",
+        "The candidate Release was publicly downloadable, non-draft and prerelease during detached audit.",
+        "release-bundle.sha256.sha256 and every entry in release-bundle.sha256 verified from anonymously downloaded assets."
+      ]
+    },
+    {
+      "id": "anonymous-oci-digests-platforms-provenance-sbom-and-scan",
+      "status": "GO",
+      "independentFacts": [
+        "Empty-auth anonymous manifest bytes recomputed to API sha256:05e07011fce2afbb8bc02b440c0e62e539142dd3861b2c6caf8ed374744d7ebb, Worker sha256:7b3f2b45d8b064db7abcdac297de9f0babfdb4eb6cb2109188b2eb714e4e51c7 and profile sha256:7dd7d038fd54f26ad17d7e25dc3b4d0348300d7808b321c2afed7a99170bc67b.",
+        "Each manifest contains linux/amd64 and linux/arm64 images plus at least two OCI attestation manifests.",
+        "Build provenance for both platforms binds the release commit, version and workflow run; the profile provenance pins the exact API digest.",
+        "Attached SPDX SBOMs were readable for all six platform images.",
+        "Trivy 0.70.0 scans of all six digest-bound platform images found zero fixed HIGH or CRITICAL vulnerabilities and zero secrets."
+      ]
+    },
+    {
+      "id": "verification-api-auth-idempotency-identity-cursor-and-schema",
+      "status": "GO",
+      "independentFacts": [
+        "Public-package runtime black-box requests rejected command, argv, cwd, env, raw credentials and unknown keys.",
+        "Deployment-owned RS256 JWKS tests enforced issuer, signature, expiry, algorithm and tenant-bound workload principal; tampered, expired and HS-confusion tokens were rejected.",
+        "Idempotency used the exact tenant, project, verification profile, source digest and request key tuple.",
+        "Response, event and Evidence identities echoed the exact request identity.",
+        "Large decimal SSE cursors round-tripped exactly, noncanonical cursors were rejected and reconnecting at the terminal cursor returned immediate EOF.",
+        "Malformed runtime responses were rejected by schema validation rather than accepted through TypeScript casts."
+      ]
+    },
+    {
+      "id": "independent-state-verdict-and-required-check-semantics",
+      "status": "GO",
+      "independentFacts": [
+        "Required-check coverage remained separate from verdict computation.",
+        "Required build, test, migration, compose and scan failures produced completed state with failed verdict.",
+        "Infrastructure sandbox failure produced operational failed state with SANDBOX_FAILED and no verdict.",
+        "The runtime completed these transitions without AgentKernel, model, Git or review dependencies."
+      ]
+    },
+    {
+      "id": "octopus-evidence-store-untrusting-verification",
+      "status": "GO",
+      "independentFacts": [
+        "The public Worker created and verified Evidence with octopus-evidence@0.2.0.",
+        "Evidence verification succeeded without a service-side secret and identified verifier version 0.2.0.",
+        "Tampering with stored advertised digest or canonical Evidence content was rejected under a store-untrusting test.",
+        "Artifact URIs remained distinct from Evidence references, canonical digest meaning was unambiguous and identity echoed through response, event and Evidence."
+      ]
+    },
+    {
+      "id": "postgres-migration-profile-entrypoints-and-compatibility",
+      "status": "GO",
+      "independentFacts": [
+        "Published migration bytes exactly matched the Release asset and sha256:41cda5e66bf8d2247bc817ff38048b69118520bd32401c665bb81c14a92808cb.",
+        "PostgreSQL 16.14 and 17.10 each passed three migration executions and restart with schema head 0001_verification, five tables and the expected ordinary queue index.",
+        "The trusted profile canonical digest recomputed to sha256:45036457233e5db37d5725482ec50220fe5e0841fb7706151445d0270d547c67, declared eight required checks and pinned the exact profile image digest.",
+        "Public image and CLI inspection confirmed separate API, Worker and migrate entrypoints and an authenticated profile runner.",
+        "The compatibility policy and known-unverified list were present in public Release documentation."
+      ]
+    },
+    {
+      "id": "hostile-source-bundle-rejection",
+      "status": "GO",
+      "independentFacts": [
+        "Traversal, backslash, absolute path, Unicode normalization ambiguity, exact and case-fold duplicate, symlink, hardlink, FIFO, device, oversize and file-count hostile bundles were rejected.",
+        "Arbitrary HTTP, HTTPS and S3 source URLs were rejected.",
+        "A valid bundle materialized with PATH unavailable and network fetch poisoned, demonstrating no Git checkout, Git commit or external presigned-URL dependency."
+      ]
+    },
+    {
+      "id": "isolated-postgres-api-worker-and-golden-runtime",
+      "status": "GO",
+      "independentFacts": [
+        "PostgreSQL 16.14 and 17.10 passed concurrent migration, concurrent idempotent create, exact-tuple conflict, tenant isolation, expired-lease takeover, stale-fence rejection, duplicate-queue suppression and exact large-cursor tests.",
+        "The exact public API image passed live and ready probes and the exact public Worker image completed a one-shot job.",
+        "The exact public Golden profile image rejected wrong authentication and traversal uploads.",
+        "A real Next.js, FastAPI and PostgreSQL fixture passed all eight profile checks, including frontend build manifest, backend tests, repeated database migration, application health artifacts and dependency policy."
+      ]
+    },
+    {
+      "id": "atomic-public-bundle-and-recovery-history",
+      "status": "GO",
+      "independentFacts": [
+        "The Git tag, both npm metadata records, Release record, three raw OCI manifests, migration, trusted profile and candidate report all bind the same 0.2.2 release identity.",
+        "The checksum root of release-bundle.sha256 independently recomputed to sha256:3ed29bac79042b059c2346eef4ccdb53e548a736c36bf3291c5fc378d62b9b26.",
+        "The retained 0.2.1 tag and workflow run 29981368400 truthfully record a preflight-only failure; anonymous checks found no 0.2.1 npm, GHCR or GitHub Release artifacts.",
+        "The public 0.2.0 and recovery.1 through recovery.3 history is retained and has the documented ancestry."
+      ]
+    }
+  ],
+  "knownUnverified": [
+    {
+      "id": "live-customer-aws-environment",
+      "scope": "A customer-owned ECS, SQS, S3, Secrets Manager and RDS deployment",
+      "reason": "The release gates adapter contracts, task definition, authenticated remote bridge and immutable images. Customer account deployment remains a deployment-owner compatibility review, not a package publication gate."
+    },
+    {
+      "id": "assurance-scope",
+      "scope": "Compliance certification and penetration testing",
+      "reason": "Release evidence proves the stated deterministic runtime and artifact identities; it is not a certification or penetration-test report."
+    }
+  ]
+}
