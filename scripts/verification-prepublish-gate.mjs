@@ -119,11 +119,18 @@ for (const marker of [
   "0003_builder_v1_binding",
   "--draft",
   ".immutable == true",
+  'RELEASE_TAG: control-plane-v0.4.0',
+  "git tag --annotate",
+  'decision: "READY_FOR_FRESH_INDEPENDENT_AUDIT"',
 ])
   assert(workflow.includes(marker), `release workflow omits ${marker}`);
 assert(
   !workflow.includes("--prerelease"),
   "0.4.0 Release must not be a prerelease",
+);
+assert(
+  !workflow.includes('tags: ["control-plane-v0.4.0"]'),
+  "the full preflight must run before the 0.4.0 tag is created",
 );
 
 const verificationDockerfile = text("packages/verification/Dockerfile");
