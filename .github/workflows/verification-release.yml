@@ -143,6 +143,8 @@ jobs:
             reef-verification-api:preflight migrate
           docker run --rm reef-verification-api:preflight help | grep -F 'api|worker|migrate'
           docker run --rm reef-verification-worker:preflight help | grep -F 'api|worker|migrate'
+          docker run --rm --entrypoint sh reef-verification-api:preflight -c '! command -v npm && test ! -d /usr/local/lib/node_modules/npm'
+          docker run --rm --entrypoint sh reef-verification-worker:preflight -c '! command -v npm && test ! -d /usr/local/lib/node_modules/npm'
           test "$(docker image inspect reef-verification-api:preflight --format '{{.Config.User}}')" = node
           test "$(docker image inspect reef-verification-worker:preflight --format '{{.Config.User}}')" = node
 

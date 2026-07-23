@@ -1,7 +1,7 @@
 # Build from the repository root:
 # docker build -f packages/verification/Dockerfile --target api .
 # docker build -f packages/verification/Dockerfile --target worker .
-FROM node:22.17.1-bookworm-slim AS build
+FROM node:22.22.2-bookworm-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS build
 WORKDIR /app
 
 COPY package.json package-lock.json tsconfig.base.json ./
@@ -35,19 +35,22 @@ COPY packages/verification/README.md packages/verification/README.md
 RUN npx tsc -b packages/engine packages/protocol packages/verification
 RUN npm prune --omit=dev --ignore-scripts
 
-FROM node:22.17.1-bookworm-slim AS runtime
+FROM node:22.22.2-bookworm-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     REEF_VERIFICATION_HOST=0.0.0.0 \
     REEF_VERIFICATION_PORT=8080
 
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && curl --fail --silent --show-error --location \
       https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
       --output /etc/ssl/certs/aws-rds-global-bundle.pem \
     && echo "e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3  /etc/ssl/certs/aws-rds-global-bundle.pem" | sha256sum --check --strict \
     && chmod 0444 /etc/ssl/certs/aws-rds-global-bundle.pem \
+    && rm -rf /usr/local/lib/node_modules/npm \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx \
     && apt-get clean \
     && find /var/lib/apt/lists -mindepth 1 -delete
 

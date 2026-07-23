@@ -1,14 +1,22 @@
-FROM node:22.17.1-bookworm-slim
+FROM node:22.22.2-bookworm-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NEXT_TELEMETRY_DISABLED=1 \
     npm_config_cache=/opt/npm-cache
 
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
       ca-certificates python3 python3-pip python3-venv postgresql \
     && apt-get clean \
     && find /var/lib/apt/lists -mindepth 1 -delete
+
+RUN npm install --global --prefix /opt/npm-12 --ignore-scripts npm@12.0.1 \
+    && rm -rf /usr/local/lib/node_modules/npm \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx \
+    && ln -s /opt/npm-12/bin/npm /usr/local/bin/npm \
+    && ln -s /opt/npm-12/bin/npx /usr/local/bin/npx \
+    && test "$(npm --version)" = "12.0.1"
 
 COPY frontend/package.json frontend/package-lock.json /opt/frontend-seed/
 RUN npm ci --ignore-scripts --prefix /opt/frontend-seed \

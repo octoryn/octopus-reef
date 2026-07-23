@@ -98,6 +98,25 @@ for (const marker of [
 ])
   assert(workflow.includes(marker), `release workflow omits ${marker}`);
 
+const verificationDockerfile = text("packages/verification/Dockerfile");
+for (const marker of [
+  "node:22.22.2-bookworm-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e",
+  "apt-get upgrade -y",
+  "rm -rf /usr/local/lib/node_modules/npm",
+]) {
+  assert(
+    verificationDockerfile.includes(marker),
+    `Verification image hardening omits ${marker}`,
+  );
+}
+const goldenDockerfile = text(
+  "packages/verification/tests/fixtures/golden-stack/Dockerfile.sandbox",
+);
+assert(
+  goldenDockerfile.includes("npm@12.0.1"),
+  "Golden Stack image omits the pinned patched npm runtime",
+);
+
 const goldenAcceptance = text(
   "packages/verification/tests/docker-golden-stack.integration.test.ts",
 );
