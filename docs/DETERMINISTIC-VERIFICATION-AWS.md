@@ -1,6 +1,6 @@
 # Deterministic Verification on AWS
 
-This is the minimal production boundary for the deployment-neutral 0.2 core.
+This is the minimal production boundary for the deployment-neutral 0.4 core.
 AWS is an adapter choice, not a dependency of the verification state machine.
 
 ## Topology
@@ -10,8 +10,9 @@ AWS is an adapter choice, not a dependency of the verification state machine.
   leases, and fencing.
 - SQS is at-least-once transport; PostgreSQL fencing and semantic checkpoints
   own execution safety.
-- S3 stores exact source objects, bounded artifacts, and Evidence under
-  tenant-hashed prefixes.
+- Builder S3 stores the existing Builder v1 descriptor and content-addressed
+  blobs under Builder's tenant-hashed layout. Reef S3 stores bounded artifacts
+  and Evidence separately.
 - Each Verification Run gets a separate Fargate sandbox task with private,
   task-scoped `/workspace` and `/tmp` volumes.
 - The Worker is the only caller allowed to reach sandbox TCP 8081. The sandbox
@@ -94,6 +95,12 @@ Scope resources to one environment and tenant prefix:
       "Resource": "arn:aws:s3:::reef-verification/reef-verification/*"
     },
     {
+      "Sid": "PublishedBuilderSourceBundlesReadOnly",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::octopus-builder-source-bundles/manufacturing/source-bundles/*"
+    },
+    {
       "Sid": "ProfileSecretsOnly",
       "Effect": "Allow",
       "Action": "secretsmanager:GetSecretValue",
@@ -138,8 +145,10 @@ container as a task role.
 1. Run the published `reef-verification migrate` image command.
 2. Deploy API and wait for `/health/ready`.
 3. Register the exact trusted profile JSON from the GitHub Release.
-4. Deploy Worker with SQS, S3, Secrets Manager, and ECS adapters.
-5. Submit a non-production immutable bundle and verify its event cursor,
+4. Configure the deployment-owned Builder bucket, prefix, and expected bucket
+   owner. External Run/materialization requests cannot override them.
+5. Deploy Worker with SQS, S3, Secrets Manager, and ECS adapters.
+6. Submit a non-production immutable bundle and verify its event cursor,
    artifact/test/Evidence refs, and sandbox task termination.
 
 The release gates exercise real PostgreSQL 16/17 and the isolated Docker

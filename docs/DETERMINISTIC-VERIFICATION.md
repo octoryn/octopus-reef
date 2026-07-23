@@ -1,4 +1,4 @@
-# Deterministic Verification Runtime 0.3
+# Deterministic Verification Runtime 0.4
 
 Deterministic Verification is a separate Reef aggregate. It is not an
 `AgentRun`, does not load a model or Agent Loop, and has no pause, review,
@@ -10,8 +10,8 @@ Builder deliverable and never advances Builder Project State.
 Builder pins these public packages exactly:
 
 ```text
-@octopus-reef/control-plane@0.3.0
-@octopus-reef/verification@0.3.0
+@octopus-reef/control-plane@0.4.0
+@octopus-reef/verification@0.4.0
 @octopus-reef/engine@0.2.1
 @octopus-reef/protocol@0.1.1
 @octopus-reef/agent@0.2.3
@@ -31,8 +31,8 @@ HTTP v1 is `/v1/verifications`. Patch releases in the 0.2 line may make
 backward-compatible fixes. A closed request key, state, identity, cursor, or
 Evidence schema break requires a new minor or major API/package line.
 
-The PostgreSQL schema head is `0002_materialization`. Run migrations before API or
-Worker rollout:
+The PostgreSQL schema head is `0003_builder_v1_binding`. Run migrations before
+API or Worker rollout:
 
 ```text
 reef-verification migrate
@@ -41,7 +41,7 @@ reef-verification worker
 ```
 
 The migration set digest and immutable image manifest digests are published in
-the `control-plane-v0.3.0` GitHub Release record. Deploy images by manifest
+the `control-plane-v0.4.0` GitHub Release record. Deploy images by manifest
 digest, never by a mutable tag.
 
 ## Public protocol
@@ -99,10 +99,12 @@ The deployment-neutral external materialization Port is published from
 only the full identity, run, and attempt plus opaque refs. Deployment-owned
 adapters resolve those refs against trusted ArtifactStore/S3 configuration;
 callers cannot provide URLs, S3 locations, commands, credentials, or arbitrary
-secret refs. Reef verifies the Builder-owned
-`octopus.builder.source-bundle/v1` candidate digest and separately records the
-canonical `octopus.reef.materialization-descriptor/v1` digest. The two digests
-are never interchangeable.
+secret refs. `octopus.builder.source-bundle/v1` means only Builder's exact
+`{schemaVersion,organisationRef,projectRef,bundleRef,digest,inventory}` wire
+descriptor. Reef preserves its authoritative digest, then separately records
+`octopus.reef.builder-source-bundle-binding/v1` and
+`octopus.reef.materialization-descriptor/v2` digests. The three identities are
+never interchangeable.
 
 ## Result and Evidence semantics
 
@@ -138,6 +140,9 @@ REEF_VERIFICATION_OBJECT_STORE
 REEF_VERIFICATION_S3_BUCKET
 REEF_VERIFICATION_S3_PREFIX
 REEF_VERIFICATION_S3_KMS_KEY_ID
+REEF_VERIFICATION_BUILDER_SOURCE_S3_BUCKET
+REEF_VERIFICATION_BUILDER_SOURCE_S3_PREFIX
+REEF_VERIFICATION_BUILDER_SOURCE_S3_EXPECTED_BUCKET_OWNER
 REEF_VERIFICATION_SECRET_RESOLVER
 REEF_VERIFICATION_SANDBOX_ADAPTER
 REEF_VERIFICATION_ECS_CLUSTER
@@ -157,8 +162,8 @@ See [DETERMINISTIC-VERIFICATION-AWS.md](./DETERMINISTIC-VERIFICATION-AWS.md)
 for the minimal remote deployment and least-privilege boundary.
 
 See
-[DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md](./DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md)
-for the mandatory exact-version cutover from 0.2.2.
+[DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md](./DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md)
+for the mandatory exact-version cutover from 0.3.0.
 
 ## Builder boundary
 

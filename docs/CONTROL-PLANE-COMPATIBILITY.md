@@ -2,7 +2,7 @@
 
 ## Published contract
 
-`@octopus-reef/control-plane` 0.3.0 is the current compatible release. It
+`@octopus-reef/control-plane` 0.4.0 is the current compatible release. It
 publishes two deliberately separate product contracts.
 
 The Agent Execution contract remains HTTP `/v1/runs` with AgentRun
@@ -27,7 +27,7 @@ overwritten by the release workflow.
 
 The Verification API, Worker, and remote sandbox digests, migration-set digest,
 trusted profile ref/version/digest, npm integrity, and known-unverified list are
-recorded in the `control-plane-v0.3.0` Release. Its full deployment contract is
+recorded in the `control-plane-v0.4.0` Release. Its full deployment contract is
 in `docs/DETERMINISTIC-VERIFICATION.md`.
 
 ## Versioning
@@ -67,12 +67,15 @@ function through a typed injection seam. This deliberately avoids a sibling
 source import or a local `file:` dependency while still using the authoritative
 checker selected by the deployment.
 
-The separate Verification runtime is 0.3.0 and requires
-`@octopus-reef/control-plane@0.3.0` plus
-`@octopus-reef/verification@0.3.0` exactly. Builder must not use a semver range,
+The separate Verification runtime is 0.4.0 and requires
+`@octopus-reef/control-plane@0.4.0` plus
+`@octopus-reef/verification@0.4.0` exactly. Builder must not use a semver range,
 workspace fallback, copied implementation, or legacy materialization fallback.
-Its ordered 0.2.2 cutover is documented in
-`docs/DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md`.
+Version 0.4.0 corrects the 0.3 collision in which Reef reused
+`octopus.builder.source-bundle/v1` for a different shape and digest. The 0.3
+extension is incompatible and cannot be relabelled or reinterpreted. Its
+ordered cutover is documented in
+`docs/DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md`.
 
 ## Builder boundary
 

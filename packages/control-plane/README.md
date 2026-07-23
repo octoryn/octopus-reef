@@ -77,15 +77,17 @@ network isolation and minimum IAM policy.
 Compatibility and a remote deployment example are documented in
 `docs/CONTROL-PLANE-COMPATIBILITY.md`.
 
-## Deterministic Verification Runs in 0.3.0
+## Deterministic Verification Runs in 0.4.0
 
-`@octopus-reef/control-plane@0.3.0` formally exposes the separate verification
+`@octopus-reef/control-plane@0.4.0` formally exposes the separate verification
 runtime from `@octopus-reef/control-plane/verification`, with its typed client
 at `@octopus-reef/control-plane/verification/client` and production adapters at
 the corresponding `verification/*` subpaths. The package declares the exact
-compatible `@octopus-reef/verification@0.3.0` dependency. The versioned
+compatible `@octopus-reef/verification@0.4.0` dependency. The versioned
 external materialization Port is exported at
 `@octopus-reef/control-plane/verification/materialization`.
+The exact Builder v1 S3 adapter is exported at
+`@octopus-reef/control-plane/verification/adapters/builder-source-bundle-s3`.
 
 The versioned `/v1/verifications` contract uses the canonical client methods
 `createRun`, `getRun`, `streamRunEvents`, `retryRun`, and `cancelRun`. It accepts
@@ -93,9 +95,10 @@ only opaque candidate/source/profile identity and never aliases an AgentRun or
 accepts caller commands, argv, cwd, environment, or credentials. Existing
 0.1.x AgentRun clients remain on their prior endpoints and client surface.
 
-The 0.2.2→0.3.0 Verification cutover has no package range or legacy
-materialization fallback. Builder and server deployments must follow
-`docs/DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md` and pin both packages,
+The 0.3.0→0.4.0 Verification cutover corrects the colliding Builder schema and
+has no package range, duck typing, or legacy materialization fallback. Builder
+and server deployments must follow
+`docs/DETERMINISTIC-VERIFICATION-0.4-MIGRATION.md` and pin both packages,
 trusted profile, tag, and images exactly.
 
 Reef review approval is scoped to an `AgentRun`: it may resume that run, but it
