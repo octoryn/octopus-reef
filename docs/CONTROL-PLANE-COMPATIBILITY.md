@@ -2,8 +2,17 @@
 
 ## Published contract
 
-`@octopus-reef/control-plane` 0.1.3 is the current compatible patch release. It
-publishes three independent contracts:
+`@octopus-reef/control-plane` 0.2.0 is the current compatible release. It
+publishes two deliberately separate product contracts.
+
+The Agent Execution contract remains HTTP `/v1/runs` with AgentRun
+pause/resume/review semantics inherited from the 0.1 line. The Deterministic
+Verification contract is HTTP `/v1/verifications`, exported from
+`@octopus-reef/control-plane/verification`, and supports only
+create/get/stream/retry/cancel. Verification is not an AgentRun and never
+approves a Builder deliverable.
+
+The Agent Execution side publishes three deployment artifacts:
 
 - the deployment-neutral ports, state machine, worker and typed HTTP client;
 - HTTP Run API v1 at `/v1/runs` and cursor-based SSE events;
@@ -12,9 +21,14 @@ publishes three independent contracts:
   `reef-sandbox-runner`.
 
 Pin npm to an exact version in production. Pin the service image by the
-`sha256:` digests recorded in the `control-plane-v0.1.3` GitHub Release, not only
-by their human-readable `0.1.3` tags. npm versions and release image tags are never
+`sha256:` digests recorded in the matching GitHub Release, not only
+by their human-readable tags. npm versions and release image tags are never
 overwritten by the release workflow.
+
+The Verification API, Worker, and remote sandbox digests, migration-set digest,
+trusted profile ref/version/digest, npm integrity, and known-unverified list are
+recorded in the `control-plane-v0.2.0` Release. Its full deployment contract is
+in `docs/DETERMINISTIC-VERIFICATION.md`.
 
 ## Versioning
 

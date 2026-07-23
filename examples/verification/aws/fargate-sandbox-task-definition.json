@@ -1,0 +1,79 @@
+{
+  "family": "reef-verification-sandbox",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "2048",
+  "memory": "4096",
+  "ephemeralStorage": {
+    "sizeInGiB": 40
+  },
+  "executionRoleArn": "arn:aws:iam::123456789012:role/reef-verification-sandbox-execution",
+  "runtimePlatform": {
+    "operatingSystemFamily": "LINUX",
+    "cpuArchitecture": "X86_64"
+  },
+  "volumes": [{ "name": "workspace" }, { "name": "tmp" }],
+  "containerDefinitions": [
+    {
+      "name": "verification-sandbox",
+      "image": "123456789012.dkr.ecr.ap-southeast-2.amazonaws.com/reef-verification-sandbox@sha256:<remote-sandbox-manifest-digest>",
+      "essential": true,
+      "readonlyRootFilesystem": true,
+      "linuxParameters": {
+        "capabilities": {
+          "drop": ["ALL"]
+        },
+        "initProcessEnabled": true
+      },
+      "portMappings": [
+        {
+          "name": "command-bridge",
+          "containerPort": 8081,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "AWS_EC2_METADATA_DISABLED",
+          "value": "true"
+        },
+        {
+          "name": "REEF_VERIFICATION_SANDBOX_WORKSPACE",
+          "value": "/workspace"
+        },
+        {
+          "name": "PORT",
+          "value": "8081"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "REEF_VERIFICATION_SANDBOX_SHARED_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:ap-southeast-2:123456789012:secret:reef/verification/sandbox-runner"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "workspace",
+          "containerPath": "/workspace",
+          "readOnly": false
+        },
+        {
+          "sourceVolume": "tmp",
+          "containerPath": "/tmp",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-region": "ap-southeast-2",
+          "awslogs-group": "/reef/verification/sandbox",
+          "awslogs-stream-prefix": "run",
+          "mode": "non-blocking",
+          "max-buffer-size": "4m"
+        }
+      }
+    }
+  ]
+}
