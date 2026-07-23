@@ -8,7 +8,6 @@ permissions:
   contents: write
   packages: write
   id-token: write
-  attestations: write
   security-events: write
 
 concurrency:
@@ -289,7 +288,8 @@ jobs:
             docker buildx imagetools inspect --raw "${repository}@${digest}" > "${component}-manifest.json"
             jq -e '
               ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | length) == 1 and
-              ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length) == 1
+              ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length) == 1 and
+              ([.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")] | length) >= 2
             ' "${component}-manifest.json"
           done
 
@@ -332,25 +332,6 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-
-      - name: Attest API build provenance
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-name: ${{ env.API_REPOSITORY }}
-          subject-digest: ${{ steps.api.outputs.digest }}
-          push-to-registry: true
-      - name: Attest Worker build provenance
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-name: ${{ env.WORKER_REPOSITORY }}
-          subject-digest: ${{ steps.worker.outputs.digest }}
-          push-to-registry: true
-      - name: Attest Golden Stack sandbox build provenance
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-name: ${{ env.PROFILE_REPOSITORY }}
-          subject-digest: ${{ steps.profile.outputs.digest }}
-          push-to-registry: true
 
       - name: Generate the exact server-registered Golden Stack profile
         env:

@@ -87,7 +87,7 @@ for (const marker of [
   "linux/amd64,linux/arm64",
   "anchore/sbom-action",
   "aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8",
-  "attest-build-provenance",
+  "vnd.docker.reference.type",
   "verification-release-record.json",
   "REEF_TEST_DOCKER_IMAGE",
   "docker compose",

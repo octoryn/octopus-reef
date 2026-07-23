@@ -1,0 +1,328 @@
+name: deterministic-verification-release-recovery
+
+on:
+  push:
+    tags: ["control-plane-v0.2.0-recovery.1"]
+
+permissions:
+  contents: write
+  packages: read
+  id-token: write
+
+concurrency:
+  group: deterministic-verification-0.2.0
+  cancel-in-progress: false
+
+env:
+  VERSION: 0.2.0
+  RELEASE_TAG: control-plane-v0.2.0
+  RELEASE_COMMIT: 0f48f1eba430db0919e94736639d329db7774bb8
+  INITIAL_RUN_ID: "29973863378"
+  API_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-api
+  API_DIGEST: sha256:5c92606b97fda21b3e9070a1e669a2f50f0a9685c174c74c6a5670f4674b82ac
+  WORKER_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-worker
+  WORKER_DIGEST: sha256:e40c3c53ee9ed73ac5671b1d74008cadf9dcbbb3174ecf7aede1e3488307e388
+  PROFILE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-golden-stack
+  PROFILE_DIGEST: sha256:5f7ba00a8b4757a96124fe3aa2ba8f7b565a67ee9fec13803cce526225103d29
+
+jobs:
+  preflight:
+    name: verify existing immutable recovery inputs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: control-plane-v0.2.0
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.17.1"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prove immutable release and recovery identities
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "control-plane-v${VERSION}-recovery.1"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+          test "$(node -p 'require("./packages/control-plane/package.json").version')" = "$VERSION"
+          test "$(node -p 'require("./packages/verification/package.json").version')" = "$VERSION"
+          test "$(node -p 'require("./packages/control-plane/package.json").dependencies["@octopus-reef/verification"]')" = "$VERSION"
+          ! npm view "@octopus-reef/control-plane@${VERSION}" version >/dev/null 2>&1
+          ! npm view "@octopus-reef/verification@${VERSION}" version >/dev/null 2>&1
+          ! gh release view "$RELEASE_TAG" >/dev/null 2>&1
+
+      - name: Verify exact existing manifests, platforms and OCI provenance
+        run: |
+          set -euo pipefail
+          verify_image() {
+            component="$1"
+            repository="$2"
+            digest="$3"
+            docker buildx imagetools inspect --raw "${repository}:${VERSION}" > "${component}-tag-manifest.json"
+            test "sha256:$(sha256sum "${component}-tag-manifest.json" | awk '{print $1}')" = "$digest"
+            docker buildx imagetools inspect --raw "${repository}@${digest}" > "${component}-manifest.json"
+            cmp "${component}-tag-manifest.json" "${component}-manifest.json"
+            jq -e '
+              ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | length) == 1 and
+              ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length) == 1 and
+              ([.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")] | length) >= 2
+            ' "${component}-manifest.json"
+          }
+          verify_image api "$API_REPOSITORY" "$API_DIGEST"
+          verify_image worker "$WORKER_REPOSITORY" "$WORKER_DIGEST"
+          verify_image profile "$PROFILE_REPOSITORY" "$PROFILE_DIGEST"
+
+      - name: Install locked release tree and verify package payloads
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm rebuild better-sqlite3
+          node scripts/verification-prepublish-gate.mjs | tee verification-package-gate.json
+          jq -e '.cleanInstall == true' verification-package-gate.json
+          npm audit --audit-level=high
+          npm sbom --workspace @octopus-reef/verification --sbom-format cyclonedx > verification-package.cdx.json
+          npm sbom --workspace @octopus-reef/control-plane --sbom-format cyclonedx > control-plane-package.cdx.json
+          node scripts/write-verification-golden-profile.mjs "$PROFILE_DIGEST" golden-profile.json
+          jq -e --arg digest "$PROFILE_DIGEST" '
+            .ref == "verification-profile:golden-next-fastapi-postgres" and
+            .version == "1.0.0" and
+            .sandboxImageDigest == $digest and
+            (.checks | length == 8) and
+            (.checks | all(.[]; .required == true and .tool.imageDigest == $digest))
+          ' golden-profile.json
+          cp release/verification-0.2.0/candidate-report.json candidate-report.json
+
+      - name: Generate API registry SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.API_REPOSITORY }}@${{ env.API_DIGEST }}
+          format: cyclonedx-json
+          output-file: api-image.cdx.json
+      - name: Generate Worker registry SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.WORKER_REPOSITORY }}@${{ env.WORKER_DIGEST }}
+          format: cyclonedx-json
+          output-file: worker-image.cdx.json
+      - name: Generate Golden Stack registry SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.PROFILE_REPOSITORY }}@${{ env.PROFILE_DIGEST }}
+          format: cyclonedx-json
+          output-file: profile-image.cdx.json
+
+      - name: Scan existing content-addressed API image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.API_REPOSITORY }}@${{ env.API_DIGEST }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Scan existing content-addressed Worker image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.WORKER_REPOSITORY }}@${{ env.WORKER_DIGEST }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Scan existing content-addressed Golden Stack image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ env.PROFILE_REPOSITORY }}@${{ env.PROFILE_DIGEST }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Bind recovery evidence to the exact digests
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg releaseTag "$RELEASE_TAG" \
+            --arg releaseCommit "$RELEASE_COMMIT" \
+            --arg recoveryTag "$GITHUB_REF_NAME" \
+            --arg recoveryCommit "$GITHUB_SHA" \
+            --arg initialRunId "$INITIAL_RUN_ID" \
+            --arg recoveryRunId "$GITHUB_RUN_ID" \
+            --arg apiDigest "$API_DIGEST" \
+            --arg workerDigest "$WORKER_DIGEST" \
+            --arg profileDigest "$PROFILE_DIGEST" \
+            '{
+              schemaVersion: "reef.verification-publication-recovery.v1",
+              releaseTag: $releaseTag,
+              releaseCommit: $releaseCommit,
+              recoveryTag: $recoveryTag,
+              recoveryCommit: $recoveryCommit,
+              initialRunId: $initialRunId,
+              recoveryRunId: $recoveryRunId,
+              reason: "GitHub repository attestation persistence is unavailable on the private organization plan",
+              provenance: "BuildKit SLSA v1 OCI attestations embedded in each digest-bound multi-architecture manifest",
+              apiDigest: $apiDigest,
+              workerDigest: $workerDigest,
+              profileDigest: $profileDigest,
+              npmPublishedBeforeRecovery: false
+            }' > publication-recovery.json
+          sha256sum \
+            api-manifest.json worker-manifest.json profile-manifest.json \
+            api-image.cdx.json worker-image.cdx.json profile-image.cdx.json \
+            verification-package.cdx.json control-plane-package.cdx.json \
+            verification-package-gate.json golden-profile.json \
+            candidate-report.json publication-recovery.json \
+            > recovery-preflight-checks.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deterministic-verification-recovery-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            api-manifest.json
+            worker-manifest.json
+            profile-manifest.json
+            api-image.cdx.json
+            worker-image.cdx.json
+            profile-image.cdx.json
+            verification-package.cdx.json
+            control-plane-package.cdx.json
+            verification-package-gate.json
+            golden-profile.json
+            candidate-report.json
+            publication-recovery.json
+            recovery-preflight-checks.sha256
+
+  publish:
+    name: complete the immutable release bundle
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment: deterministic-verification-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: control-plane-v0.2.0
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.17.1"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: deterministic-verification-recovery-${{ github.sha }}
+          path: release-assets
+      - run: npm ci --ignore-scripts
+
+      - name: Reverify recovery evidence after environment approval
+        run: (cd release-assets && sha256sum --check recovery-preflight-checks.sha256)
+
+      - name: Publish exact compatible npm packages with provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          ! npm view "@octopus-reef/verification@${VERSION}" version >/dev/null 2>&1
+          ! npm view "@octopus-reef/control-plane@${VERSION}" version >/dev/null 2>&1
+          npm publish --provenance --access public --workspace @octopus-reef/verification
+          npm publish --provenance --access public --workspace @octopus-reef/control-plane
+
+      - name: Verify public npm identities
+        run: |
+          set -euo pipefail
+          test "$(npm view "@octopus-reef/verification@${VERSION}" version)" = "$VERSION"
+          test "$(npm view "@octopus-reef/control-plane@${VERSION}" version)" = "$VERSION"
+          test "$(npm view "@octopus-reef/control-plane@${VERSION}" dependencies.@octopus-reef/verification)" = "$VERSION"
+          npm view "@octopus-reef/verification@${VERSION}" --json > verification-registry.json
+          npm view "@octopus-reef/control-plane@${VERSION}" --json > control-plane-registry.json
+
+      - name: Create the digest-bound recovered release record
+        run: |
+          set -euo pipefail
+          migration_digest="sha256:$(sha256sum packages/verification/migrations/0001_verification.sql | awk '{print $1}')"
+          jq -n \
+            --arg gitTag "$RELEASE_TAG" \
+            --arg gitCommit "$RELEASE_COMMIT" \
+            --arg apiRepository "$API_REPOSITORY" \
+            --arg apiDigest "$API_DIGEST" \
+            --arg workerRepository "$WORKER_REPOSITORY" \
+            --arg workerDigest "$WORKER_DIGEST" \
+            --arg profileRepository "$PROFILE_REPOSITORY" \
+            --arg profileImageDigest "$PROFILE_DIGEST" \
+            --arg migrationSetDigest "$migration_digest" \
+            --arg recoveryRunId "$GITHUB_RUN_ID" \
+            --slurpfile profile release-assets/golden-profile.json \
+            --slurpfile candidate release-assets/candidate-report.json \
+            --slurpfile recovery release-assets/publication-recovery.json \
+            '{
+              schemaVersion: "reef.verification-release.v1",
+              package: {name: "@octopus-reef/control-plane", version: "0.2.0"},
+              internalPackage: {name: "@octopus-reef/verification", version: "0.2.0"},
+              gitTag: $gitTag,
+              gitCommit: $gitCommit,
+              apiImage: {repository: $apiRepository, manifestDigest: $apiDigest},
+              workerImage: {repository: $workerRepository, manifestDigest: $workerDigest},
+              profileImage: {repository: $profileRepository, manifestDigest: $profileImageDigest},
+              schemaHead: "0001_verification",
+              migrationSetDigest: $migrationSetDigest,
+              profile: $profile[0],
+              typedClientContract: "/v1/verifications",
+              evidenceContract: "octopus-evidence@0.2.0/store-untrusting",
+              provenance: {
+                format: "SLSA v1 OCI attestations",
+                storage: "digest-bound BuildKit attestation manifests in GHCR",
+                githubRepositoryAttestation: "unavailable on the private organization plan"
+              },
+              publicationRecovery: ($recovery[0] + {completedRunId: $recoveryRunId}),
+              status: "candidate-awaiting-independent-audit",
+              candidateReport: $candidate[0],
+              independentAudit: null
+            }' > verification-release-record.json
+          sha256sum verification-release-record.json > verification-release-record.sha256
+
+      - name: Create immutable draft Release awaiting independent audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          checks_digest="sha256:$(sha256sum verification-release-record.json | awk '{print $1}')"
+          cat > release-notes.md <<EOF
+          @octopus-reef/control-plane@${VERSION} deterministic Verification Run candidate.
+
+          API image: ${API_REPOSITORY}@${API_DIGEST}
+          Worker image: ${WORKER_REPOSITORY}@${WORKER_DIGEST}
+          Golden Stack profile image: ${PROFILE_REPOSITORY}@${PROFILE_DIGEST}
+          Release checks digest: ${checks_digest}
+
+          Each image carries digest-bound BuildKit SLSA v1 OCI provenance and SBOM
+          attestations. GitHub repository attestation persistence is unavailable on
+          the private organization plan; publication recovery evidence is attached.
+          This Release remains draft until an independent registry/tag/digest audit.
+          EOF
+          gh release create "$RELEASE_TAG" \
+            --verify-tag \
+            --draft \
+            --title "@octopus-reef/control-plane ${VERSION} deterministic verification" \
+            --notes-file release-notes.md \
+            verification-release-record.json \
+            verification-release-record.sha256 \
+            verification-registry.json control-plane-registry.json \
+            release-assets/golden-profile.json \
+            release-assets/api-manifest.json \
+            release-assets/worker-manifest.json \
+            release-assets/profile-manifest.json \
+            release-assets/api-image.cdx.json \
+            release-assets/worker-image.cdx.json \
+            release-assets/profile-image.cdx.json \
+            release-assets/verification-package.cdx.json \
+            release-assets/control-plane-package.cdx.json \
+            release-assets/verification-package-gate.json \
+            release-assets/recovery-preflight-checks.sha256 \
+            release-assets/candidate-report.json \
+            release-assets/publication-recovery.json
