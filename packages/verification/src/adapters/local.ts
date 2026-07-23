@@ -136,15 +136,14 @@ export class LocalVerificationEvidenceStore implements VerificationEvidenceStore
   get(
     tenant: VerificationTenant,
     ref: string,
-  ): Promise<{ evidence: Evidence; digest: string } | undefined> {
+  ): Promise<{ ref: string; evidence: Evidence; digest: string } | undefined> {
     const path = join(this.#root, tenantHash(tenant), "evidence", hash(ref));
     if (!existsSync(path)) return Promise.resolve(undefined);
-    return Promise.resolve(
-      JSON.parse(readFileSync(path, "utf8")) as {
-        evidence: Evidence;
-        digest: string;
-      },
-    );
+    const stored = JSON.parse(readFileSync(path, "utf8")) as {
+      evidence: Evidence;
+      digest: string;
+    };
+    return Promise.resolve({ ref, ...stored });
   }
 }
 

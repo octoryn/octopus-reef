@@ -20,8 +20,9 @@ import {
   assertTenantBinding,
   parseVerificationRunRequest,
 } from "./validation.js";
-import { resolveEvidenceEnvelope } from "./evidence.js";
+import { parseEvidenceReference, resolveEvidenceEnvelope } from "./evidence.js";
 import { parseVerificationDecimalCursor } from "./cursor.js";
+import { verificationRunIdentity } from "./identity.js";
 
 export interface VerificationServiceOptions {
   readonly store: VerificationStore;
@@ -75,7 +76,7 @@ export class VerificationService {
           run,
           {
             type: "verification.queued",
-            data: { identity: identity(run) },
+            data: { identity: verificationRunIdentity(run) },
             createdAt: now,
             idempotencyKey: `create:${run.idempotencyKey}`,
           },
@@ -134,7 +135,10 @@ export class VerificationService {
       },
       {
         type: "verification.retried",
-        data: { attempt: current.attempt + 1, identity: identity(current) },
+        data: {
+          attempt: current.attempt + 1,
+          identity: verificationRunIdentity(current),
+        },
         createdAt: now,
         idempotencyKey: `retry:${command.idempotencyKey}`,
       },
@@ -170,7 +174,7 @@ export class VerificationService {
       { state: "cancelled", finishedAt: now, clearLease: true },
       {
         type: "verification.cancelled",
-        data: { identity: identity(current) },
+        data: { identity: verificationRunIdentity(current) },
         createdAt: now,
         idempotencyKey: `cancel:${command.idempotencyKey}`,
       },
@@ -195,9 +199,23 @@ export class VerificationService {
     tenant: VerificationTenant,
     ref: string,
   ): Promise<VerificationEvidenceEnvelope | undefined> {
-    if (!ref.startsWith("evidence:"))
-      throw new Error("invalid opaque Evidence ref");
-    return resolveEvidenceEnvelope(this.#evidence, tenant, ref);
+    try {
+      return resolveEvidenceEnvelope(
+        this.#evidence,
+        tenant,
+        parseEvidenceReference(ref),
+      );
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes("Evidence ref is not canonical")
+      ) {
+        throw new InvalidVerificationRequestError(error.message, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
   }
 }
 
@@ -214,18 +232,4 @@ function strictCommand(value: VerificationIdempotentCommand): void {
       "verification command must contain only idempotencyKey",
     );
   }
-}
-
-function identity(run: VerificationRun): Record<string, string> {
-  return {
-    organisationRef: run.organisationRef,
-    projectRef: run.projectRef,
-    candidateRef: run.candidateRef,
-    candidateDigest: run.candidateDigest,
-    sourceBundleRef: run.sourceBundleRef,
-    sourceBundleDigest: run.sourceBundleDigest,
-    verificationProfileRef: run.verificationProfileRef,
-    verificationProfileVersion: run.verificationProfileVersion,
-    verificationProfileDigest: run.verificationProfileDigest,
-  };
 }

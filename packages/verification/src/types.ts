@@ -33,6 +33,10 @@ export interface VerificationRunRequest extends VerificationIdentity {
   readonly idempotencyKey: string;
 }
 
+export interface VerificationRunIdentity extends VerificationIdentity {
+  readonly runRef: string;
+}
+
 export interface VerificationArtifact {
   readonly ref: string;
   readonly digest: string;
@@ -48,6 +52,7 @@ export interface VerificationToolIdentity {
 }
 
 export interface VerificationCheckResult {
+  readonly identity: VerificationRunIdentity;
   readonly checkRef: string;
   readonly required: boolean;
   readonly outcome: VerificationCheckOutcome;
@@ -63,6 +68,7 @@ export interface VerificationCheckResult {
 }
 
 export interface VerificationVerdict {
+  readonly identity: VerificationRunIdentity;
   readonly outcome: VerificationVerdictOutcome;
   readonly requiredChecks: readonly string[];
   readonly passedRequiredChecks: readonly string[];
@@ -104,6 +110,7 @@ export interface VerificationRun extends VerificationIdentity {
 }
 
 export interface VerificationEvent extends VerificationTenant {
+  readonly identity: VerificationRunIdentity;
   readonly id: string;
   readonly runRef: string;
   readonly cursor: VerificationDecimalCursor;
@@ -188,6 +195,8 @@ export interface SourceBundleDescriptor extends VerificationTenant {
 }
 
 export interface VerificationEvidenceEnvelope extends VerificationTenant {
+  readonly identity: VerificationRunIdentity;
+  readonly checkRef?: string;
   readonly ref: string;
   readonly digest: string;
   readonly evidence: Evidence;

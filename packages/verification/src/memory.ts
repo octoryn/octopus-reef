@@ -4,6 +4,10 @@ import {
   compareVerificationDecimalCursors,
   parseVerificationDecimalCursor,
 } from "./cursor.js";
+import {
+  bindVerificationEventData,
+  verificationRunIdentity,
+} from "./identity.js";
 import type {
   SourceBundleStore,
   VerificationArtifactStore,
@@ -340,11 +344,14 @@ export class MemoryVerificationStore implements VerificationStore {
     if (existing !== undefined) return existing;
     const event: VerificationEvent = {
       ...tenant,
+      identity: verificationRunIdentity(run),
       id: randomUUID(),
       runRef: run.runRef,
       cursor: parseVerificationDecimalCursor((++this.#cursor).toString(10)),
       type: input.type,
-      data: clone(input.data),
+      data: clone(
+        bindVerificationEventData(input.data, verificationRunIdentity(run)),
+      ),
       createdAt: input.createdAt,
     };
     const key = runKey(tenant, run.runRef);
@@ -529,11 +536,11 @@ export class MemoryEvidenceStore implements VerificationEvidenceStore {
   get(
     tenant: VerificationTenant,
     ref: string,
-  ): Promise<{ evidence: Evidence; digest: string } | undefined> {
+  ): Promise<{ ref: string; evidence: Evidence; digest: string } | undefined> {
     const stored = this.#values.get(ref);
     return Promise.resolve(
       stored !== undefined && tenantKey(stored.tenant) === tenantKey(tenant)
-        ? { evidence: clone(stored.evidence), digest: stored.digest }
+        ? { ref, evidence: clone(stored.evidence), digest: stored.digest }
         : undefined,
     );
   }

@@ -183,7 +183,12 @@ export interface VerificationEvidenceStore {
     tenant: VerificationTenant,
     ref: string,
   ): Promise<
-    { readonly evidence: Evidence; readonly digest: string } | undefined
+    | {
+        readonly ref: string;
+        readonly evidence: Evidence;
+        readonly digest: string;
+      }
+    | undefined
   >;
 }
 

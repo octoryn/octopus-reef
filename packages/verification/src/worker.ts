@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { clearInterval, setInterval as startInterval } from "node:timers";
 import type {
   SourceBundleMaterializer,
@@ -19,7 +20,16 @@ import type {
   VerificationTenant,
   VerificationVerdict,
 } from "./types.js";
-import { createCheckEvidence, createVerdictEvidence } from "./evidence.js";
+import {
+  createCheckEvidence,
+  createVerdictEvidence,
+  parseArtifactReference,
+  putVerifiedEvidence,
+} from "./evidence.js";
+import {
+  bindVerificationEventData,
+  verificationRunIdentity,
+} from "./identity.js";
 
 export interface DeterministicVerificationWorkerOptions {
   readonly workerId: string;
@@ -117,7 +127,7 @@ export class DeterministicVerificationWorker {
       run = await this.#transition(tenant, run, fence, "provisioning");
       const profile = await this.#options.profiles.resolve(run);
       const spec = {
-        ...identity(run),
+        ...verificationRunIdentity(run),
         runRef: run.runRef,
         attempt: run.attempt,
         imageDigest: profile.sandboxImageDigest,
@@ -158,7 +168,7 @@ export class DeterministicVerificationWorker {
           abort.signal,
         );
       }
-      const verdictBase = requiredVerdict(profile, run.checks);
+      const verdictBase = requiredVerdict(run, profile, run.checks);
       await this.#assertFence(tenant, run.runRef, fence);
       const verdictEvidence = createVerdictEvidence(
         { ...run, version: run.version + 1 },
@@ -170,7 +180,8 @@ export class DeterministicVerificationWorker {
         })),
         this.#now(),
       );
-      const storedVerdict = await this.#options.evidence.put(
+      const storedVerdict = await putVerifiedEvidence(
+        this.#options.evidence,
         tenant,
         verdictEvidence,
       );
@@ -192,7 +203,7 @@ export class DeterministicVerificationWorker {
           clearLease: true,
         },
         "verification.completed",
-        { identity: identity(run), verdict },
+        { identity: verificationRunIdentity(run), verdict },
       );
       await this.#options.queue.ack(queueLease);
       return true;
@@ -257,7 +268,10 @@ export class DeterministicVerificationWorker {
           clearLease: true,
         },
         "verification.failed",
-        { code: safeFailureCode(error), identity: identity(run) },
+        {
+          code: safeFailureCode(error),
+          identity: verificationRunIdentity(run),
+        },
       );
       await this.#options.queue.ack(queueLease);
       return true;
@@ -352,6 +366,7 @@ export class DeterministicVerificationWorker {
     await this.#assertFence(tenant, run.runRef, fence);
     const finishedAt = this.#now();
     const resultBase = {
+      identity: verificationRunIdentity(run),
       checkRef: check.checkRef,
       required: check.required,
       outcome:
@@ -377,7 +392,11 @@ export class DeterministicVerificationWorker {
       profile,
       resultBase,
     );
-    const stored = await this.#options.evidence.put(tenant, evidence);
+    const stored = await putVerifiedEvidence(
+      this.#options.evidence,
+      tenant,
+      evidence,
+    );
     await this.#assertFence(tenant, run.runRef, fence);
     const result: VerificationCheckResult = {
       ...resultBase,
@@ -394,7 +413,7 @@ export class DeterministicVerificationWorker {
       {
         type: "verification.check_completed",
         data: {
-          identity: identity(run),
+          identity: verificationRunIdentity(run),
           profile: {
             ref: profile.ref,
             version: profile.version,
@@ -429,7 +448,7 @@ export class DeterministicVerificationWorker {
           : {}),
       },
       `verification.${state}`,
-      { identity: identity(run) },
+      { identity: verificationRunIdentity(run) },
     );
   }
 
@@ -441,7 +460,10 @@ export class DeterministicVerificationWorker {
     type: string,
     data: unknown,
   ): Promise<VerificationRun> {
-    const eventData = eventDataWithIdentity(run, data);
+    const eventData = bindVerificationEventData(
+      data,
+      verificationRunIdentity(run),
+    );
     const next = await this.#options.store.mutateWithEvent(
       tenant,
       run.runRef,
@@ -479,29 +501,29 @@ export class DeterministicVerificationWorker {
     content: Uint8Array,
   ): Promise<VerificationArtifact> {
     await this.#assertFence(tenant, runRef, fence);
-    return this.#options.artifacts.put(
+    const artifact = await this.#options.artifacts.put(
       tenant,
       runRef,
       kind,
       mediaType,
       content,
     );
+    parseArtifactReference(artifact.ref);
+    const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+    if (
+      artifact.digest !== digest ||
+      artifact.kind !== kind ||
+      artifact.mediaType !== mediaType ||
+      artifact.size !== content.byteLength
+    ) {
+      throw new Error("verification artifact store identity mismatch");
+    }
+    return artifact;
   }
-}
-
-function eventDataWithIdentity(
-  run: VerificationRun,
-  data: unknown,
-): Record<string, unknown> {
-  if (data !== null && typeof data === "object" && !Array.isArray(data)) {
-    const record = data as Record<string, unknown>;
-    if (record["identity"] !== undefined) return record;
-    return { identity: identity(run), ...record };
-  }
-  return { identity: identity(run), detail: data };
 }
 
 function requiredVerdict(
+  run: VerificationRun,
   profile: TrustedVerificationProfile,
   checks: readonly VerificationCheckResult[],
 ): Omit<VerificationVerdict, "evidenceRef" | "evidenceDigest"> {
@@ -516,34 +538,11 @@ function requiredVerdict(
     (ref) => !passedRequiredChecks.includes(ref),
   );
   return {
+    identity: verificationRunIdentity(run),
     outcome: failedRequiredChecks.length === 0 ? "passed" : "failed",
     requiredChecks,
     passedRequiredChecks,
     failedRequiredChecks,
-  };
-}
-
-function identity(run: VerificationRun): {
-  organisationRef: string;
-  projectRef: string;
-  candidateRef: string;
-  candidateDigest: string;
-  sourceBundleRef: string;
-  sourceBundleDigest: string;
-  verificationProfileRef: string;
-  verificationProfileVersion: string;
-  verificationProfileDigest: string;
-} {
-  return {
-    organisationRef: run.organisationRef,
-    projectRef: run.projectRef,
-    candidateRef: run.candidateRef,
-    candidateDigest: run.candidateDigest,
-    sourceBundleRef: run.sourceBundleRef,
-    sourceBundleDigest: run.sourceBundleDigest,
-    verificationProfileRef: run.verificationProfileRef,
-    verificationProfileVersion: run.verificationProfileVersion,
-    verificationProfileDigest: run.verificationProfileDigest,
   };
 }
 

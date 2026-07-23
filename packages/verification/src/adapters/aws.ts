@@ -243,14 +243,20 @@ export class AwsS3VerificationStore implements SourceBundleStore {
     tenant: VerificationTenant,
     ref: string,
   ): Promise<
-    { readonly evidence: Evidence; readonly digest: string } | undefined
+    | {
+        readonly ref: string;
+        readonly evidence: Evidence;
+        readonly digest: string;
+      }
+    | undefined
   > {
     try {
       const bytes = await this.#get(this.#key(tenant, "evidence", hash(ref)));
-      return JSON.parse(Buffer.from(bytes).toString("utf8")) as {
+      const stored = JSON.parse(Buffer.from(bytes).toString("utf8")) as {
         evidence: Evidence;
         digest: string;
       };
+      return { ref, ...stored };
     } catch (error) {
       if (awsNotFound(error)) return undefined;
       throw error;
@@ -354,7 +360,7 @@ export class AwsS3VerificationEvidenceStore implements VerificationEvidenceStore
   get(
     tenant: VerificationTenant,
     ref: string,
-  ): Promise<{ evidence: Evidence; digest: string } | undefined> {
+  ): Promise<{ ref: string; evidence: Evidence; digest: string } | undefined> {
     return this.#store.getEvidence(tenant, ref);
   }
 }

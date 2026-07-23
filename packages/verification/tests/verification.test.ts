@@ -349,7 +349,11 @@ test("Evidence resolution distrusts stored digest and integrity metadata", async
         ref: `evidence:${evidence.id}`,
         digest: sha(Buffer.from("wrong")),
       }),
-      get: async () => ({ evidence, digest: sha(Buffer.from("wrong")) }),
+      get: async () => ({
+        ref: `evidence:${evidence.id}`,
+        evidence,
+        digest: sha(Buffer.from("wrong")),
+      }),
     },
   });
   await assert.rejects(

@@ -23,7 +23,18 @@ import {
   parseVerificationDecimalCursor,
   type VerificationDecimalCursor,
 } from "../cursor.js";
-import { parseVerificationRunResponse } from "../client-schema.js";
+import {
+  parseVerificationCheckResultResponse,
+  parseVerificationEventResponse,
+  parseVerificationRunResponse,
+} from "../client-schema.js";
+import {
+  VERIFICATION_RUN_IDENTITY_KEYS,
+  bindVerificationEventData,
+  parseVerificationRunIdentity,
+  verificationRunIdentity,
+} from "../identity.js";
+import type { VerificationRunIdentity } from "../types.js";
 
 export interface VerificationPgResult<Row> {
   readonly rows: Row[];
@@ -70,6 +81,13 @@ interface EventRow {
   readonly organisation_ref: string;
   readonly project_ref: string;
   readonly run_ref: string;
+  readonly candidate_ref: string;
+  readonly candidate_digest: string;
+  readonly source_bundle_ref: string;
+  readonly source_bundle_digest: string;
+  readonly verification_profile_ref: string;
+  readonly verification_profile_version: string;
+  readonly verification_profile_digest: string;
   readonly type: string;
   readonly data: unknown;
   readonly created_at: unknown;
@@ -80,6 +98,13 @@ interface CheckpointRow {
   readonly organisation_ref: string;
   readonly project_ref: string;
   readonly run_ref: string;
+  readonly candidate_ref: string;
+  readonly candidate_digest: string;
+  readonly source_bundle_ref: string;
+  readonly source_bundle_digest: string;
+  readonly verification_profile_ref: string;
+  readonly verification_profile_version: string;
+  readonly verification_profile_digest: string;
   readonly sequence: number;
   readonly attempt: number;
   readonly check_ref: string;
@@ -422,10 +447,20 @@ export class PostgresVerificationStore
     runRef: string,
   ): Promise<readonly VerificationCheckpoint[]> {
     const result = await this.#pool.query<CheckpointRow>(
-      `SELECT id, organisation_ref, project_ref, run_ref, sequence, attempt,
-              check_ref, result, fencing_token, created_at
-       FROM verification_checkpoints
-       WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3 ORDER BY sequence`,
+      `SELECT c.id, c.organisation_ref, c.project_ref, c.run_ref,
+              r.candidate_ref, r.candidate_digest,
+              r.source_bundle_ref, r.source_bundle_digest,
+              r.verification_profile_ref, r.verification_profile_version,
+              r.verification_profile_digest,
+              c.sequence, c.attempt, c.check_ref, c.result,
+              c.fencing_token, c.created_at
+       FROM verification_checkpoints c
+       JOIN verification_runs r
+         ON r.organisation_ref=c.organisation_ref
+        AND r.project_ref=c.project_ref
+        AND r.run_ref=c.run_ref
+       WHERE c.organisation_ref=$1 AND c.project_ref=$2 AND c.run_ref=$3
+       ORDER BY c.sequence`,
       [tenant.organisationRef, tenant.projectRef, runRef],
     );
     return result.rows.map(checkpointFromRow);
@@ -439,10 +474,20 @@ export class PostgresVerificationStore
   ): Promise<readonly VerificationEvent[]> {
     const cursor = parseVerificationDecimalCursor(afterCursor);
     const result = await this.#pool.query<EventRow>(
-      `SELECT cursor, id, organisation_ref, project_ref, run_ref, type, data, created_at
-       FROM verification_events
-       WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3 AND cursor > $4
-       ORDER BY cursor LIMIT $5`,
+      `SELECT e.cursor, e.id, e.organisation_ref, e.project_ref, e.run_ref,
+              r.candidate_ref, r.candidate_digest,
+              r.source_bundle_ref, r.source_bundle_digest,
+              r.verification_profile_ref, r.verification_profile_version,
+              r.verification_profile_digest,
+              e.type, e.data, e.created_at
+       FROM verification_events e
+       JOIN verification_runs r
+         ON r.organisation_ref=e.organisation_ref
+        AND r.project_ref=e.project_ref
+        AND r.run_ref=e.run_ref
+       WHERE e.organisation_ref=$1 AND e.project_ref=$2
+         AND e.run_ref=$3 AND e.cursor > $4
+       ORDER BY e.cursor LIMIT $5`,
       [
         tenant.organisationRef,
         tenant.projectRef,
@@ -667,7 +712,9 @@ export class PostgresVerificationStore
         run.runRef,
         event.idempotencyKey,
         event.type,
-        json(event.data),
+        json(
+          bindVerificationEventData(event.data, verificationRunIdentity(run)),
+        ),
         event.createdAt,
       ],
     );
@@ -746,7 +793,30 @@ export class PostgresVerificationStore
 }
 
 function runFromRow(row: RunRow): VerificationRun {
-  return parseVerificationRunResponse(row.run_data);
+  if (
+    row.run_data === null ||
+    typeof row.run_data !== "object" ||
+    Array.isArray(row.run_data)
+  ) {
+    throw new Error("persisted verification run must be an object");
+  }
+  const run = row.run_data as Record<string, unknown>;
+  const identity = parseVerificationRunIdentity(
+    run,
+    "persisted verification run identity",
+  );
+  const checks = run["checks"];
+  if (!Array.isArray(checks)) {
+    throw new Error("persisted verification run checks must be an array");
+  }
+  const verdict = run["verdict"];
+  return parseVerificationRunResponse({
+    ...run,
+    checks: checks.map((check) => bindNestedIdentity(check, identity)),
+    ...(verdict === undefined
+      ? {}
+      : { verdict: bindNestedIdentity(verdict, identity) }),
+  });
 }
 
 function mutable(
@@ -834,9 +904,22 @@ function identity(run: VerificationRun): unknown {
 }
 
 function eventFromRow(row: EventRow): VerificationEvent {
-  return {
+  const identity = verificationRunIdentity({
     organisationRef: row.organisation_ref,
     projectRef: row.project_ref,
+    candidateRef: row.candidate_ref,
+    candidateDigest: row.candidate_digest,
+    sourceBundleRef: row.source_bundle_ref,
+    sourceBundleDigest: row.source_bundle_digest,
+    verificationProfileRef: row.verification_profile_ref,
+    verificationProfileVersion: row.verification_profile_version,
+    verificationProfileDigest: row.verification_profile_digest,
+    runRef: row.run_ref,
+  });
+  return parseVerificationEventResponse({
+    organisationRef: identity.organisationRef,
+    projectRef: identity.projectRef,
+    identity,
     id: row.id,
     runRef: row.run_ref,
     cursor: parseVerificationDecimalCursor(
@@ -844,12 +927,56 @@ function eventFromRow(row: EventRow): VerificationEvent {
       "persisted event cursor",
     ),
     type: row.type,
-    data: row.data,
+    data: bindPersistedEventIdentity(row.data, identity),
     createdAt: iso(row.created_at),
-  };
+  });
+}
+
+function bindPersistedEventIdentity(
+  value: unknown,
+  identity: VerificationRunIdentity,
+): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("persisted verification event data must be an object");
+  }
+  const data = value as Record<string, unknown>;
+  const rawIdentity = data["identity"];
+  if (
+    rawIdentity === null ||
+    typeof rawIdentity !== "object" ||
+    Array.isArray(rawIdentity)
+  ) {
+    throw new Error("persisted verification event identity is missing");
+  }
+  const storedIdentity = rawIdentity as Record<string, unknown>;
+  for (const key of VERIFICATION_RUN_IDENTITY_KEYS) {
+    if (
+      key !== "runRef" ||
+      Object.prototype.hasOwnProperty.call(storedIdentity, key)
+    ) {
+      if (storedIdentity[key] !== identity[key]) {
+        throw new Error(
+          `persisted verification event identity mismatch: ${key}`,
+        );
+      }
+    }
+  }
+  return { ...data, identity };
 }
 
 function checkpointFromRow(row: CheckpointRow): VerificationCheckpoint {
+  const identity = verificationRunIdentity({
+    organisationRef: row.organisation_ref,
+    projectRef: row.project_ref,
+    candidateRef: row.candidate_ref,
+    candidateDigest: row.candidate_digest,
+    sourceBundleRef: row.source_bundle_ref,
+    sourceBundleDigest: row.source_bundle_digest,
+    verificationProfileRef: row.verification_profile_ref,
+    verificationProfileVersion: row.verification_profile_version,
+    verificationProfileDigest: row.verification_profile_digest,
+    runRef: row.run_ref,
+  });
   return {
     organisationRef: row.organisation_ref,
     projectRef: row.project_ref,
@@ -858,9 +985,25 @@ function checkpointFromRow(row: CheckpointRow): VerificationCheckpoint {
     sequence: row.sequence,
     attempt: row.attempt,
     checkRef: row.check_ref,
-    result: row.result as VerificationCheckResult,
+    result: parseVerificationCheckResultResponse(
+      bindNestedIdentity(row.result, identity),
+    ),
     fencingToken: Number(row.fencing_token),
     createdAt: iso(row.created_at),
+  };
+}
+
+function bindNestedIdentity(
+  value: unknown,
+  identity: VerificationRunIdentity,
+): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("persisted verification identity-bound value is invalid");
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    ...record,
+    identity: record["identity"] ?? identity,
   };
 }
 

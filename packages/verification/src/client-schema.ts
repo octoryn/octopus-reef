@@ -9,10 +9,22 @@ import {
   type VerificationIdentity,
   type VerificationLease,
   type VerificationRun,
+  type VerificationRunIdentity,
   type VerificationToolIdentity,
   type VerificationVerdict,
 } from "./types.js";
 import { parseVerificationDecimalCursor } from "./cursor.js";
+import {
+  VERIFICATION_IDENTITY_KEYS,
+  assertVerificationRunIdentity,
+  parseVerificationRunIdentity,
+} from "./identity.js";
+import {
+  evidenceReference,
+  parseArtifactReference,
+  parseEvidenceReference,
+  verificationEvidenceBinding,
+} from "./evidence.js";
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
@@ -20,8 +32,7 @@ const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
 /** Runtime validation for data crossing the public HTTP client boundary. */
 export function parseVerificationRunResponse(value: unknown): VerificationRun {
   const run = record(value, "verification run");
-  assertIdentity(run, "verification run");
-  nonempty(run, "runRef");
+  const runIdentity = parseVerificationRunIdentity(run, "verification run");
   nonempty(run, "idempotencyKey");
   enumValue(run, "state", VERIFICATION_STATES);
   positiveInteger(run, "version");
@@ -33,12 +44,26 @@ export function parseVerificationRunResponse(value: unknown): VerificationRun {
   optionalTimestamp(run, "finishedAt");
   optionalString(run, "sandboxRef");
 
-  const checks = array(run, "checks").map(parseCheckResult);
+  const checks = array(run, "checks").map(parseVerificationCheckResultResponse);
+  for (const check of checks) {
+    assertVerificationRunIdentity(
+      check.identity,
+      runIdentity,
+      `verification check ${check.checkRef} identity`,
+    );
+  }
   unique(
     checks.map((check) => check.checkRef),
     "verification checkRef",
   );
   const verdict = optionalRecord(run, "verdict", parseVerdict);
+  if (verdict !== undefined) {
+    assertVerificationRunIdentity(
+      verdict.identity,
+      runIdentity,
+      "verification verdict identity",
+    );
+  }
   const failure = optionalRecord(run, "failure", parseFailure);
   optionalRecord(run, "lease", parseLease);
 
@@ -71,24 +96,59 @@ export function parseVerificationEventResponse(
   const event = record(value, "verification event");
   assertTenant(event, "verification event");
   nonempty(event, "id");
-  nonempty(event, "runRef");
+  const runRef = nonempty(event, "runRef");
+  const identity = parseVerificationRunIdentity(
+    event["identity"],
+    "verification event identity",
+  );
+  assertTopLevelRunIdentity(event, identity, "verification event");
+  if (runRef !== identity.runRef) {
+    throw new Error("verification event runRef identity mismatch");
+  }
   decimal(event, "cursor");
   const type = nonempty(event, "type");
   if (!type.startsWith("verification.")) {
     throw new Error("verification event type is outside the v1 namespace");
   }
   timestamp(event, "createdAt");
-  verificationEventIdentity(value as VerificationEvent);
+  const data = record(event["data"], "verification event data");
+  const dataIdentity = parseVerificationRunIdentity(
+    data["identity"],
+    "verification event data identity",
+  );
+  assertVerificationRunIdentity(
+    dataIdentity,
+    identity,
+    "verification event data identity",
+  );
+  if (type === "verification.check_completed") {
+    const result = parseVerificationCheckResultResponse(data["result"]);
+    assertVerificationRunIdentity(
+      result.identity,
+      identity,
+      "verification check event identity",
+    );
+  }
+  if (type === "verification.completed") {
+    const verdict = parseVerdict(
+      record(data["verdict"], "verification completed event verdict"),
+    );
+    assertVerificationRunIdentity(
+      verdict.identity,
+      identity,
+      "verification completed event identity",
+    );
+  }
   return value as VerificationEvent;
 }
 
 export function verificationEventIdentity(
   event: VerificationEvent,
-): VerificationIdentity {
-  const data = record(event.data, "verification event data");
-  const identity = record(data["identity"], "verification event identity");
-  assertIdentity(identity, "verification event identity");
-  return identity as unknown as VerificationIdentity;
+): VerificationRunIdentity {
+  return parseVerificationRunIdentity(
+    event.identity,
+    "verification event identity",
+  );
 }
 
 export function parseVerificationEvidenceResponse(
@@ -96,10 +156,16 @@ export function parseVerificationEvidenceResponse(
 ): VerificationEvidenceEnvelope {
   const envelope = record(value, "verification Evidence envelope");
   assertTenant(envelope, "verification Evidence envelope");
-  const ref = nonempty(envelope, "ref");
-  if (!ref.startsWith("evidence:")) {
-    throw new Error("verification Evidence ref is not opaque");
-  }
+  const identity = parseVerificationRunIdentity(
+    envelope["identity"],
+    "verification Evidence envelope identity",
+  );
+  assertTopLevelRunIdentity(
+    envelope,
+    identity,
+    "verification Evidence envelope",
+  );
+  const ref = parseEvidenceReference(envelope["ref"]);
   const envelopeDigest = digest(envelope, "digest");
   const evidence = envelope["evidence"] as Evidence;
   if (!verifyEvidence(evidence)) {
@@ -110,6 +176,22 @@ export function parseVerificationEvidenceResponse(
   const computed = `sha256:${canonicalHash(evidence as never)}`;
   if (envelopeDigest !== computed) {
     throw new Error("verification Evidence canonical digest mismatch");
+  }
+  if (ref !== evidenceReference(evidence)) {
+    throw new Error("verification Evidence response ref/id mismatch");
+  }
+  const binding = verificationEvidenceBinding(evidence);
+  assertVerificationRunIdentity(
+    binding.identity,
+    identity,
+    "verification Evidence content identity",
+  );
+  if (binding.checkRef === undefined) {
+    if (envelope["checkRef"] !== undefined) {
+      throw new Error("verification verdict Evidence cannot claim a checkRef");
+    }
+  } else if (envelope["checkRef"] !== binding.checkRef) {
+    throw new Error("verification check Evidence identity mismatch");
   }
   const verifier = record(
     envelope["verifier"],
@@ -136,8 +218,14 @@ export function assertSameIdentity(
   }
 }
 
-function parseCheckResult(value: unknown): VerificationCheckResult {
+export function parseVerificationCheckResultResponse(
+  value: unknown,
+): VerificationCheckResult {
   const result = record(value, "verification check result");
+  parseVerificationRunIdentity(
+    result["identity"],
+    "verification check result identity",
+  );
   nonempty(result, "checkRef");
   boolean(result, "required");
   enumValue(result, "outcome", ["passed", "failed", "skipped"] as const);
@@ -148,17 +236,14 @@ function parseCheckResult(value: unknown): VerificationCheckResult {
   nonempty(result, "resultCode");
   parseToolIdentity(result["tool"]);
   array(result, "artifacts").map(parseArtifact);
-  const evidenceRef = nonempty(result, "evidenceRef");
-  if (!evidenceRef.startsWith("evidence:")) {
-    throw new Error("verification check Evidence ref is not opaque");
-  }
+  parseEvidenceReference(result["evidenceRef"]);
   digest(result, "evidenceDigest");
   return value as VerificationCheckResult;
 }
 
 function parseArtifact(value: unknown): VerificationArtifact {
   const artifact = record(value, "verification artifact");
-  nonempty(artifact, "ref");
+  parseArtifactReference(artifact["ref"]);
   digest(artifact, "digest");
   nonempty(artifact, "kind");
   nonempty(artifact, "mediaType");
@@ -175,6 +260,10 @@ function parseToolIdentity(value: unknown): VerificationToolIdentity {
 }
 
 function parseVerdict(value: Record<string, unknown>): VerificationVerdict {
+  parseVerificationRunIdentity(
+    value["identity"],
+    "verification verdict identity",
+  );
   const outcome = enumValue(value, "outcome", ["passed", "failed"] as const);
   const required = stringArray(value, "requiredChecks");
   const passed = stringArray(value, "passedRequiredChecks");
@@ -198,10 +287,7 @@ function parseVerdict(value: Record<string, unknown>): VerificationVerdict {
       "verification verdict outcome contradicts required-check coverage",
     );
   }
-  const evidenceRef = nonempty(value, "evidenceRef");
-  if (!evidenceRef.startsWith("evidence:")) {
-    throw new Error("verification verdict Evidence ref is not opaque");
-  }
+  parseEvidenceReference(value["evidenceRef"]);
   digest(value, "evidenceDigest");
   return value as unknown as VerificationVerdict;
 }
@@ -220,15 +306,17 @@ function parseLease(value: Record<string, unknown>): VerificationLease {
   return value as unknown as VerificationLease;
 }
 
-function assertIdentity(value: Record<string, unknown>, name: string): void {
-  assertTenant(value, name);
-  nonempty(value, "candidateRef");
-  digest(value, "candidateDigest");
-  nonempty(value, "sourceBundleRef");
-  digest(value, "sourceBundleDigest");
-  nonempty(value, "verificationProfileRef");
-  nonempty(value, "verificationProfileVersion");
-  digest(value, "verificationProfileDigest");
+function assertTopLevelRunIdentity(
+  value: Record<string, unknown>,
+  identity: VerificationRunIdentity,
+  name: string,
+): void {
+  if (
+    value["organisationRef"] !== identity.organisationRef ||
+    value["projectRef"] !== identity.projectRef
+  ) {
+    throw new Error(`${name} top-level identity mismatch`);
+  }
 }
 
 function assertTenant(value: Record<string, unknown>, name: string): void {
@@ -351,14 +439,4 @@ function unique(values: readonly string[], name: string): void {
     throw new Error(`duplicate ${name}`);
 }
 
-const IDENTITY_KEYS = [
-  "organisationRef",
-  "projectRef",
-  "candidateRef",
-  "candidateDigest",
-  "sourceBundleRef",
-  "sourceBundleDigest",
-  "verificationProfileRef",
-  "verificationProfileVersion",
-  "verificationProfileDigest",
-] as const;
+const IDENTITY_KEYS = VERIFICATION_IDENTITY_KEYS;
