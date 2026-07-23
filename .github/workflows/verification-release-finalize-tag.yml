@@ -1,0 +1,134 @@
+name: deterministic-verification-release-finalize-tag
+
+on:
+  push:
+    tags: ["verification-finalize-v0.2.0"]
+
+permissions:
+  contents: write
+  packages: read
+
+concurrency:
+  group: deterministic-verification-0.2.0
+  cancel-in-progress: false
+
+env:
+  VERSION: 0.2.0
+  RELEASE_TAG: control-plane-v0.2.0
+  RELEASE_COMMIT: 0f48f1eba430db0919e94736639d329db7774bb8
+  AUDIT_PATH: release/verification-0.2.0/independent-audit.json
+  REMOTE_SANDBOX_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-golden-stack
+  REMOTE_SANDBOX_DIGEST: sha256:8a3b628bf1f4d2bf781d2774268dcb5cd8896826135fb884eafae382253d6a33
+
+jobs:
+  finalize:
+    name: verify independent GO and publish the complete Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.17.1"
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify exact public candidate and independent GO
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "verification-finalize-v${VERSION}"
+          test -f "$AUDIT_PATH"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
+          jq -e --arg sha "$RELEASE_COMMIT" '
+            .schemaVersion == "reef.verification-independent-audit.v1" and
+            .decision == "GO" and
+            .gitCommit == $sha and
+            (.registryPackageTests.passed == true) and
+            (.gitTagTests.passed == true) and
+            (.imageDigestTests.passed == true) and
+            (.trustedProfileTests.passed == true) and
+            (.workerPlatforms | sort == ["linux/amd64", "linux/arm64"]) and
+            (.typedClientTests.passed == true) and
+            (.tenantBindingTests.passed == true) and
+            (.evidenceStoreUntrustingTests.passed == true) and
+            (.knownUnverified | type == "array")
+          ' "$AUDIT_PATH"
+          test "$(npm view '@octopus-reef/control-plane@0.2.0' gitHead)" = "$RELEASE_COMMIT"
+          test "$(npm view '@octopus-reef/verification@0.2.0' gitHead)" = "$RELEASE_COMMIT"
+          gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft == true' | grep -Fx true
+          mkdir release-assets
+          gh release download "$RELEASE_TAG" --dir release-assets
+          (cd release-assets && sha256sum --check verification-release-record.sha256)
+          jq -e \
+            --arg releaseCommit "$RELEASE_COMMIT" \
+            --arg repository "$REMOTE_SANDBOX_REPOSITORY" \
+            --arg digest "$REMOTE_SANDBOX_DIGEST" '
+              .gitCommit == $releaseCommit and
+              .status == "candidate-awaiting-independent-audit" and
+              .npm.controlPlane.gitHead == $releaseCommit and
+              .npm.verification.gitHead == $releaseCommit and
+              .remoteSandboxImage.repository == $repository and
+              .remoteSandboxImage.manifestDigest == $digest and
+              .profile.version == "1.0.1" and
+              .profile.sandboxImageDigest == $digest and
+              .profile.digest == "sha256:31d1b974aa7ed6d9afaef3ca141e7d1edbd847da0b62fc11f1e8c5bac22a899f" and
+              .migrationSetDigest == "sha256:31ce57261255474ff4bda0bee336264347a222289058c7a3fa83104284477098"
+            ' release-assets/verification-release-record.json
+          docker manifest inspect "${REMOTE_SANDBOX_REPOSITORY}@${REMOTE_SANDBOX_DIGEST}" |
+            jq -e '
+              ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | length) == 1 and
+              ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length) == 1
+            '
+
+      - name: Bind independent audit and publish the formal Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          jq --slurpfile audit "$AUDIT_PATH" '
+            .status = "complete" |
+            .independentAudit = $audit[0]
+          ' release-assets/verification-release-record.json > verification-release-record.json
+          sha256sum verification-release-record.json > verification-release-record.sha256
+          cp "$AUDIT_PATH" independent-audit.json
+          cat > release-notes.md <<EOF
+          @octopus-reef/control-plane@0.2.0 — Deterministic Verification Runtime
+
+          npm:
+          - @octopus-reef/control-plane@0.2.0
+          - @octopus-reef/verification@0.2.0
+
+          HTTP API: /v1/verifications
+          Entrypoints: reef-verification migrate | api | worker
+
+          API: ghcr.io/octoryn/octopus-reef-verification-api@sha256:5c92606b97fda21b3e9070a1e669a2f50f0a9685c174c74c6a5670f4674b82ac
+          Worker: ghcr.io/octoryn/octopus-reef-verification-worker@sha256:e40c3c53ee9ed73ac5671b1d74008cadf9dcbbb3174ecf7aede1e3488307e388
+          Remote sandbox: ${REMOTE_SANDBOX_REPOSITORY}@${REMOTE_SANDBOX_DIGEST}
+
+          Schema head: 0001_verification
+          Migration set: sha256:31ce57261255474ff4bda0bee336264347a222289058c7a3fa83104284477098
+          Trusted profile: verification-profile:golden-next-fastapi-postgres@1.0.1
+          Profile digest: sha256:31d1b974aa7ed6d9afaef3ca141e7d1edbd847da0b62fc11f1e8c5bac22a899f
+
+          API, Worker and remote sandbox manifests contain linux/amd64 and linux/arm64.
+          The attached release record contains npm integrity/gitHead, SBOM and scan
+          references, exact compatibility identity, independent audit, recovery
+          history, deployment configuration, and known-unverified items.
+
+          Verification is independent from AgentRun. It has no approve/reject/pause
+          operation and cannot approve a Builder deliverable or advance Builder
+          Project State.
+          EOF
+          gh release upload "$RELEASE_TAG" --clobber \
+            verification-release-record.json \
+            verification-release-record.sha256 \
+            independent-audit.json
+          gh release edit "$RELEASE_TAG" \
+            --notes-file release-notes.md \
+            --draft=false \
+            --latest=false
+          gh release view "$RELEASE_TAG" \
+            --json isDraft,publishedAt,url \
+            --jq 'select(.isDraft == false and .publishedAt != null)'
