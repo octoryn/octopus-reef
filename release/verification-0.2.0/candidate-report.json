@@ -1,7 +1,7 @@
 {
   "schemaVersion": "reef.verification-candidate-report.v1",
   "decision": "READY_FOR_INDEPENDENT_AUDIT",
-  "implementationCommit": "09c97ac66b4a65021a6ac05997c9eac271bbac6d",
+  "implementationCommit": "3d9ed9f5d9d5d55c033fdd7f7d573ffab442a909",
   "recoveredFromCommit": "5d73dd32bcf00393ab359c38e165bac86d62e942",
   "preparedAt": "2026-07-22T23:55:01Z",
   "releaseIdentity": {
@@ -15,6 +15,16 @@
     "retainedAsAuditEvidence": true,
     "note": "The prior independent ten-item NO-GO remains historical evidence. This report is the implementation owner's closure claim, not an independent GO."
   },
+  "priorFailedAttempts": [
+    {
+      "runId": 29970054224,
+      "tagCommit": "81a3f114ac17d290dd7b98708f866b43809b0558",
+      "stage": "runner action resolution before checkout",
+      "failure": "The Trivy action ref omitted the required v tag prefix.",
+      "publishedArtifacts": [],
+      "disposition": "Corrected to aquasecurity/trivy-action@v0.32.0; the failed tag may be replaced only after registry, GHCR and GitHub Release identities are independently confirmed unused."
+    }
+  ],
   "prepublishGates": {
     "passed": true,
     "command": "npm run verify:all && npm run release:smoke && node scripts/verification-prepublish-gate.mjs",
