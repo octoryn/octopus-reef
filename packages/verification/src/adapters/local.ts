@@ -427,6 +427,21 @@ export class DockerVerificationSandboxProvisioner implements VerificationSandbox
   }
 
   async destroy(sandbox: VerificationSandbox): Promise<void> {
+    const released = await runProcess(
+      [
+        "docker",
+        "exec",
+        sandbox.id,
+        "sh",
+        "-c",
+        'find /workspace -xdev -user "$(id -u)" -exec chmod g+rwX -- {} +',
+      ],
+      process.cwd(),
+      this.#dockerEnvironment,
+      30_000,
+      1024 * 1024,
+      new AbortController().signal,
+    );
     await runProcess(
       ["docker", "rm", "--force", sandbox.id],
       process.cwd(),
@@ -435,6 +450,9 @@ export class DockerVerificationSandboxProvisioner implements VerificationSandbox
       1024 * 1024,
       new AbortController().signal,
     );
+    if (released.exitCode !== 0) {
+      throw new Error("Docker sandbox could not release its private workspace");
+    }
   }
 }
 
