@@ -65,13 +65,15 @@ environments, secrets, tools, artifacts, and execution budgets. Mutable aliases,
 unknown fields, process-injection environment variables, and digest drift fail
 closed.
 
-The first-party Golden Stack profile is created by
-`createGoldenStackProfile(imageDigest)`. The release workflow publishes the
-real Next.js/FastAPI/PostgreSQL sandbox as an immutable multi-architecture
-image and attaches the resulting full profile JSON to the draft Release. The
-release record binds both the profile's canonical digest and its sandbox image
-manifest digest. Test-only smoke profiles and placeholder digests are never a
-published deployment contract.
+`createGoldenStackProfile(imageDigest)` is the first-party Golden Stack schema
+baseline. The Release publishes the real Next.js/FastAPI/PostgreSQL remote
+sandbox as an immutable multi-architecture image and attaches the authoritative
+full profile JSON. The release profile may advance its own immutable patch
+version when deployment-only wiring changes; consumers use the exact
+ref/version/digest tuple in the Release, not a locally regenerated assumption.
+The release record binds both the profile's canonical digest and its sandbox
+image manifest digest. Test-only smoke profiles and placeholder digests are
+never a published deployment contract.
 
 Source bundles use the documented `reef.source-bundle.v1` descriptor and NFC
 Unicode normalization. Materialization verifies the tenant, descriptor digest,
@@ -95,6 +97,18 @@ reef-verification worker
 The API and Worker images are separate release artifacts and must be pinned by
 manifest digest. The Worker manifest must include `linux/amd64` and
 `linux/arm64`. Mutable tags are not a supported deployment identity.
+
+The Release also publishes a remote Golden Stack sandbox manifest. Its default
+command is the authenticated port-8081 bridge consumed by
+`AwsEcsVerificationSandboxProvisioner`; the local Docker adapter overrides that
+command and uses the same immutable toolchain through `docker exec`. A plain
+tool image whose default command only sleeps is not a deployable Fargate
+sandbox. Pin the server-registered profile JSON and its remote sandbox digest
+from the Release record as one identity.
+
+The AWS task definition, least-privilege roles, network boundary, and complete
+configuration-name inventory are documented in
+`docs/DETERMINISTIC-VERIFICATION-AWS.md`.
 
 ## Compatibility
 

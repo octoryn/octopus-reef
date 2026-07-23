@@ -1,0 +1,27 @@
+# The remote sandbox composes the exact published Golden Stack toolchain with
+# the exact runner compiled into the published API image. Both bases are
+# immutable multi-architecture manifests from the 0.2.0 release candidate.
+ARG REEF_VERIFICATION_API_IMAGE=ghcr.io/octoryn/octopus-reef-verification-api@sha256:5c92606b97fda21b3e9070a1e669a2f50f0a9685c174c74c6a5670f4674b82ac
+ARG REEF_VERIFICATION_GOLDEN_IMAGE=ghcr.io/octoryn/octopus-reef-verification-golden-stack@sha256:5f7ba00a8b4757a96124fe3aa2ba8f7b565a67ee9fec13803cce526225103d29
+
+FROM ${REEF_VERIFICATION_API_IMAGE} AS reef-runtime
+FROM ${REEF_VERIFICATION_GOLDEN_IMAGE}
+
+COPY --from=reef-runtime --chown=node:node \
+  /app/packages/verification/dist/sandbox-runner.js \
+  /opt/reef-verification/sandbox-runner.js
+
+ENV PORT=8081 \
+    REEF_VERIFICATION_SANDBOX_WORKSPACE=/workspace \
+    AWS_EC2_METADATA_DISABLED=true
+
+EXPOSE 8081
+USER node
+WORKDIR /workspace
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8081)+'/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# DockerVerificationSandboxProvisioner overrides CMD with its private sleep
+# command and uses docker exec. Fargate keeps this default and exposes the
+# authenticated command bridge to the Worker security group only.
+CMD ["node", "/opt/reef-verification/sandbox-runner.js"]
