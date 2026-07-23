@@ -1,4 +1,4 @@
-# Deterministic Verification Runtime 0.2
+# Deterministic Verification Runtime 0.3
 
 Deterministic Verification is a separate Reef aggregate. It is not an
 `AgentRun`, does not load a model or Agent Loop, and has no pause, review,
@@ -10,8 +10,8 @@ Builder deliverable and never advances Builder Project State.
 Builder pins these public packages exactly:
 
 ```text
-@octopus-reef/control-plane@0.2.0
-@octopus-reef/verification@0.2.0
+@octopus-reef/control-plane@0.3.0
+@octopus-reef/verification@0.3.0
 @octopus-reef/engine@0.2.1
 @octopus-reef/protocol@0.1.1
 @octopus-reef/agent@0.2.3
@@ -24,13 +24,14 @@ The Builder-facing exports are:
 ```text
 @octopus-reef/control-plane/verification
 @octopus-reef/control-plane/verification/client
+@octopus-reef/control-plane/verification/materialization
 ```
 
 HTTP v1 is `/v1/verifications`. Patch releases in the 0.2 line may make
 backward-compatible fixes. A closed request key, state, identity, cursor, or
 Evidence schema break requires a new minor or major API/package line.
 
-The PostgreSQL schema head is `0001_verification`. Run migrations before API or
+The PostgreSQL schema head is `0002_materialization`. Run migrations before API or
 Worker rollout:
 
 ```text
@@ -40,7 +41,7 @@ reef-verification worker
 ```
 
 The migration set digest and immutable image manifest digests are published in
-the `control-plane-v0.2.0` GitHub Release record. Deploy images by manifest
+the `control-plane-v0.3.0` GitHub Release record. Deploy images by manifest
 digest, never by a mutable tag.
 
 ## Public protocol
@@ -93,6 +94,16 @@ candidate, source bundle, and immutable profile identity. Cursors are canonical
 decimal strings and must never be converted to a JavaScript `number`. A stream
 opened at the exact terminal cursor returns EOF without reconnecting.
 
+The deployment-neutral external materialization Port is published from
+`@octopus-reef/control-plane/verification/materialization`. Its request contains
+only the full identity, run, and attempt plus opaque refs. Deployment-owned
+adapters resolve those refs against trusted ArtifactStore/S3 configuration;
+callers cannot provide URLs, S3 locations, commands, credentials, or arbitrary
+secret refs. Reef verifies the Builder-owned
+`octopus.builder.source-bundle/v1` candidate digest and separately records the
+canonical `octopus.reef.materialization-descriptor/v1` digest. The two digests
+are never interchangeable.
+
 ## Result and Evidence semantics
 
 Required-check coverage is distinct from operational state:
@@ -144,6 +155,10 @@ REEF_VERIFICATION_ECS_RUNNER_PORT
 
 See [DETERMINISTIC-VERIFICATION-AWS.md](./DETERMINISTIC-VERIFICATION-AWS.md)
 for the minimal remote deployment and least-privilege boundary.
+
+See
+[DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md](./DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md)
+for the mandatory exact-version cutover from 0.2.2.
 
 ## Builder boundary
 

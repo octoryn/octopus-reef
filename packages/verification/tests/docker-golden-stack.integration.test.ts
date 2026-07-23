@@ -17,6 +17,7 @@ import {
   type BuilderSourceBundleEntryV1,
   type SourceBundleDescriptor,
   type VerificationRunRequest,
+  type VerificationSandbox,
   type VerificationTenant,
 } from "../src/index.js";
 import { DockerVerificationSandboxProvisioner } from "../src/adapters/local.js";
@@ -25,6 +26,94 @@ import { PostgresVerificationStore } from "../src/adapters/postgres.js";
 const postgresUrl = process.env["REEF_TEST_POSTGRES_URL"];
 const sandboxImageDigest = process.env["REEF_TEST_DOCKER_IMAGE"];
 const dockerHost = process.env["REEF_TEST_DOCKER_HOST"];
+
+test(
+  "isolated Docker sandbox denies host, peer, and IMDS access",
+  {
+    skip:
+      sandboxImageDigest === undefined
+        ? "REEF_TEST_DOCKER_IMAGE is required"
+        : false,
+    timeout: 2 * 60_000,
+  },
+  async () => {
+    assert.match(sandboxImageDigest!, /^sha256:[0-9a-f]{64}$/);
+    const workspaceRoot = mkdtempSync(
+      join(process.cwd(), ".reef-verification-network-sandbox-"),
+    );
+    const provisioner = new DockerVerificationSandboxProvisioner({
+      root: workspaceRoot,
+      user: "node",
+      memory: "1g",
+      cpus: "1",
+      pidsLimit: 128,
+      ...(dockerHost === undefined ? {} : { dockerHost }),
+    });
+    let sandbox: VerificationSandbox | undefined;
+    try {
+      sandbox = await provisioner.provision(
+        {
+          organisationRef: "organisation:network-isolation",
+          projectRef: "project:network-isolation",
+          candidateRef: "foundation-candidate:network-isolation",
+          candidateDigest: sha(Buffer.from("network-candidate")),
+          sourceBundleRef: "source-bundle:network-isolation",
+          sourceBundleDigest: sha(Buffer.from("network-source")),
+          verificationProfileRef: "verification-profile:network-isolation",
+          verificationProfileVersion: "1.0.0",
+          verificationProfileDigest: sha(Buffer.from("network-profile")),
+          runRef: "verification:network-isolation",
+          attempt: 1,
+          imageDigest: sandboxImageDigest!,
+        },
+        new AbortController().signal,
+      );
+      const result = await sandbox.execute(
+        {
+          checkRef: "network-isolation",
+          required: true,
+          argv: [
+            "node",
+            "-e",
+            [
+              "if (process.env.AWS_EC2_METADATA_DISABLED !== 'true') process.exit(2);",
+              "const urls=['http://host.docker.internal:1','http://172.17.0.1:1','http://169.254.169.254/latest/meta-data/'];",
+              "Promise.all(urls.map(async url=>{",
+              "  try { await fetch(url,{signal:AbortSignal.timeout(1000)}); throw new Error('network reachable: '+url); }",
+              "  catch (error) { if (String(error).includes('network reachable')) throw error; }",
+              "})).then(()=>process.exit(0),error=>{console.error(String(error));process.exit(3)});",
+            ].join("\n"),
+          ],
+          workingDirectory: ".",
+          timeoutMs: 10_000,
+          outputLimitBytes: 16 * 1024,
+          environment: {},
+          tool: {
+            name: "golden-stack-sandbox",
+            version: "0.3.0",
+            imageDigest: sandboxImageDigest!,
+          },
+        },
+        {},
+        new AbortController().signal,
+      );
+      assert.equal(
+        result.exitCode,
+        0,
+        Buffer.from(result.stderr).toString("utf8"),
+      );
+    } finally {
+      if (sandbox !== undefined) await provisioner.destroy(sandbox);
+      if (
+        workspaceRoot.startsWith(
+          `${process.cwd()}${sep}.reef-verification-network-sandbox-`,
+        )
+      ) {
+        rmSync(workspaceRoot, { recursive: true, force: true });
+      }
+    }
+  },
+);
 
 test(
   "real generated Next.js, FastAPI, PostgreSQL bundle passes the isolated trusted profile",

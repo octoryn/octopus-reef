@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,25 +15,26 @@ assert(
   "control-plane package identity drifted",
 );
 assert(
-  controlPlane.version === "0.2.2",
-  "control-plane release must be exactly 0.2.2",
+  controlPlane.version === "0.3.0",
+  "control-plane release must be exactly 0.3.0",
 );
 assert(
   verification.name === "@octopus-reef/verification",
   "verification package identity drifted",
 );
 assert(
-  verification.version === "0.2.2",
-  "verification release must be exactly 0.2.2",
+  verification.version === "0.3.0",
+  "verification release must be exactly 0.3.0",
 );
 assert(
-  controlPlane.dependencies?.["@octopus-reef/verification"] === "0.2.2",
+  controlPlane.dependencies?.["@octopus-reef/verification"] === "0.3.0",
   "control-plane must declare the exact formal verification compatibility version",
 );
 
 for (const subpath of [
   "./verification",
   "./verification/client",
+  "./verification/materialization",
   "./verification/production",
   "./verification/adapters/postgres",
   "./verification/adapters/local",
@@ -98,6 +99,7 @@ for (const marker of [
   "PROFILE_REPOSITORY",
   "golden-profile.json",
   "npm rebuild better-sqlite3",
+  "0002_materialization",
 ])
   assert(workflow.includes(marker), `release workflow omits ${marker}`);
 
@@ -133,7 +135,7 @@ assert(
 );
 assert(
   text("scripts/write-verification-remote-profile.mjs").includes(
-    'version: "1.0.2"',
+    'version: "1.1.0"',
   ),
   "remote Golden Stack profile version drifted",
 );
@@ -169,10 +171,20 @@ for (const marker of [
 run("npm", ["run", "build", "--workspace", "@octopus-reef/verification"]);
 run("npx", ["tsc", "-b", "packages/control-plane", "--pretty", "false"]);
 run("npm", ["audit", "--audit-level=high"]);
+run("npm", ["audit", "signatures"]);
 
-const migrationAsset = text(
-  "packages/verification/migrations/0001_verification.sql",
-);
+const migrationAssets = [
+  {
+    id: "0001_verification",
+    asset: "migrations/0001_verification.sql",
+    sql: text("packages/verification/migrations/0001_verification.sql"),
+  },
+  {
+    id: "0002_materialization",
+    asset: "migrations/0002_materialization.sql",
+    sql: text("packages/verification/migrations/0002_materialization.sql"),
+  },
+];
 const runtimeMigrationModule = await import(
   pathToFileURL(join(root, "packages/verification/dist/adapters/migrations.js"))
     .href
@@ -180,14 +192,18 @@ const runtimeMigrationModule = await import(
 const runtimeMigrations = runtimeMigrationModule.VERIFICATION_MIGRATIONS;
 assert(
   Array.isArray(runtimeMigrations) &&
-    runtimeMigrations.length === 1 &&
-    runtimeMigrations[0]?.id === "0001_verification",
+    runtimeMigrations.length === migrationAssets.length &&
+    runtimeMigrations.every(
+      (migration, index) => migration.id === migrationAssets[index]?.id,
+    ),
   "runtime migration identity drifted",
 );
-assert(
-  runtimeMigrations[0].sql === migrationAsset,
-  "runtime migration bytes differ from the published migration asset",
-);
+for (const [index, migration] of runtimeMigrations.entries()) {
+  assert(
+    migration.sql === migrationAssets[index]?.sql,
+    `runtime migration bytes differ for ${migration.id}`,
+  );
+}
 
 const temporary = mkdtempSync(
   join(tmpdir(), "reef-verification-package-gate-"),
@@ -206,6 +222,12 @@ try {
     "verification tarball is missing its PostgreSQL migration",
   );
   assert(
+    verificationPack.files.some(
+      (file) => file.path === "migrations/0002_materialization.sql",
+    ),
+    "verification tarball is missing its materialization migration",
+  );
+  assert(
     verificationPack.files.some((file) => file.path === "dist/bin.js"),
     "verification tarball is missing its executable entrypoint",
   );
@@ -214,6 +236,12 @@ try {
       (file) => file.path === "dist/verification-client.js",
     ),
     "control-plane tarball is missing its verification client compatibility export",
+  );
+  assert(
+    controlPlanePack.files.some(
+      (file) => file.path === "dist/verification-materialization.js",
+    ),
+    "control-plane tarball is missing its materialization compatibility export",
   );
   assert(
     controlPlanePack.files.some((file) => file.path === "dist/bin.js"),
@@ -250,22 +278,35 @@ try {
     ],
     temporary,
   );
+  copyFileSync(
+    join(root, "scripts/verification-public-package-blackbox.mjs"),
+    join(temporary, "verification-public-package-blackbox.mjs"),
+  );
+  run(
+    process.execPath,
+    ["verification-public-package-blackbox.mjs"],
+    temporary,
+  );
 
-  const migrationSetDigest = sha256(migrationAsset);
+  const migrationSetDigest = sha256(
+    Buffer.concat(
+      migrationAssets.map((migration) => Buffer.from(migration.sql)),
+    ),
+  );
   process.stdout.write(
     `${JSON.stringify(
       {
-        schemaHead: "0001_verification",
+        schemaHead: "0002_materialization",
         migrationSetDigest,
-        migrationBindings: [
-          {
-            id: "0001_verification",
-            asset: "migrations/0001_verification.sql",
-            runtimeModule: "dist/adapters/migrations.js",
-            digest: migrationSetDigest,
-            exactBytes: true,
-          },
-        ],
+        migrationDigestAlgorithm:
+          "sha256(concat(runtime-ordered exact migration SQL bytes))",
+        migrationBindings: migrationAssets.map((migration) => ({
+          id: migration.id,
+          asset: migration.asset,
+          runtimeModule: "dist/adapters/migrations.js",
+          digest: sha256(migration.sql),
+          exactBytes: true,
+        })),
         packages: {
           verification: packIdentity(verificationPack),
           controlPlane: packIdentity(controlPlanePack),

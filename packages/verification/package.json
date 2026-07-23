@@ -1,6 +1,6 @@
 {
   "name": "@octopus-reef/verification",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Deterministic, durable and tenant-isolated verification control plane for immutable source candidates.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",
@@ -27,6 +27,10 @@
       "types": "./dist/client.d.ts",
       "default": "./dist/client.js"
     },
+    "./materialization": {
+      "types": "./dist/materializer.d.ts",
+      "default": "./dist/materializer.js"
+    },
     "./adapters/postgres": {
       "types": "./dist/adapters/postgres.d.ts",
       "default": "./dist/adapters/postgres.js"
@@ -44,7 +48,11 @@
       "default": "./dist/production.js"
     }
   },
-  "files": ["dist", "migrations", "README.md"],
+  "files": [
+    "dist",
+    "migrations",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc --noEmit -p .",

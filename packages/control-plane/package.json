@@ -1,6 +1,6 @@
 {
   "name": "@octopus-reef/control-plane",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Reef control plane with separate durable AgentRun and deterministic Verification Run public contracts.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",
@@ -52,6 +52,10 @@
       "types": "./dist/verification-client.d.ts",
       "default": "./dist/verification-client.js"
     },
+    "./verification/materialization": {
+      "types": "./dist/verification-materialization.d.ts",
+      "default": "./dist/verification-materialization.js"
+    },
     "./verification/production": {
       "types": "./dist/verification-production.d.ts",
       "default": "./dist/verification-production.js"
@@ -81,7 +85,7 @@
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
-    "@octopus-reef/verification": "0.2.2",
+    "@octopus-reef/verification": "0.3.0",
     "@octopus-reef/adapter-runtime": "^0.1.1",
     "@octopus-reef/agent": "^0.2.3",
     "@octopus-reef/engine": "^0.2.1",

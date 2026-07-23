@@ -1,8 +1,9 @@
 name: deterministic-verification-release
 
 on:
+  workflow_dispatch:
   push:
-    tags: ["control-plane-v0.2.2"]
+    tags: ["control-plane-v0.3.0"]
 
 permissions:
   contents: write
@@ -11,11 +12,11 @@ permissions:
   security-events: write
 
 concurrency:
-  group: deterministic-verification-0.2.2
+  group: deterministic-verification-0.3.0-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  VERSION: 0.2.2
+  VERSION: 0.3.0
   API_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-api
   WORKER_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-worker
   PROFILE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-golden-stack
@@ -48,28 +49,45 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
       - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v3
 
       - name: Prove exact release identity and unused immutable names
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "control-plane-v${VERSION}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            test "$GITHUB_REF_NAME" = "control-plane-v${VERSION}"
+            test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
+          else
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+            ! git show-ref --verify --quiet "refs/tags/control-plane-v${VERSION}"
+          fi
           test "$(node -p 'require("./packages/control-plane/package.json").version')" = "$VERSION"
           test "$(node -p 'require("./packages/verification/package.json").version')" = "$VERSION"
           test "$(node -p 'require("./packages/control-plane/package.json").dependencies["@octopus-reef/verification"]')" = "$VERSION"
           test "$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.visibility')" = "public"
-          ! npm view "@octopus-reef/control-plane@${VERSION}" version >/dev/null 2>&1
-          ! npm view "@octopus-reef/verification@${VERSION}" version >/dev/null 2>&1
-          ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1
-          ! docker manifest inspect "${API_REPOSITORY}:${VERSION}" >/dev/null 2>&1
-          ! docker manifest inspect "${WORKER_REPOSITORY}:${VERSION}" >/dev/null 2>&1
-          ! docker manifest inspect "${PROFILE_REPOSITORY}:${VERSION}" >/dev/null 2>&1
+          for package in @octopus-reef/control-plane @octopus-reef/verification; do
+            if npm view "${package}@${VERSION}" --json > existing-package.json 2>/dev/null; then
+              test "$(jq -r '.gitHead' existing-package.json)" = "$GITHUB_SHA"
+            fi
+          done
+          release_tag="control-plane-v${VERSION}"
+          if gh release view "$release_tag" --json tagName > existing-release.json 2>/dev/null; then
+            test "$(jq -r '.tagName' existing-release.json)" = "$release_tag"
+            test "$GITHUB_REF" = "refs/tags/${release_tag}"
+          fi
+          for repository in "$API_REPOSITORY" "$WORKER_REPOSITORY" "$PROFILE_REPOSITORY"; do
+            if version_digest="$(docker buildx imagetools inspect "${repository}:${VERSION}" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+              commit_digest="$(docker buildx imagetools inspect "${repository}:sha-${GITHUB_SHA}" --format '{{.Manifest.Digest}}')"
+              test "$version_digest" = "$commit_digest"
+            fi
+          done
 
       - name: Require a report-only release authorization commit
         run: |
           set -euo pipefail
-          report=release/verification-0.2.2/candidate-report.json
+          report=release/verification-0.3.0/candidate-report.json
           test -f "$report"
           implementation_commit="$(git rev-parse "$GITHUB_SHA^")"
           test "$(git diff --name-only "$implementation_commit" "$GITHUB_SHA" | wc -l | tr -d ' ')" = 1
@@ -97,6 +115,7 @@ jobs:
           node scripts/verification-prepublish-gate.mjs | tee verification-package-gate.json
           jq -e '.cleanInstall == true' verification-package-gate.json
           npm audit --audit-level=high
+          npm audit signatures
 
       - name: Real PostgreSQL and isolated Golden Stack Worker gate
         env:
@@ -105,9 +124,13 @@ jobs:
           set -euo pipefail
           fixture=packages/verification/tests/fixtures/golden-stack
           docker build -f "$fixture/Dockerfile.sandbox" -t reef-verification-golden-stack:preflight "$fixture"
+          docker buildx build --platform linux/arm64 --load \
+            -f "$fixture/Dockerfile.sandbox" \
+            -t reef-verification-golden-stack:preflight-arm64 \
+            "$fixture"
           export REEF_TEST_DOCKER_IMAGE
           REEF_TEST_DOCKER_IMAGE="$(docker image inspect reef-verification-golden-stack:preflight --format '{{.Id}}')"
-          npm test --workspace @octopus-reef/verification
+          npm test --workspace @octopus-reef/verification -- --test-concurrency=1
 
       - name: Real generated Next.js, FastAPI, PostgreSQL Docker Compose gate
         run: |
@@ -141,6 +164,21 @@ jobs:
             -f packages/verification/Dockerfile.remote-sandbox \
             -t reef-verification-remote-sandbox:preflight \
             .
+          docker buildx build --platform linux/arm64 --load \
+            --target api \
+            -f packages/verification/Dockerfile \
+            -t reef-verification-api:preflight-arm64 \
+            .
+          docker buildx build --platform linux/arm64 --load \
+            --target worker \
+            -f packages/verification/Dockerfile \
+            -t reef-verification-worker:preflight-arm64 \
+            .
+          docker buildx build --platform linux/arm64 --load \
+            --build-arg REEF_VERIFICATION_API_IMAGE=reef-verification-api:preflight-arm64 \
+            -f packages/verification/Dockerfile.remote-sandbox \
+            -t reef-verification-remote-sandbox:preflight-arm64 \
+            .
           docker run --rm \
             --network host \
             --env REEF_VERIFICATION_DATABASE_URL \
@@ -153,6 +191,69 @@ jobs:
           test "$(docker image inspect reef-verification-api:preflight --format '{{.Config.User}}')" = node
           test "$(docker image inspect reef-verification-worker:preflight --format '{{.Config.User}}')" = node
           test "$(docker image inspect reef-verification-remote-sandbox:preflight --format '{{.Config.User}}')" = node
+          docker run --detach --name reef-verification-remote-smoke \
+            --env REEF_VERIFICATION_SANDBOX_AUTH_TOKEN=reef-verification-preflight-token-000000000000 \
+            reef-verification-remote-sandbox:preflight
+          for attempt in $(seq 1 30); do
+            health="$(docker inspect reef-verification-remote-smoke --format '{{.State.Health.Status}}')"
+            test "$health" != unhealthy
+            if test "$health" = healthy; then
+              break
+            fi
+            test "$attempt" -lt 30
+            sleep 1
+          done
+          docker exec reef-verification-remote-smoke node -e "
+            fetch('http://127.0.0.1:8081/readyz')
+              .then(response => response.json())
+              .then(body => process.exit(body.ready === true && body.service === 'reef-verification-sandbox' ? 0 : 1))
+              .catch(() => process.exit(1))
+          "
+          docker rm --force reef-verification-remote-smoke
+
+          smoke_root="$(mktemp -d "${RUNNER_TEMP}/reef-verification-smoke.XXXXXX")"
+          chmod 0777 "$smoke_root"
+          cleanup() {
+            docker rm --force reef-verification-api-smoke reef-verification-pg17 >/dev/null 2>&1 || true
+            rm -rf "$smoke_root"
+          }
+          trap cleanup EXIT
+          docker run --detach --name reef-verification-api-smoke \
+            --network host \
+            --mount "type=bind,src=${GITHUB_WORKSPACE}/packages/verification/tests/fixtures/release-smoke/profiles.json,dst=/config/profiles.json,readonly" \
+            --mount "type=bind,src=${GITHUB_WORKSPACE}/packages/verification/tests/fixtures/release-smoke/workload-jwks.json,dst=/config/workload-jwks.json,readonly" \
+            --mount "type=bind,src=${smoke_root},dst=/data" \
+            --env REEF_VERIFICATION_DATABASE_URL \
+            --env REEF_VERIFICATION_DATABASE_SSL_MODE=disable \
+            --env REEF_VERIFICATION_PROFILES_FILE=/config/profiles.json \
+            --env REEF_VERIFICATION_WORKLOAD_JWKS_FILE=/config/workload-jwks.json \
+            --env REEF_VERIFICATION_WORKLOAD_ISSUER=release-smoke \
+            --env REEF_VERIFICATION_WORKLOAD_AUDIENCE=release-smoke \
+            --env REEF_VERIFICATION_OBJECT_STORE=local \
+            --env REEF_VERIFICATION_ALLOW_LOCAL_STORAGE=true \
+            --env REEF_VERIFICATION_DATA_ROOT=/data \
+            reef-verification-api:preflight
+          curl --fail --silent --show-error \
+            --retry 20 --retry-all-errors --retry-delay 1 \
+            http://127.0.0.1:8080/health/live | jq -e '.status == "live"'
+          curl --fail --silent --show-error \
+            http://127.0.0.1:8080/health/ready | jq -e '.status == "ready"'
+          docker run --rm --network host \
+            --mount "type=bind,src=${GITHUB_WORKSPACE}/packages/verification/tests/fixtures/release-smoke/profiles.json,dst=/config/profiles.json,readonly" \
+            --mount "type=bind,src=${smoke_root},dst=/data" \
+            --env REEF_VERIFICATION_DATABASE_URL \
+            --env REEF_VERIFICATION_DATABASE_SSL_MODE=disable \
+            --env REEF_VERIFICATION_PROFILES_FILE=/config/profiles.json \
+            --env REEF_VERIFICATION_OBJECT_STORE=local \
+            --env REEF_VERIFICATION_ALLOW_LOCAL_STORAGE=true \
+            --env REEF_VERIFICATION_DATA_ROOT=/data \
+            --env REEF_VERIFICATION_SECRET_RESOLVER=env \
+            --env REEF_VERIFICATION_ALLOW_ENV_SECRETS=true \
+            --env REEF_VERIFICATION_SANDBOX_ADAPTER=local \
+            --env REEF_VERIFICATION_ALLOW_UNSAFE_LOCAL_SANDBOX=true \
+            --env REEF_VERIFICATION_WORKSPACE_ROOT=/data/workspaces \
+            --env REEF_VERIFICATION_WORKER_ONCE=true \
+            reef-verification-worker:preflight
 
           docker run --detach --name reef-verification-pg17 \
             --publish 127.0.0.1:5433:5432 \
@@ -160,10 +261,6 @@ jobs:
             --env POSTGRES_USER=reef_verification \
             --env POSTGRES_PASSWORD=reef-verification-release-test \
             postgres:17-alpine
-          cleanup_pg17() {
-            docker rm --force reef-verification-pg17 >/dev/null 2>&1 || true
-          }
-          trap cleanup_pg17 EXIT
           for attempt in $(seq 1 30); do
             if docker exec reef-verification-pg17 \
               pg_isready -U reef_verification -d reef_verification; then
@@ -181,6 +278,8 @@ jobs:
             --env "REEF_VERIFICATION_DATABASE_URL=${pg17_url}" \
             --env REEF_VERIFICATION_DATABASE_SSL_MODE=disable \
             reef-verification-api:preflight migrate
+          REEF_TEST_POSTGRES_URL="$pg17_url" \
+            node --import tsx --test packages/verification/tests/postgres.integration.test.ts
           docker restart reef-verification-pg17
           for attempt in $(seq 1 30); do
             if docker exec reef-verification-pg17 \
@@ -206,29 +305,71 @@ jobs:
         with:
           scan-type: fs
           scan-ref: .
+          scanners: vuln,secret
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          format: json
+          output: preflight-source.trivy.json
           exit-code: "1"
       - name: Scan API image before any publish
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: reef-verification-api:preflight
+          scanners: vuln,secret
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          format: json
+          output: preflight-api.trivy.json
+          exit-code: "1"
+      - name: Scan arm64 API image before any publish
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: reef-verification-api:preflight-arm64
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: json
+          output: preflight-api-arm64.trivy.json
           exit-code: "1"
       - name: Scan Worker image before any publish
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: reef-verification-worker:preflight
+          scanners: vuln,secret
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          format: json
+          output: preflight-worker.trivy.json
+          exit-code: "1"
+      - name: Scan arm64 Worker image before any publish
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: reef-verification-worker:preflight-arm64
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: json
+          output: preflight-worker-arm64.trivy.json
           exit-code: "1"
       - name: Scan Golden Stack sandbox before any publish
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: reef-verification-golden-stack:preflight
+          scanners: vuln,secret
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          format: json
+          output: preflight-golden.trivy.json
+          exit-code: "1"
+      - name: Scan arm64 Golden Stack sandbox before any publish
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: reef-verification-golden-stack:preflight-arm64
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: json
+          output: preflight-golden-arm64.trivy.json
           exit-code: "1"
       - name: Scan remote Golden Stack sandbox before any publish
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
@@ -237,18 +378,98 @@ jobs:
           scanners: vuln,secret
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          format: json
+          output: preflight-remote-golden.trivy.json
           exit-code: "1"
+      - name: Scan arm64 remote Golden Stack sandbox before any publish
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: reef-verification-remote-sandbox:preflight-arm64
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: json
+          output: preflight-remote-golden-arm64.trivy.json
+          exit-code: "1"
+
+      - name: Generate pre-publish API image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: reef-verification-api:preflight
+          format: cyclonedx-json
+          output-file: preflight-api-image.cdx.json
+      - name: Generate pre-publish arm64 API image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: reef-verification-api:preflight-arm64
+          format: cyclonedx-json
+          output-file: preflight-api-arm64-image.cdx.json
+      - name: Generate pre-publish Worker image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: reef-verification-worker:preflight
+          format: cyclonedx-json
+          output-file: preflight-worker-image.cdx.json
+      - name: Generate pre-publish arm64 Worker image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: reef-verification-worker:preflight-arm64
+          format: cyclonedx-json
+          output-file: preflight-worker-arm64-image.cdx.json
+      - name: Generate pre-publish Golden image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: reef-verification-remote-sandbox:preflight
+          format: cyclonedx-json
+          output-file: preflight-golden-image.cdx.json
+      - name: Generate pre-publish arm64 Golden image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: reef-verification-remote-sandbox:preflight-arm64
+          format: cyclonedx-json
+          output-file: preflight-golden-arm64-image.cdx.json
 
       - name: Generate package SBOMs and digest-bound preflight record
         run: |
           set -euo pipefail
           npm sbom --workspace @octopus-reef/verification --sbom-format cyclonedx > verification-package.cdx.json
           npm sbom --workspace @octopus-reef/control-plane --sbom-format cyclonedx > control-plane-package.cdx.json
-          cp release/verification-0.2.2/candidate-report.json candidate-report.json
+          cp release/verification-0.3.0/candidate-report.json candidate-report.json
+          jq -n \
+            --slurpfile candidate candidate-report.json \
+            --slurpfile packageGate verification-package-gate.json \
+            '{
+              schemaVersion: "reef.verification-preflight-summary.v1",
+              gitCommit: env.GITHUB_SHA,
+              sourceTests: $candidate[0].prepublishGates.fullSourceTests,
+              postgres: $candidate[0].realPostgresTests,
+              docker: $candidate[0].isolatedDockerTests,
+              packageGate: $packageGate[0],
+              result: "passed"
+            }' > preflight-test-summary.json
           sha256sum \
             verification-package-gate.json \
             verification-package.cdx.json \
             control-plane-package.cdx.json \
+            preflight-api-image.cdx.json \
+            preflight-api-arm64-image.cdx.json \
+            preflight-worker-image.cdx.json \
+            preflight-worker-arm64-image.cdx.json \
+            preflight-golden-image.cdx.json \
+            preflight-golden-arm64-image.cdx.json \
+            preflight-source.trivy.json \
+            preflight-api.trivy.json \
+            preflight-api-arm64.trivy.json \
+            preflight-worker.trivy.json \
+            preflight-worker-arm64.trivy.json \
+            preflight-golden.trivy.json \
+            preflight-golden-arm64.trivy.json \
+            preflight-remote-golden.trivy.json \
+            preflight-remote-golden-arm64.trivy.json \
+            preflight-test-summary.json \
+            packages/verification/migrations/0001_verification.sql \
+            packages/verification/migrations/0002_materialization.sql \
+            docs/DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md \
             candidate-report.json \
             > preflight-checks.sha256
       - uses: actions/upload-artifact@v4
@@ -260,12 +481,32 @@ jobs:
             verification-package-gate.json
             verification-package.cdx.json
             control-plane-package.cdx.json
+            preflight-api-image.cdx.json
+            preflight-api-arm64-image.cdx.json
+            preflight-worker-image.cdx.json
+            preflight-worker-arm64-image.cdx.json
+            preflight-golden-image.cdx.json
+            preflight-golden-arm64-image.cdx.json
+            preflight-source.trivy.json
+            preflight-api.trivy.json
+            preflight-api-arm64.trivy.json
+            preflight-worker.trivy.json
+            preflight-worker-arm64.trivy.json
+            preflight-golden.trivy.json
+            preflight-golden-arm64.trivy.json
+            preflight-remote-golden.trivy.json
+            preflight-remote-golden-arm64.trivy.json
+            preflight-test-summary.json
+            packages/verification/migrations/0001_verification.sql
+            packages/verification/migrations/0002_materialization.sql
+            docs/DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md
             preflight-checks.sha256
             candidate-report.json
 
   publish:
     name: publish one complete immutable release bundle
     needs: preflight
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     environment: deterministic-verification-release
     steps:
@@ -278,6 +519,7 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
       - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -298,8 +540,45 @@ jobs:
           node scripts/verification-prepublish-gate.mjs > publish-package-gate.json
           cmp release-assets/verification-package-gate.json publish-package-gate.json
 
+      - name: Resolve an existing API manifest for idempotent recovery
+        id: api_existing
+        env:
+          REPOSITORY: ${{ env.API_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          version_ref="${REPOSITORY}:${VERSION}"
+          commit_ref="${REPOSITORY}:sha-${GITHUB_SHA}"
+          version_exists=false
+          commit_exists=false
+          if docker buildx imagetools inspect "$version_ref" --format '{{.Manifest.Digest}}' > version-digest.txt 2>/dev/null; then
+            version_exists=true
+          fi
+          if docker buildx imagetools inspect "$commit_ref" --format '{{.Manifest.Digest}}' > commit-digest.txt 2>/dev/null; then
+            commit_exists=true
+          fi
+          if [[ "$version_exists" == true && "$commit_exists" == false ]]; then
+            digest="$(cat version-digest.txt)"
+            docker buildx imagetools create --tag "$commit_ref" "${REPOSITORY}@${digest}"
+            docker buildx imagetools inspect "$commit_ref" --format '{{.Manifest.Digest}}' > commit-digest.txt
+            commit_exists=true
+          elif [[ "$version_exists" == false && "$commit_exists" == true ]]; then
+            digest="$(cat commit-digest.txt)"
+            docker buildx imagetools create --tag "$version_ref" "${REPOSITORY}@${digest}"
+            docker buildx imagetools inspect "$version_ref" --format '{{.Manifest.Digest}}' > version-digest.txt
+            version_exists=true
+          fi
+          if [[ "$version_exists" == true ]]; then
+            version_digest="$(cat version-digest.txt)"
+            commit_digest="$(cat commit-digest.txt)"
+            test "$version_digest" = "$commit_digest"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$version_digest" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build and publish immutable multi-architecture API image
         id: api
+        if: steps.api_existing.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -317,8 +596,52 @@ jobs:
           tags: |
             ${{ env.API_REPOSITORY }}:${{ env.VERSION }}
             ${{ env.API_REPOSITORY }}:sha-${{ github.sha }}
+      - name: Bind the immutable API manifest
+        id: api_identity
+        env:
+          EXISTING_DIGEST: ${{ steps.api_existing.outputs.digest }}
+          BUILT_DIGEST: ${{ steps.api.outputs.digest }}
+        run: |
+          set -euo pipefail
+          digest="${EXISTING_DIGEST:-$BUILT_DIGEST}"
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve an existing Worker manifest for idempotent recovery
+        id: worker_existing
+        env:
+          REPOSITORY: ${{ env.WORKER_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          version_ref="${REPOSITORY}:${VERSION}"
+          commit_ref="${REPOSITORY}:sha-${GITHUB_SHA}"
+          version_exists=false
+          commit_exists=false
+          if docker buildx imagetools inspect "$version_ref" --format '{{.Manifest.Digest}}' > version-digest.txt 2>/dev/null; then version_exists=true; fi
+          if docker buildx imagetools inspect "$commit_ref" --format '{{.Manifest.Digest}}' > commit-digest.txt 2>/dev/null; then commit_exists=true; fi
+          if [[ "$version_exists" == true && "$commit_exists" == false ]]; then
+            digest="$(cat version-digest.txt)"
+            docker buildx imagetools create --tag "$commit_ref" "${REPOSITORY}@${digest}"
+            docker buildx imagetools inspect "$commit_ref" --format '{{.Manifest.Digest}}' > commit-digest.txt
+            commit_exists=true
+          elif [[ "$version_exists" == false && "$commit_exists" == true ]]; then
+            digest="$(cat commit-digest.txt)"
+            docker buildx imagetools create --tag "$version_ref" "${REPOSITORY}@${digest}"
+            docker buildx imagetools inspect "$version_ref" --format '{{.Manifest.Digest}}' > version-digest.txt
+            version_exists=true
+          fi
+          if [[ "$version_exists" == true ]]; then
+            version_digest="$(cat version-digest.txt)"
+            commit_digest="$(cat commit-digest.txt)"
+            test "$version_digest" = "$commit_digest"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$version_digest" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build and publish immutable multi-architecture Worker image
         id: worker
+        if: steps.worker_existing.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -336,8 +659,52 @@ jobs:
           tags: |
             ${{ env.WORKER_REPOSITORY }}:${{ env.VERSION }}
             ${{ env.WORKER_REPOSITORY }}:sha-${{ github.sha }}
+      - name: Bind the immutable Worker manifest
+        id: worker_identity
+        env:
+          EXISTING_DIGEST: ${{ steps.worker_existing.outputs.digest }}
+          BUILT_DIGEST: ${{ steps.worker.outputs.digest }}
+        run: |
+          set -euo pipefail
+          digest="${EXISTING_DIGEST:-$BUILT_DIGEST}"
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve an existing Golden manifest for idempotent recovery
+        id: profile_existing
+        env:
+          REPOSITORY: ${{ env.PROFILE_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          version_ref="${REPOSITORY}:${VERSION}"
+          commit_ref="${REPOSITORY}:sha-${GITHUB_SHA}"
+          version_exists=false
+          commit_exists=false
+          if docker buildx imagetools inspect "$version_ref" --format '{{.Manifest.Digest}}' > version-digest.txt 2>/dev/null; then version_exists=true; fi
+          if docker buildx imagetools inspect "$commit_ref" --format '{{.Manifest.Digest}}' > commit-digest.txt 2>/dev/null; then commit_exists=true; fi
+          if [[ "$version_exists" == true && "$commit_exists" == false ]]; then
+            digest="$(cat version-digest.txt)"
+            docker buildx imagetools create --tag "$commit_ref" "${REPOSITORY}@${digest}"
+            docker buildx imagetools inspect "$commit_ref" --format '{{.Manifest.Digest}}' > commit-digest.txt
+            commit_exists=true
+          elif [[ "$version_exists" == false && "$commit_exists" == true ]]; then
+            digest="$(cat commit-digest.txt)"
+            docker buildx imagetools create --tag "$version_ref" "${REPOSITORY}@${digest}"
+            docker buildx imagetools inspect "$version_ref" --format '{{.Manifest.Digest}}' > version-digest.txt
+            version_exists=true
+          fi
+          if [[ "$version_exists" == true ]]; then
+            version_digest="$(cat version-digest.txt)"
+            commit_digest="$(cat commit-digest.txt)"
+            test "$version_digest" = "$commit_digest"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$version_digest" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build and publish immutable multi-architecture remote Golden Stack sandbox
         id: profile
+        if: steps.profile_existing.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -347,7 +714,7 @@ jobs:
           sbom: true
           provenance: mode=max
           build-args: |
-            REEF_VERIFICATION_API_IMAGE=${{ env.API_REPOSITORY }}@${{ steps.api.outputs.digest }}
+            REEF_VERIFICATION_API_IMAGE=${{ env.API_REPOSITORY }}@${{ steps.api_identity.outputs.digest }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -356,12 +723,22 @@ jobs:
           tags: |
             ${{ env.PROFILE_REPOSITORY }}:${{ env.VERSION }}
             ${{ env.PROFILE_REPOSITORY }}:sha-${{ github.sha }}
+      - name: Bind the immutable Golden manifest
+        id: profile_identity
+        env:
+          EXISTING_DIGEST: ${{ steps.profile_existing.outputs.digest }}
+          BUILT_DIGEST: ${{ steps.profile.outputs.digest }}
+        run: |
+          set -euo pipefail
+          digest="${EXISTING_DIGEST:-$BUILT_DIGEST}"
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Verify exact manifest platforms and capture platform digests
         env:
-          API_DIGEST: ${{ steps.api.outputs.digest }}
-          WORKER_DIGEST: ${{ steps.worker.outputs.digest }}
-          PROFILE_DIGEST: ${{ steps.profile.outputs.digest }}
+          API_DIGEST: ${{ steps.api_identity.outputs.digest }}
+          WORKER_DIGEST: ${{ steps.worker_identity.outputs.digest }}
+          PROFILE_DIGEST: ${{ steps.profile_identity.outputs.digest }}
         run: |
           set -euo pipefail
           for pair in \
@@ -381,53 +758,62 @@ jobs:
       - name: Generate registry SBOMs
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.API_REPOSITORY }}@${{ steps.api.outputs.digest }}
+          image: ${{ env.API_REPOSITORY }}@${{ steps.api_identity.outputs.digest }}
           format: cyclonedx-json
           output-file: api-image.cdx.json
       - name: Generate Worker registry SBOM
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.WORKER_REPOSITORY }}@${{ steps.worker.outputs.digest }}
+          image: ${{ env.WORKER_REPOSITORY }}@${{ steps.worker_identity.outputs.digest }}
           format: cyclonedx-json
           output-file: worker-image.cdx.json
       - name: Generate Golden Stack sandbox registry SBOM
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.PROFILE_REPOSITORY }}@${{ steps.profile.outputs.digest }}
+          image: ${{ env.PROFILE_REPOSITORY }}@${{ steps.profile_identity.outputs.digest }}
           format: cyclonedx-json
           output-file: profile-image.cdx.json
       - name: Scan published content-addressed API image
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
-          image-ref: ${{ env.API_REPOSITORY }}@${{ steps.api.outputs.digest }}
+          image-ref: ${{ env.API_REPOSITORY }}@${{ steps.api_identity.outputs.digest }}
+          scanners: vuln,secret
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          format: json
+          output: api-image.trivy.json
           exit-code: "1"
       - name: Scan published content-addressed Worker image
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
-          image-ref: ${{ env.WORKER_REPOSITORY }}@${{ steps.worker.outputs.digest }}
+          image-ref: ${{ env.WORKER_REPOSITORY }}@${{ steps.worker_identity.outputs.digest }}
+          scanners: vuln,secret
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          format: json
+          output: worker-image.trivy.json
           exit-code: "1"
       - name: Scan published content-addressed Golden Stack sandbox
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
-          image-ref: ${{ env.PROFILE_REPOSITORY }}@${{ steps.profile.outputs.digest }}
+          image-ref: ${{ env.PROFILE_REPOSITORY }}@${{ steps.profile_identity.outputs.digest }}
+          scanners: vuln,secret
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          format: json
+          output: profile-image.trivy.json
           exit-code: "1"
 
       - name: Generate the exact server-registered Golden Stack profile
         env:
-          PROFILE_DIGEST: ${{ steps.profile.outputs.digest }}
+          PROFILE_DIGEST: ${{ steps.profile_identity.outputs.digest }}
         run: |
           set -euo pipefail
           npm run build --workspace @octopus-reef/verification
           node scripts/write-verification-remote-profile.mjs "$PROFILE_DIGEST" golden-profile.json
           jq -e --arg digest "$PROFILE_DIGEST" '
             .ref == "verification-profile:golden-next-fastapi-postgres" and
-            .version == "1.0.2" and
+            .version == "1.1.0" and
             .sandboxImageDigest == $digest and
             (.checks | length == 8) and
             (.checks | all(.[]; .required == true and .tool.imageDigest == $digest))
@@ -438,8 +824,21 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          npm publish --provenance --access public --workspace @octopus-reef/verification
-          npm publish --provenance --access public --workspace @octopus-reef/control-plane
+          expected_verification_integrity="$(jq -r '.packages.verification.integrity' release-assets/verification-package-gate.json)"
+          expected_control_integrity="$(jq -r '.packages.controlPlane.integrity' release-assets/verification-package-gate.json)"
+          if npm view "@octopus-reef/verification@${VERSION}" --json > verification-existing.json 2>/dev/null; then
+            test "$(jq -r '.gitHead' verification-existing.json)" = "$GITHUB_SHA"
+            test "$(jq -r '.dist.integrity' verification-existing.json)" = "$expected_verification_integrity"
+          else
+            npm publish --provenance --access public --workspace @octopus-reef/verification
+          fi
+          if npm view "@octopus-reef/control-plane@${VERSION}" --json > control-plane-existing.json 2>/dev/null; then
+            test "$(jq -r '.gitHead' control-plane-existing.json)" = "$GITHUB_SHA"
+            test "$(jq -r '.dist.integrity' control-plane-existing.json)" = "$expected_control_integrity"
+            test "$(jq -r '.dependencies[\"@octopus-reef/verification\"]' control-plane-existing.json)" = "$VERSION"
+          else
+            npm publish --provenance --access public --workspace @octopus-reef/control-plane
+          fi
 
       - name: Verify public npm identities before finalizing the Release
         run: |
@@ -452,14 +851,17 @@ jobs:
 
       - name: Create the digest-bound release record
         env:
-          API_DIGEST: ${{ steps.api.outputs.digest }}
-          WORKER_DIGEST: ${{ steps.worker.outputs.digest }}
-          PROFILE_DIGEST: ${{ steps.profile.outputs.digest }}
+          API_DIGEST: ${{ steps.api_identity.outputs.digest }}
+          WORKER_DIGEST: ${{ steps.worker_identity.outputs.digest }}
+          PROFILE_DIGEST: ${{ steps.profile_identity.outputs.digest }}
         run: |
           set -euo pipefail
           migration_digest="$(jq -r '.migrationSetDigest' release-assets/verification-package-gate.json)"
-          migration_exact="$(jq -r '.migrationBindings[0].exactBytes' release-assets/verification-package-gate.json)"
-          test "$migration_exact" = true
+          jq -e '
+            .schemaHead == "0002_materialization" and
+            (.migrationBindings | length == 2) and
+            (.migrationBindings | all(.[]; .exactBytes == true))
+          ' release-assets/verification-package-gate.json
           profile_ref="$(jq -r '.ref' golden-profile.json)"
           profile_version="$(jq -r '.version' golden-profile.json)"
           profile_digest="$(jq -r '.digest' golden-profile.json)"
@@ -477,12 +879,13 @@ jobs:
             --arg profileVersion "$profile_version" \
             --arg profileDigest "$profile_digest" \
             --slurpfile candidate release-assets/candidate-report.json \
+            --slurpfile gate release-assets/verification-package-gate.json \
             --slurpfile control control-plane-registry.json \
             --slurpfile verification verification-registry.json \
             '{
-              schemaVersion: "reef.verification-release.v1",
-              package: {name: "@octopus-reef/control-plane", version: "0.2.2"},
-              internalPackage: {name: "@octopus-reef/verification", version: "0.2.2"},
+              schemaVersion: "reef.verification-release.v2",
+              package: {name: "@octopus-reef/control-plane", version: "0.3.0"},
+              internalPackage: {name: "@octopus-reef/verification", version: "0.3.0"},
               gitTag: $gitTag,
               gitCommit: $gitCommit,
               apiImage: {repository: $apiRepository, manifestDigest: $apiDigest},
@@ -502,16 +905,65 @@ jobs:
                   gitHead: $verification[0].gitHead
                 }
               },
-              schemaHead: "0001_verification",
+              schemaHead: "0002_materialization",
               migrationSetDigest: $migrationSetDigest,
-              migrationBinding: {
-                asset: "migrations/0001_verification.sql",
-                runtimeModule: "dist/adapters/migrations.js",
-                exactBytes: true
+              migrationDigestAlgorithm: $gate[0].migrationDigestAlgorithm,
+              migrationBindings: (
+                $gate[0].migrationBindings |
+                map(. + {releaseAsset: (.asset | split("/") | last)})
+              ),
+              materializationContract: {
+                contractVersion: "1.0.0",
+                requestSchema: "octopus.reef.external-materialization-request/v1",
+                builderInventorySchema: "octopus.builder.source-bundle/v1",
+                runtimeDescriptorSchema: "octopus.reef.materialization-descriptor/v1",
+                publicIdentitySchema: "octopus.reef.materialization/v1",
+                builderDigestCanonicalization: "lowercase sha256: plus octopus-evidence canonicalHash over the displayed Builder inventory fields excluding sourceBundleDigest",
+                runtimeDescriptorCanonicalization: "lowercase sha256: plus octopus-evidence canonicalHash over the complete runtime descriptor excluding descriptorDigest",
+                entryOrdering: "strict ascending UTF-8 path bytes",
+                unicodeNormalization: "NFC",
+                pathSemantics: "portable-nfc-casefold-v1 = NFC(lowercase(uppercase(NFC(path)))) using locale-independent ECMAScript casing",
+                authoritativeSourceBundleDigest: "Builder-owned and candidate-bound",
+                runtimeDescriptorDigest: "Reef-owned and attempt-bound",
+                defaultLimits: {
+                  maxFiles: 20000,
+                  maxFileBytes: 16777216,
+                  maxTotalBytes: 536870912,
+                  maxPathBytes: 1024
+                }
+              },
+              workloadAuthContract: {
+                jwt: "offline deployment-owned JWKS; RS256 only",
+                tenantBinding: "organisationRef exact and projectRef explicit membership",
+                permissions: [
+                  "verification:create",
+                  "verification:read",
+                  "verification:retry",
+                  "verification:cancel",
+                  "verification:evidence:read"
+                ]
+              },
+              healthContract: {
+                live: {path: "/health/live", response: {status: "live"}},
+                ready: {path: "/health/ready", response: {status: "ready"}, dependency: "PostgreSQL schema head"},
+                sandboxReady: {path: "/readyz", response: {ready: true, service: "reef-verification-sandbox"}}
               },
               profile: {ref: $profileRef, version: $profileVersion, digest: $profileDigest},
               typedClientContract: "/v1/verifications",
               evidenceContract: "octopus-evidence@0.2.0/store-untrusting",
+              compatibilityPolicy: "DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md",
+              testSummary: "preflight-test-summary.json",
+              scanEvidence: {
+                prePublish: "preflight-*.trivy.json",
+                published: ["api-image.trivy.json", "worker-image.trivy.json", "profile-image.trivy.json"],
+                fixedHighCritical: 0,
+                secrets: 0
+              },
+              provenance: {
+                npm: "npm publish --provenance",
+                oci: "BuildKit mode=max provenance and SBOM attestation manifests"
+              },
+              knownUnverified: $candidate[0].knownUnverified,
               status: "public-candidate-awaiting-detached-audit",
               candidateReport: $candidate[0],
               independentAudit: {
@@ -524,9 +976,9 @@ jobs:
       - name: Create immutable public prerelease awaiting registry/tag/digest black-box audit
         env:
           GH_TOKEN: ${{ github.token }}
-          API_DIGEST: ${{ steps.api.outputs.digest }}
-          WORKER_DIGEST: ${{ steps.worker.outputs.digest }}
-          PROFILE_DIGEST: ${{ steps.profile.outputs.digest }}
+          API_DIGEST: ${{ steps.api_identity.outputs.digest }}
+          WORKER_DIGEST: ${{ steps.worker_identity.outputs.digest }}
+          PROFILE_DIGEST: ${{ steps.profile_identity.outputs.digest }}
         run: |
           set -euo pipefail
           checks_digest="sha256:$(sha256sum verification-release-record.json | awk '{print $1}')"
@@ -541,11 +993,39 @@ jobs:
           Supported entrypoints: reef-verification migrate, reef-verification api,
           and reef-verification worker. Pin package, tag and images exactly; mutable
           tags and partial artifacts are not compatible release identities.
+
+          This immutable public candidate includes canonical decimal cursors,
+          store-untrusting Evidence identity binding, and the versioned external
+          materialization Port. Status: READY FOR FRESH INDEPENDENT AUDIT.
+          It is not a Builder GO decision.
           EOF
           cp release-assets/verification-package-gate.json .
           cp release-assets/verification-package.cdx.json .
           cp release-assets/control-plane-package.cdx.json .
           cp release-assets/candidate-report.json .
+          cp release-assets/preflight-*.json .
+          cp release-assets/packages/verification/migrations/0001_verification.sql .
+          cp release-assets/packages/verification/migrations/0002_materialization.sql .
+          cp release-assets/docs/DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md .
+          recovery="$(mktemp -d)"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            asset_count="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')"
+            if test "$asset_count" -gt 0; then
+              gh release download "$GITHUB_REF_NAME" --dir "$recovery"
+            fi
+            for existing in "$recovery"/*; do
+              test -f "$existing" || continue
+              name="$(basename "$existing")"
+              case "$name" in
+                release-bundle.sha256|release-bundle.sha256.sha256) ;;
+                *) cp "$existing" "$name" ;;
+              esac
+            done
+            if test -f verification-release-record.json; then
+              test "$(jq -r '.gitCommit' verification-release-record.json)" = "$GITHUB_SHA"
+            fi
+          fi
+          sha256sum --check verification-release-record.sha256
           sha256sum \
             verification-release-record.json \
             verification-release-record.sha256 \
@@ -556,26 +1036,71 @@ jobs:
             verification-package-gate.json \
             verification-package.cdx.json \
             control-plane-package.cdx.json \
+            preflight-api-image.cdx.json \
+            preflight-api-arm64-image.cdx.json \
+            preflight-worker-image.cdx.json \
+            preflight-worker-arm64-image.cdx.json \
+            preflight-golden-image.cdx.json \
+            preflight-golden-arm64-image.cdx.json \
+            preflight-source.trivy.json \
+            preflight-api.trivy.json \
+            preflight-api-arm64.trivy.json \
+            preflight-worker.trivy.json \
+            preflight-worker-arm64.trivy.json \
+            preflight-golden.trivy.json \
+            preflight-golden-arm64.trivy.json \
+            preflight-remote-golden.trivy.json \
+            preflight-remote-golden-arm64.trivy.json \
+            api-image.trivy.json worker-image.trivy.json profile-image.trivy.json \
+            preflight-test-summary.json \
+            0001_verification.sql \
+            0002_materialization.sql \
+            DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md \
             candidate-report.json \
             > release-bundle.sha256
           sha256sum release-bundle.sha256 > release-bundle.sha256.sha256
-          gh release create "$GITHUB_REF_NAME" \
-            --verify-tag \
-            --prerelease \
-            --title "@octopus-reef/control-plane ${VERSION} deterministic verification" \
-            --notes-file release-notes.md \
-            verification-release-record.json \
-            verification-release-record.sha256 \
-            golden-profile.json \
-            api-manifest.json worker-manifest.json profile-manifest.json \
-            api-image.cdx.json worker-image.cdx.json profile-image.cdx.json \
-            verification-registry.json control-plane-registry.json \
-            verification-package-gate.json \
-            verification-package.cdx.json \
-            control-plane-package.cdx.json \
-            candidate-report.json \
-            release-bundle.sha256 \
-            release-bundle.sha256.sha256
+          if test -f "$recovery/release-bundle.sha256"; then
+            cmp "$recovery/release-bundle.sha256" release-bundle.sha256
+          fi
+          if test -f "$recovery/release-bundle.sha256.sha256"; then
+            cmp "$recovery/release-bundle.sha256.sha256" release-bundle.sha256.sha256
+          fi
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --prerelease \
+              --title "@octopus-reef/control-plane ${VERSION} deterministic verification" \
+              --notes-file release-notes.md
+          fi
+          assets=(
+            verification-release-record.json
+            verification-release-record.sha256
+            golden-profile.json
+            api-manifest.json worker-manifest.json profile-manifest.json
+            api-image.cdx.json worker-image.cdx.json profile-image.cdx.json
+            verification-registry.json control-plane-registry.json
+            verification-package-gate.json
+            verification-package.cdx.json control-plane-package.cdx.json
+            preflight-api-image.cdx.json preflight-api-arm64-image.cdx.json
+            preflight-worker-image.cdx.json preflight-worker-arm64-image.cdx.json
+            preflight-golden-image.cdx.json preflight-golden-arm64-image.cdx.json
+            preflight-source.trivy.json
+            preflight-api.trivy.json preflight-api-arm64.trivy.json
+            preflight-worker.trivy.json preflight-worker-arm64.trivy.json
+            preflight-golden.trivy.json preflight-golden-arm64.trivy.json
+            preflight-remote-golden.trivy.json preflight-remote-golden-arm64.trivy.json
+            api-image.trivy.json worker-image.trivy.json profile-image.trivy.json
+            preflight-test-summary.json
+            0001_verification.sql 0002_materialization.sql
+            DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md
+            candidate-report.json
+            release-bundle.sha256 release-bundle.sha256.sha256
+          )
+          for asset in "${assets[@]}"; do
+            if ! gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | grep -Fx "$asset" >/dev/null; then
+              gh release upload "$GITHUB_REF_NAME" "$asset"
+            fi
+          done
 
       - name: Prove the candidate bundle is anonymously public
         env:

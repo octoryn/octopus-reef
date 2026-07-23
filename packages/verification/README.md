@@ -4,11 +4,11 @@
 It is independent from `AgentRun`: it does not load a model, Agent kernel, Git
 workspace, or review/approval workflow.
 
-The formal 0.2 API is also exposed by
-`@octopus-reef/control-plane@0.2.2/verification` and its subpaths. Consumers
+The formal 0.3 API is also exposed by
+`@octopus-reef/control-plane@0.3.0/verification` and its subpaths. Consumers
 that use the Builder compatibility contract should pin
-`@octopus-reef/control-plane@0.2.2` exactly. The control-plane package declares
-an exact dependency on this package at 0.2.2; a workspace-only package is not a
+`@octopus-reef/control-plane@0.3.0` exactly. The control-plane package declares
+an exact dependency on this package at 0.3.0; a workspace-only package is not a
 compatible release.
 
 ## Public contract
@@ -81,7 +81,9 @@ The stable deployment-neutral boundary is `ExternalMaterializationPort` with
 contract version `1.0.0`. `DeterministicSourceBundleMaterializer` accepts that
 Port directly. `SourceBundleStoreMaterializationBridge` adapts a trusted local,
 ArtifactStore, or S3-backed server-side store without exposing its location or
-credentials.
+credentials. It is available from both
+`@octopus-reef/verification/materialization` and
+`@octopus-reef/control-plane/verification/materialization`.
 
 The Port request schema is
 `octopus.reef.external-materialization-request/v1`. It contains exactly the
@@ -188,10 +190,21 @@ configuration-name inventory are documented in
 ## Compatibility
 
 The existing 0.1.x AgentRun surface remains separate and unchanged. Importing
-the verification subpaths does not alias or reinterpret an AgentRun. The 0.2
-release line adds the new Verification Run product surface; later patch
-releases may make backward-compatible fixes, while request/state/Evidence
-schema breaks require a new API and package minor or major version.
+the verification subpaths does not alias or reinterpret an AgentRun.
+
+Version 0.3.0 requires an exact, coordinated upgrade from 0.2.2. The HTTP
+creation identity and endpoint remain v1, but the Worker source-materialization
+input changes to the Builder-owned `octopus.builder.source-bundle/v1`
+inventory, canonical cursors are enforced at every boundary, and successful
+new runs persist materialization identity. There is intentionally no legacy
+descriptor reader, version range, or fallback. Migrate PostgreSQL to
+`0002_materialization`, drain or cancel non-terminal 0.2.2 runs, install both
+0.3.0 packages exactly, populate the Builder v1 inventory, then roll API and
+Worker together. Historical terminal runs and Evidence without materialization
+remain readable.
+
+The complete ordered cutover and rollback constraints are documented in
+`docs/DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md`.
 
 Release candidates must pass the checked-in pre-publish gate, real PostgreSQL
 and isolated Docker acceptance, clean tarball installation, package/image
