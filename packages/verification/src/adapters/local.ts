@@ -292,6 +292,10 @@ class LocalVerificationSandbox implements VerificationSandbox {
 
 export interface DockerVerificationSandboxOptions {
   readonly root: string;
+  /**
+   * Non-root user declared by the trusted sandbox image. Its primary group is
+   * replaced with the Worker's numeric group for private bind-mount access.
+   */
   readonly user?: string;
   readonly memory?: string;
   readonly cpus?: string;
@@ -304,11 +308,13 @@ export class DockerVerificationSandboxProvisioner implements VerificationSandbox
   readonly #root: string;
   readonly #options: DockerVerificationSandboxOptions;
   readonly #dockerEnvironment: Readonly<Record<string, string>>;
+  readonly #user: string;
 
   constructor(options: DockerVerificationSandboxOptions) {
     mkdirSync(options.root, { recursive: true, mode: 0o700 });
     this.#root = resolve(options.root);
     this.#options = options;
+    this.#user = dockerRuntimeUser(options.user);
     this.#dockerEnvironment =
       options.dockerHost === undefined
         ? {}
@@ -326,7 +332,7 @@ export class DockerVerificationSandboxProvisioner implements VerificationSandbox
       hash(`${spec.runRef}\0${spec.attempt}`),
     );
     mkdirSync(workspace, { recursive: true, mode: 0o700 });
-    chmodSync(workspace, 0o777);
+    chmodSync(workspace, 0o770);
     const name = `reef-verification-${hash(`${tenantHash(spec)}\0${spec.runRef}\0${spec.attempt}`).slice(0, 32)}`;
     const created = await runProcess(
       [
@@ -348,17 +354,19 @@ export class DockerVerificationSandboxProvisioner implements VerificationSandbox
         "--cpus",
         this.#options.cpus ?? "2",
         "--user",
-        this.#options.user ?? "65532:65532",
+        this.#user,
         "--tmpfs",
         "/tmp:rw,noexec,nosuid,nodev,size=128m",
         "--env",
         "AWS_EC2_METADATA_DISABLED=true",
+        "--env",
+        "HOME=/tmp/reef-home",
         "--mount",
         `type=bind,src=${workspace},dst=/workspace`,
         spec.imageDigest,
         "sh",
         "-c",
-        "trap : TERM INT; sleep infinity & wait",
+        "mkdir -p /tmp/reef-home && trap : TERM INT; sleep infinity & wait",
       ],
       process.cwd(),
       this.#dockerEnvironment,
@@ -430,6 +438,24 @@ export class DockerVerificationSandboxProvisioner implements VerificationSandbox
   }
 }
 
+function dockerRuntimeUser(configured: string | undefined): string {
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  if (uid === undefined || gid === undefined) {
+    throw new Error(
+      "Docker sandbox bind mounts require a numeric POSIX workspace owner",
+    );
+  }
+  if (uid === 0 || gid === 0) {
+    throw new Error("Docker sandbox refuses a root workspace owner");
+  }
+  const user = configured ?? "65532";
+  if (!/^(?:[1-9][0-9]*|[a-z_][a-z0-9_-]*)$/.test(user) || user === "root") {
+    throw new Error("Docker sandbox user must be one non-root user or UID");
+  }
+  return `${user}:${gid}`;
+}
+
 class DockerVerificationSandbox extends LocalVerificationSandbox {
   readonly #dockerEnvironment: Readonly<Record<string, string>>;
 
@@ -440,6 +466,22 @@ class DockerVerificationSandbox extends LocalVerificationSandbox {
   ) {
     super(id, workspacePath);
     this.#dockerEnvironment = dockerEnvironment;
+  }
+
+  override async writeFile(
+    path: string,
+    content: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<void> {
+    await super.writeFile(path, content, signal);
+    const target = safeWorkspacePath(this.workspacePath, path, true);
+    chmodSync(target, 0o660);
+    let directory = dirname(target);
+    for (;;) {
+      chmodSync(directory, 0o770);
+      if (directory === this.workspacePath) break;
+      directory = dirname(directory);
+    }
   }
 
   override execute(

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -20,7 +21,10 @@ import {
   type VerificationRun,
   type VerificationSandbox,
 } from "../src/index.js";
-import { LocalSourceBundleStore } from "../src/adapters/local.js";
+import {
+  DockerVerificationSandboxProvisioner,
+  LocalSourceBundleStore,
+} from "../src/adapters/local.js";
 
 const tenant = {
   organisationRef: "organisation:materializer",
@@ -105,6 +109,23 @@ test("local source store rejects symlink and hardlink objects", async (t) => {
   await assert.rejects(
     store.content(tenant, contentRef),
     /not one regular unlinked file/,
+  );
+});
+
+test("Docker sandbox rejects root and keeps its host root private", (t) => {
+  if (process.getuid?.() === undefined || process.getuid() === 0) {
+    t.skip("a non-root POSIX host identity is required");
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), "reef-verification-docker-owner-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  assert.throws(
+    () => new DockerVerificationSandboxProvisioner({ root, user: "root" }),
+    /must be one non-root user or UID/,
+  );
+  assert.equal(statSync(root).mode & 0o777, 0o700);
+  assert.doesNotThrow(
+    () => new DockerVerificationSandboxProvisioner({ root, user: "node" }),
   );
 });
 
