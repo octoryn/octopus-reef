@@ -122,7 +122,12 @@ jobs:
           frontend_port="$(docker compose -p reef-verification-golden-compose -f "$compose" port frontend 3000 | sed 's/.*://')"
           curl --fail --silent "http://127.0.0.1:${backend_port}/health" | jq -e '.status == "ready" and .component == "backend"'
           curl --fail --silent "http://127.0.0.1:${frontend_port}/api/health" | jq -e '.status == "ready" and .component == "frontend"'
-          test "$(docker compose -p reef-verification-golden-compose -f "$compose" ps migration --all --format json | jq -r '.[0].ExitCode')" = 0
+          docker compose -p reef-verification-golden-compose -f "$compose" ps migration --all --format json | jq -e '
+            (if type == "array" then . else [.] end) |
+            (length == 1) and
+            (.[0].Service == "migration") and
+            (.[0].ExitCode == 0)
+          '
 
       - name: Build and smoke immutable API and Worker targets before publication
         env:

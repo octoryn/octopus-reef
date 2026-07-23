@@ -91,6 +91,7 @@ for (const marker of [
   "verification-release-record.json",
   "REEF_TEST_DOCKER_IMAGE",
   "docker compose",
+  'if type == "array" then . else [.] end',
   "PROFILE_REPOSITORY",
   "golden-profile.json",
   "npm rebuild better-sqlite3",
