@@ -19,6 +19,7 @@ env:
   RELEASE_COMMIT: 0f48f1eba430db0919e94736639d329db7774bb8
   INITIAL_RUN_ID: "29973863378"
   PRIVATE_PROVENANCE_RUN_ID: "29975098080"
+  PUBLIC_NPM_PROVENANCE_RUN_ID: "29975891601"
   API_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-api
   API_DIGEST: sha256:5c92606b97fda21b3e9070a1e669a2f50f0a9685c174c74c6a5670f4674b82ac
   WORKER_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-worker
@@ -59,8 +60,38 @@ jobs:
           test "$(node -p 'require("./packages/verification/package.json").version')" = "$VERSION"
           test "$(node -p 'require("./packages/control-plane/package.json").dependencies["@octopus-reef/verification"]')" = "$VERSION"
           test "$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.visibility')" = "public"
-          ! npm view "@octopus-reef/control-plane@${VERSION}" version >/dev/null 2>&1
-          ! npm view "@octopus-reef/verification@${VERSION}" version >/dev/null 2>&1
+          curl --fail --silent --show-error --location \
+            --retry 12 --retry-all-errors --retry-delay 5 \
+            "https://registry.npmjs.org/@octopus-reef%2fverification/${VERSION}" \
+            > verification-registry.json
+          curl --fail --silent --show-error --location \
+            --retry 12 --retry-all-errors --retry-delay 5 \
+            "https://registry.npmjs.org/@octopus-reef%2fcontrol-plane/${VERSION}" \
+            > control-plane-registry.json
+          repository_url="git+https://github.com/${GITHUB_REPOSITORY}.git"
+          jq -e \
+            --arg version "$VERSION" \
+            --arg commit "$RELEASE_COMMIT" \
+            --arg repositoryUrl "$repository_url" '
+              .name == "@octopus-reef/verification" and
+              .version == $version and
+              .gitHead == $commit and
+              .repository.url == $repositoryUrl and
+              .dependencies["octopus-evidence"] == "^0.2.0" and
+              .dist.attestations.provenance.predicateType == "https://slsa.dev/provenance/v1"
+            ' verification-registry.json
+          jq -e \
+            --arg version "$VERSION" \
+            --arg commit "$RELEASE_COMMIT" \
+            --arg repositoryUrl "$repository_url" '
+              .name == "@octopus-reef/control-plane" and
+              .version == $version and
+              .gitHead == $commit and
+              .repository.url == $repositoryUrl and
+              .dependencies["@octopus-reef/verification"] == $version and
+              .dependencies["octopus-evidence"] == "^0.2.0" and
+              .dist.attestations.provenance.predicateType == "https://slsa.dev/provenance/v1"
+            ' control-plane-registry.json
           ! gh release view "$RELEASE_TAG" >/dev/null 2>&1
 
       - name: Verify exact existing manifests, platforms and OCI provenance
@@ -94,6 +125,81 @@ jobs:
           npm audit --audit-level=high
           npm sbom --workspace @octopus-reef/verification --sbom-format cyclonedx > verification-package.cdx.json
           npm sbom --workspace @octopus-reef/control-plane --sbom-format cyclonedx > control-plane-package.cdx.json
+          registry_compare="$(mktemp -d "${RUNNER_TEMP}/reef-registry-compare.XXXXXX")"
+          cleanup_registry_compare() {
+            rm -rf "$registry_compare"
+          }
+          trap cleanup_registry_compare EXIT
+          mkdir -p \
+            "$registry_compare/local" \
+            "$registry_compare/verification-local" \
+            "$registry_compare/verification-registry" \
+            "$registry_compare/control-local" \
+            "$registry_compare/control-registry"
+          verification_pack="$(npm pack --silent --workspace @octopus-reef/verification --pack-destination "$registry_compare/local")"
+          control_pack="$(npm pack --silent --workspace @octopus-reef/control-plane --pack-destination "$registry_compare/local")"
+          verification_tarball_url="$(jq -r '.dist.tarball' verification-registry.json)"
+          control_tarball_url="$(jq -r '.dist.tarball' control-plane-registry.json)"
+          test "$verification_tarball_url" = "https://registry.npmjs.org/@octopus-reef/verification/-/verification-${VERSION}.tgz"
+          test "$control_tarball_url" = "https://registry.npmjs.org/@octopus-reef/control-plane/-/control-plane-${VERSION}.tgz"
+          curl --fail --silent --show-error --location \
+            "$verification_tarball_url" \
+            --output "$registry_compare/verification-registry.tgz"
+          curl --fail --silent --show-error --location \
+            "$control_tarball_url" \
+            --output "$registry_compare/control-registry.tgz"
+          verify_registry_tarball() {
+            metadata="$1"
+            tarball="$2"
+            test "$(sha1sum "$tarball" | awk '{print $1}')" = "$(jq -r '.dist.shasum' "$metadata")"
+            actual_integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | base64 -w 0)"
+            test "$actual_integrity" = "$(jq -r '.dist.integrity' "$metadata")"
+            while IFS= read -r member; do
+              case "$member" in
+                package | package/*) ;;
+                *) return 1 ;;
+              esac
+              [[
+                "$member" != ".." &&
+                  "$member" != "../"* &&
+                  "$member" != *"/../"* &&
+                  "$member" != *"/.."
+              ]]
+            done < <(tar -tzf "$tarball")
+          }
+          verify_registry_tarball verification-registry.json "$registry_compare/verification-registry.tgz"
+          verify_registry_tarball control-plane-registry.json "$registry_compare/control-registry.tgz"
+          tar -xzf "$registry_compare/local/$verification_pack" -C "$registry_compare/verification-local"
+          tar -xzf "$registry_compare/verification-registry.tgz" -C "$registry_compare/verification-registry"
+          tar -xzf "$registry_compare/local/$control_pack" -C "$registry_compare/control-local"
+          tar -xzf "$registry_compare/control-registry.tgz" -C "$registry_compare/control-registry"
+          diff -qr \
+            "$registry_compare/verification-local/package" \
+            "$registry_compare/verification-registry/package"
+          diff -qr \
+            "$registry_compare/control-local/package" \
+            "$registry_compare/control-registry/package"
+          directory_digest() {
+            (
+              cd "$1"
+              find . -printf 'metadata\t%P\t%m\t%y\t%l\n' | LC_ALL=C sort
+              find . -type f -print0 | sort -z | xargs -0 sha256sum
+            ) | sha256sum | awk '{print "sha256:" $1}'
+          }
+          verification_local_digest="$(directory_digest "$registry_compare/verification-local/package")"
+          verification_registry_digest="$(directory_digest "$registry_compare/verification-registry/package")"
+          control_local_digest="$(directory_digest "$registry_compare/control-local/package")"
+          control_registry_digest="$(directory_digest "$registry_compare/control-registry/package")"
+          test "$verification_local_digest" = "$verification_registry_digest"
+          test "$control_local_digest" = "$control_registry_digest"
+          jq -n \
+            --arg verification "$verification_registry_digest" \
+            --arg controlPlane "$control_registry_digest" \
+            '{
+              schemaVersion: "reef.verification-npm-content.v1",
+              verificationContentDigest: $verification,
+              controlPlaneContentDigest: $controlPlane
+            }' > registry-package-content.json
           node scripts/write-verification-golden-profile.mjs "$PROFILE_DIGEST" golden-profile.json
           jq -e --arg digest "$PROFILE_DIGEST" '
             .ref == "verification-profile:golden-next-fastapi-postgres" and
@@ -155,6 +261,7 @@ jobs:
             --arg recoveryCommit "$GITHUB_SHA" \
             --arg initialRunId "$INITIAL_RUN_ID" \
             --arg privateProvenanceRunId "$PRIVATE_PROVENANCE_RUN_ID" \
+            --arg publicNpmProvenanceRunId "$PUBLIC_NPM_PROVENANCE_RUN_ID" \
             --arg recoveryRunId "$GITHUB_RUN_ID" \
             --arg apiDigest "$API_DIGEST" \
             --arg workerDigest "$WORKER_DIGEST" \
@@ -167,19 +274,22 @@ jobs:
               recoveryCommit: $recoveryCommit,
               initialRunId: $initialRunId,
               privateProvenanceRunId: $privateProvenanceRunId,
+              publicNpmProvenanceRunId: $publicNpmProvenanceRunId,
               recoveryRunId: $recoveryRunId,
-              reason: "The initial private-repository run could not persist GitHub repository attestations, and npm rejected native provenance because it requires a public source repository",
+              reason: "The public provenance run published both exact npm packages, then its immediate public identity read observed transient registry 404 responses before propagation completed",
               provenance: "BuildKit SLSA v1 OCI attestations embedded in each digest-bound multi-architecture manifest",
+              npmProvenance: "npm native SLSA provenance published by the public provenance run",
               apiDigest: $apiDigest,
               workerDigest: $workerDigest,
               profileDigest: $profileDigest,
-              npmPublishedBeforeRecovery: false
+              npmPublishedBeforeRecovery: true
             }' > publication-recovery.json
           sha256sum \
             api-manifest.json worker-manifest.json profile-manifest.json \
             api-image.cdx.json worker-image.cdx.json profile-image.cdx.json \
             verification-package.cdx.json control-plane-package.cdx.json \
-            verification-package-gate.json golden-profile.json \
+            verification-package-gate.json registry-package-content.json \
+            verification-registry.json control-plane-registry.json golden-profile.json \
             candidate-report.json publication-recovery.json \
             > recovery-preflight-checks.sha256
 
@@ -198,6 +308,9 @@ jobs:
             verification-package.cdx.json
             control-plane-package.cdx.json
             verification-package-gate.json
+            registry-package-content.json
+            verification-registry.json
+            control-plane-registry.json
             golden-profile.json
             candidate-report.json
             publication-recovery.json
@@ -233,24 +346,38 @@ jobs:
           node scripts/verification-prepublish-gate.mjs > publish-package-gate.json
           cmp release-assets/verification-package-gate.json publish-package-gate.json
 
-      - name: Publish exact compatible npm packages with provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Verify exact already-published npm identities without republishing
         run: |
           set -euo pipefail
-          ! npm view "@octopus-reef/verification@${VERSION}" version >/dev/null 2>&1
-          ! npm view "@octopus-reef/control-plane@${VERSION}" version >/dev/null 2>&1
-          npm publish --provenance --access public --workspace @octopus-reef/verification
-          npm publish --provenance --access public --workspace @octopus-reef/control-plane
-
-      - name: Verify public npm identities
-        run: |
-          set -euo pipefail
-          test "$(npm view "@octopus-reef/verification@${VERSION}" version)" = "$VERSION"
-          test "$(npm view "@octopus-reef/control-plane@${VERSION}" version)" = "$VERSION"
-          test "$(npm view "@octopus-reef/control-plane@${VERSION}" dependencies.@octopus-reef/verification)" = "$VERSION"
-          npm view "@octopus-reef/verification@${VERSION}" --json > verification-registry.json
-          npm view "@octopus-reef/control-plane@${VERSION}" --json > control-plane-registry.json
+          curl --fail --silent --show-error --location \
+            --retry 12 --retry-all-errors --retry-delay 5 \
+            "https://registry.npmjs.org/@octopus-reef%2fverification/${VERSION}" \
+            > verification-registry.json
+          curl --fail --silent --show-error --location \
+            --retry 12 --retry-all-errors --retry-delay 5 \
+            "https://registry.npmjs.org/@octopus-reef%2fcontrol-plane/${VERSION}" \
+            > control-plane-registry.json
+          normalize_registry_identity() {
+            jq -S '{
+              name,
+              version,
+              gitHead,
+              repository,
+              dependencies,
+              dist: {
+                shasum: .dist.shasum,
+                integrity: .dist.integrity,
+                tarball: .dist.tarball,
+                attestations: .dist.attestations
+              }
+            }' "$1"
+          }
+          normalize_registry_identity release-assets/verification-registry.json > expected-verification-registry.json
+          normalize_registry_identity verification-registry.json > actual-verification-registry.json
+          normalize_registry_identity release-assets/control-plane-registry.json > expected-control-plane-registry.json
+          normalize_registry_identity control-plane-registry.json > actual-control-plane-registry.json
+          cmp expected-verification-registry.json actual-verification-registry.json
+          cmp expected-control-plane-registry.json actual-control-plane-registry.json
 
       - name: Create the digest-bound recovered release record
         run: |
@@ -309,6 +436,7 @@ jobs:
           Worker image: ${WORKER_REPOSITORY}@${WORKER_DIGEST}
           Golden Stack profile image: ${PROFILE_REPOSITORY}@${PROFILE_DIGEST}
           Release checks digest: ${checks_digest}
+          npm provenance publication run: ${PUBLIC_NPM_PROVENANCE_RUN_ID}
 
           Each image carries digest-bound BuildKit SLSA v1 OCI provenance and SBOM
           attestations. GitHub repository attestation persistence was unavailable
@@ -333,6 +461,7 @@ jobs:
             release-assets/verification-package.cdx.json \
             release-assets/control-plane-package.cdx.json \
             release-assets/verification-package-gate.json \
+            release-assets/registry-package-content.json \
             release-assets/recovery-preflight-checks.sha256 \
             release-assets/candidate-report.json \
             release-assets/publication-recovery.json
