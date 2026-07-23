@@ -873,11 +873,28 @@ jobs:
       - name: Verify public npm identities before finalizing the Release
         run: |
           set -euo pipefail
-          test "$(npm view "@octopus-reef/verification@${VERSION}" version)" = "$VERSION"
-          test "$(npm view "@octopus-reef/control-plane@${VERSION}" version)" = "$VERSION"
-          test "$(npm view "@octopus-reef/control-plane@${VERSION}" dependencies.@octopus-reef/verification)" = "$VERSION"
-          npm view "@octopus-reef/verification@${VERSION}" --json > verification-registry.json
-          npm view "@octopus-reef/control-plane@${VERSION}" --json > control-plane-registry.json
+          wait_for_public_package() {
+            local package_spec="$1"
+            local output_path="$2"
+            local attempt
+            for attempt in $(seq 1 24); do
+              if npm view "$package_spec" --json > "$output_path" 2>/dev/null &&
+                jq -e --arg version "$VERSION" '.version == $version' "$output_path" >/dev/null; then
+                return 0
+              fi
+              sleep 5
+            done
+            npm view "$package_spec" --json > "$output_path"
+          }
+          wait_for_public_package "@octopus-reef/verification@${VERSION}" verification-registry.json
+          wait_for_public_package "@octopus-reef/control-plane@${VERSION}" control-plane-registry.json
+          test "$(jq -r '.gitHead' verification-registry.json)" = "$RELEASE_COMMIT"
+          test "$(jq -r '.gitHead' control-plane-registry.json)" = "$RELEASE_COMMIT"
+          test "$(jq -r '.dependencies["@octopus-reef/verification"]' control-plane-registry.json)" = "$VERSION"
+          test "$(jq -r '.dist.integrity' verification-registry.json)" = \
+            "$(jq -r '.packages.verification.integrity' release-assets/verification-package-gate.json)"
+          test "$(jq -r '.dist.integrity' control-plane-registry.json)" = \
+            "$(jq -r '.packages.controlPlane.integrity' release-assets/verification-package-gate.json)"
 
       - name: Create the digest-bound release record
         env:
