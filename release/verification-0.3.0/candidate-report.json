@@ -1,0 +1,224 @@
+{
+  "schemaVersion": "reef.verification-candidate-report.v1",
+  "decision": "READY_FOR_INDEPENDENT_AUDIT",
+  "implementationCommit": "1e95b1016bd6a3e52e90c870bcd05d92bd531f0e",
+  "generatedAt": "2026-07-23T09:26:51Z",
+  "baseline": {
+    "annotatedTag": "control-plane-v0.2.2",
+    "peeledCommit": "2b1cbf07f25128109c1efaeca613fa2c0227244d"
+  },
+  "releaseIdentity": {
+    "controlPlane": "@octopus-reef/control-plane@0.3.0",
+    "verification": "@octopus-reef/verification@0.3.0",
+    "verificationDependency": "0.3.0",
+    "intendedAnnotatedTag": "control-plane-v0.3.0",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  },
+  "prepublishGates": {
+    "passed": true,
+    "fullSourceTests": {
+      "passed": true,
+      "tests": 248,
+      "passedTests": 240,
+      "failedTests": 0,
+      "skippedExternalTests": 8,
+      "externalTestsExecutedSeparately": true,
+      "commands": [
+        "npm run verify:all",
+        "npm run verification:prepublish"
+      ]
+    },
+    "format": true,
+    "lint": true,
+    "typecheck": true,
+    "build": true,
+    "actionlint": {
+      "passed": true,
+      "version": "1.7.12"
+    },
+    "dependencyAudit": {
+      "passedAtHighThreshold": true,
+      "critical": 0,
+      "high": 0,
+      "moderate": 4,
+      "moderateNote": "Four no-fix @hono/node-server paths are in unrelated root MCP dependencies; the published candidate images independently passed Trivy."
+    },
+    "registrySignatures": {
+      "passed": true,
+      "verifiedPackageSignatures": 363,
+      "verifiedAttestations": 87
+    }
+  },
+  "cleanPackageInstall": {
+    "passed": true,
+    "publicPackageBlackBox": true,
+    "verification": {
+      "name": "@octopus-reef/verification",
+      "version": "0.3.0",
+      "shasum": "cd63290ca7cead8f80775cc3d39305feb38e70ef",
+      "integrity": "sha512-seRhO7FPuithrLoftyRH/eVwUSbWB54x85wHffV88Mg14igu5b/x8LJ/IALqL4LTyVeCmvM9ASQZ2XRD2Lukvg=="
+    },
+    "controlPlane": {
+      "name": "@octopus-reef/control-plane",
+      "version": "0.3.0",
+      "shasum": "17c93582c32e3a3d1e850b20db1ca44acace1b44",
+      "integrity": "sha512-Y7Glyrm7YMjnfNGUuYnB7/GVt3cgPOO9a+Flqv572obIMreooewhHR9HJEypeErWCpgStwD/kU55KCADdFi6+A=="
+    }
+  },
+  "realPostgresTests": {
+    "passed": true,
+    "postgres16": {
+      "serverVersion": "16.14",
+      "tests": 47,
+      "passedTests": 47,
+      "failedTests": 0
+    },
+    "postgres17": {
+      "serverVersion": "17.10",
+      "tests": 3,
+      "passedTests": 3,
+      "failedTests": 0
+    },
+    "coverage": [
+      "serialized and idempotent migrations",
+      "restart recovery",
+      "concurrent delivery and idempotency",
+      "lease and fencing",
+      "tenant isolation",
+      "canonical cursor above Number.MAX_SAFE_INTEGER",
+      "materialization checkpoint recovery and replacement rejection"
+    ]
+  },
+  "isolatedDockerTests": {
+    "passed": true,
+    "dockerServerVersion": "29.5.2",
+    "buildxVersion": "0.35.0",
+    "networkIsolation": {
+      "hostDenied": true,
+      "peerDenied": true,
+      "imdsDenied": true
+    },
+    "goldenEightChecks": {
+      "passed": true,
+      "checks": [
+        "frontend-dependencies",
+        "frontend-tests",
+        "frontend-production-build",
+        "backend-dependencies",
+        "backend-tests",
+        "postgres-migration-repeat",
+        "application-health",
+        "dependency-policy"
+      ]
+    },
+    "compose": {
+      "passed": true,
+      "databaseHealthy": true,
+      "migrationExitCode": 0,
+      "fastApiReady": true,
+      "nextJsReady": true
+    },
+    "entrypoints": {
+      "migrateRepeat": true,
+      "apiLive": true,
+      "apiReady": true,
+      "workerOnce": true,
+      "remoteSandboxReady": true
+    },
+    "imagePolicy": {
+      "nonRoot": true,
+      "apiWorkerNpmAbsent": true,
+      "apiWorkerBuildToolsAbsent": true
+    }
+  },
+  "localImagePreflight": {
+    "note": "Local image IDs are pre-publish evidence, not the final registry manifest identities.",
+    "api": {
+      "linux/amd64": "sha256:81b8f6c59304b3cd60da8da79f95cc47899df7cfe6a9026ec1e9acd030570014",
+      "linux/arm64": "sha256:d8484537e3ff19e752e2b96606c4477ec09a4d1328942e53260e459a3b6fc81b"
+    },
+    "worker": {
+      "linux/amd64": "sha256:db2521345767e4ba6f0138da27770de4cdcf7d01907cf6157bd17e0377175bdc",
+      "linux/arm64": "sha256:d0d6cfb3c68a9fe299adf10300103d448c48291c595274937841946e4c44ebfd"
+    },
+    "golden": {
+      "linux/amd64": "sha256:fa169b8f669df809f5657b84bde41b908df221fe9467d19e7e1310e975c7342a",
+      "linux/arm64": "sha256:d363dda0a47087f6cc02328d8a19f39f75ebfac583ee4a173ae783961fb1afd0"
+    },
+    "remoteGolden": {
+      "linux/amd64": "sha256:e14f91d7dd39ece099f0f3d8ba8dedfdb51eed8634eb3753c874b42b9d544b4f",
+      "linux/arm64": "sha256:50c8a0a99105d30f752468ed7b3655e432466d8bb961e52ad31f99539913313d"
+    }
+  },
+  "scanEvidence": {
+    "passed": true,
+    "trivyVersion": "0.72.0",
+    "targets": 9,
+    "sourceAndTwoArchitectureImages": true,
+    "fixedHighCritical": 0,
+    "secrets": 0
+  },
+  "sbomEvidence": {
+    "passed": true,
+    "syftVersion": "1.49.0",
+    "cycloneDx": true,
+    "twoArchitectureApiWorkerGolden": true,
+    "packageSboms": true
+  },
+  "migrations": {
+    "schemaHead": "0002_materialization",
+    "migrationSetDigest": "sha256:b14327e7b6f10124f2ed7c3ea9607a0409964a36bb32bedd6d5f83d2d582ab78",
+    "digestAlgorithm": "sha256(concat(runtime-ordered exact migration SQL bytes))",
+    "bindings": [
+      {
+        "id": "0001_verification",
+        "digest": "sha256:41cda5e66bf8d2247bc817ff38048b69118520bd32401c665bb81c14a92808cb"
+      },
+      {
+        "id": "0002_materialization",
+        "digest": "sha256:bf2ee13d42d877c4b7fbed5a9fcadea2d39256d1c33794240e5ccfd396ca4010"
+      }
+    ]
+  },
+  "materializationContract": {
+    "contractVersion": "1.0.0",
+    "requestSchema": "octopus.reef.external-materialization-request/v1",
+    "builderInventorySchema": "octopus.builder.source-bundle/v1",
+    "runtimeDescriptorSchema": "octopus.reef.materialization-descriptor/v1",
+    "publicIdentitySchema": "octopus.reef.materialization/v1",
+    "unicodeNormalization": "NFC",
+    "pathSemantics": "portable-nfc-casefold-v1",
+    "collisionKey": "NFC(lowercase(uppercase(NFC(path))))",
+    "entryOrdering": "strict ascending UTF-8 path bytes",
+    "canonicalHash": "octopus-evidence canonicalHash with lowercase sha256: prefix",
+    "defaultLimits": {
+      "maxFiles": 20000,
+      "maxFileBytes": 16777216,
+      "maxTotalBytes": 536870912,
+      "maxPathBytes": 1024
+    }
+  },
+  "trustedProfileContract": {
+    "ref": "verification-profile:golden-next-fastapi-postgres",
+    "version": "1.1.0",
+    "digestBinding": "The publish job generates the final profile digest from the immutable multi-architecture Golden manifest and records both in the release record."
+  },
+  "workloadAuthContract": {
+    "jwt": "offline deployment-owned JWKS; RS256 only",
+    "tenantBinding": "organisationRef exact and projectRef explicit membership",
+    "requestTenantMustEchoPrincipal": true
+  },
+  "healthContract": {
+    "live": "/health/live",
+    "ready": "/health/ready",
+    "sandboxReady": "/readyz"
+  },
+  "knownUnverified": [
+    "A fresh, read-only, separate-session black-box audit of the immutable public npm, OCI, tag, migration, profile, and Release identities is still required.",
+    "No Builder integration or Builder GO decision is included; Builder must consume only the exact public identities after that independent audit.",
+    "No live AWS deployment was performed; the S3, RDS, Secrets Manager, and ECS adapters are covered by deterministic unit and contract tests only."
+  ]
+}
