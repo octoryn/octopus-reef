@@ -1,21 +1,21 @@
-name: deterministic-verification-release-finalize-0.2.1
+name: deterministic-verification-release-finalize-0.2.2
 
 on:
   push:
-    tags: ["verification-finalize-v0.2.1"]
+    tags: ["verification-finalize-v0.2.2"]
 
 permissions:
   contents: write
   packages: read
 
 concurrency:
-  group: deterministic-verification-0.2.1
+  group: deterministic-verification-0.2.2
   cancel-in-progress: false
 
 env:
-  VERSION: 0.2.1
-  RELEASE_TAG: control-plane-v0.2.1
-  AUDIT_PATH: release/verification-0.2.1/independent-audit.json
+  VERSION: 0.2.2
+  RELEASE_TAG: control-plane-v0.2.2
+  AUDIT_PATH: release/verification-0.2.2/independent-audit.json
 
 jobs:
   finalize:
@@ -89,7 +89,7 @@ jobs:
             --arg version "$VERSION" \
             --arg migration "$(jq -r '.migrationSetDigest' "$gate")" '
               .gitCommit == $sha and
-              .gitTag == "control-plane-v0.2.1" and
+              .gitTag == "control-plane-v0.2.2" and
               .package.version == $version and
               .internalPackage.version == $version and
               .npm.controlPlane.gitHead == $sha and

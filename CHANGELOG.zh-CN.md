@@ -4,7 +4,19 @@
 
 本项目所有重要变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.2] — 2026-07-23
+
+### 修复
+
+- 修正不可逆 preflight 工作流中的 PostgreSQL 索引查询引号。0.2.1 tag 在发布前失败，因此没有创建任何 0.2.1 npm、GHCR 或 GitHub Release 制品。
+
+### 变更
+
+- 以全新不可变发布身份承载 0.2.1 准备好的 migration/runtime 精确绑定、公开 detached audit、远程 sandbox 身份与兼容性修复。
+
 ## [0.2.1] — 2026-07-23
+
+_未发布候选：不可变 tag 保留为 preflight 失败历史，但没有分发 registry 或 Release 制品。_
 
 ### 修复
 
@@ -46,6 +58,7 @@
 - **执行安全** —— `reefAllowlist`(允许已知安全者)加上可选的 `SandboxExecutor`:无 shell、拒绝网络、写入限定在工作区、`$HOME` 机密不可读、中和 git 配置驱动的代码执行。
 - **各形态** —— CLI(`run` · `verify` · `replay` · `serve`)、真实的 Claude driver、服务端守护进程(HTTP + SSE)、Web UI(Vite + React)、VS Code IDE 扩展,以及一键 Docker。
 
+[0.2.2]: https://github.com/octoryn/octopus-reef/releases/tag/control-plane-v0.2.2
 [0.2.1]: https://github.com/octoryn/octopus-reef/releases/tag/control-plane-v0.2.1
 [0.2.0]: https://github.com/octoryn/octopus-reef/releases/tag/v0.2.0
 [0.1.0]: https://github.com/octoryn/octopus-reef/releases/tag/v0.1.0

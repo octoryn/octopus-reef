@@ -77,13 +77,13 @@ network isolation and minimum IAM policy.
 Compatibility and a remote deployment example are documented in
 `docs/CONTROL-PLANE-COMPATIBILITY.md`.
 
-## Deterministic Verification Runs in 0.2.1
+## Deterministic Verification Runs in 0.2.2
 
-`@octopus-reef/control-plane@0.2.1` formally exposes the separate verification
+`@octopus-reef/control-plane@0.2.2` formally exposes the separate verification
 runtime from `@octopus-reef/control-plane/verification`, with its typed client
 at `@octopus-reef/control-plane/verification/client` and production adapters at
 the corresponding `verification/*` subpaths. The package declares the exact
-compatible `@octopus-reef/verification@0.2.1` dependency.
+compatible `@octopus-reef/verification@0.2.2` dependency.
 
 The versioned `/v1/verifications` contract uses the canonical client methods
 `createRun`, `getRun`, `streamRunEvents`, `retryRun`, and `cancelRun`. It accepts

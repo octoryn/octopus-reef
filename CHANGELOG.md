@@ -6,7 +6,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-07-23
+
+### Fixed
+
+- Corrected PostgreSQL index-introspection quoting in the irreversible
+  preflight workflow. The 0.2.1 tag failed before publication, so no 0.2.1 npm,
+  GHCR, or GitHub Release artifacts were created.
+
+### Changed
+
+- Carries forward the exact migration/runtime binding, detached public audit,
+  remote sandbox identity, and compatibility fixes prepared in 0.2.1 under a
+  new immutable release identity.
+
 ## [0.2.1] — 2026-07-23
+
+_Unpublished candidate: the immutable tag is retained as failed preflight
+history, but no registry or Release artifacts were distributed._
 
 ### Fixed
 
@@ -85,6 +102,7 @@ Initial workspace release: the governed agentic engineering surface.
   driver, a server daemon (HTTP + SSE), a Web UI (Vite + React), a VS Code IDE
   extension, and one-click Docker.
 
+[0.2.2]: https://github.com/octoryn/octopus-reef/releases/tag/control-plane-v0.2.2
 [0.2.1]: https://github.com/octoryn/octopus-reef/releases/tag/control-plane-v0.2.1
 [0.2.0]: https://github.com/octoryn/octopus-reef/releases/tag/v0.2.0
 [0.1.0]: https://github.com/octoryn/octopus-reef/releases/tag/v0.1.0
