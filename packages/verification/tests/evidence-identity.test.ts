@@ -115,6 +115,31 @@ test("Evidence store put result is verified instead of trusted", async () => {
   );
 });
 
+test("Evidence materialization ref cannot replace its canonical descriptor digest", async () => {
+  const base = fixtureRun(tenant, "materialization-replacement");
+  const run: VerificationRun = {
+    ...base,
+    materialization: {
+      schemaVersion: "octopus.reef.materialization/v1",
+      ref: `materialization:${"a".repeat(64)}`,
+      runtimeDescriptorDigest: `sha256:${"b".repeat(64)}`,
+      authoritativeSourceBundleDigest: base.sourceBundleDigest,
+      entryCount: 1,
+      totalBytes: 1,
+    },
+  };
+  const evidence = createCheckEvidence(
+    run,
+    profileFor(run),
+    checkResult(run, verificationRunIdentity(run)),
+  );
+  const ref = evidenceReference(evidence);
+  await assert.rejects(
+    resolve(ref, storeReturning(ref, evidence, evidenceDigest(evidence))),
+    /materialization ref\/digest mismatch/,
+  );
+});
+
 test("artifact references cannot masquerade as Evidence references", async () => {
   const evidence = fixtureEvidence(tenant, "artifact-masquerade", {
     artifactRef: `evidence:ev_${"a".repeat(64)}`,

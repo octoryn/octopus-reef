@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import {
@@ -55,6 +56,7 @@ export function createVerificationSandboxRunnerHandler(
       .then(async (body) => {
         if (request.url === "/v1/files/write")
           return write(root, body, options);
+        if (request.url === "/v1/files/remove") return remove(root, body);
         if (request.url === "/v1/files/read") return read(root, body, options);
         if (request.url === "/v1/execute") {
           if (executing)
@@ -90,7 +92,11 @@ function write(
   root: string,
   body: unknown,
   options: VerificationSandboxRunnerOptions,
-): { readonly written: number; readonly digest: string } {
+): {
+  readonly written: number;
+  readonly digest: string;
+  readonly created: boolean;
+} {
   const record = object(body);
   const path = string(record, "path");
   const encoded = string(record, "contentBase64");
@@ -104,7 +110,8 @@ function write(
   const target = safePath(root, path, false);
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
   rejectSymlinkAncestors(root, target);
-  if (existsSync(target)) {
+  const created = !existsSync(target);
+  if (!created) {
     const existing = readFileSync(target);
     if (!digest(existing).equals(digest(content)))
       throw new Error("sandbox file identity conflict");
@@ -114,6 +121,7 @@ function write(
   return {
     written: content.byteLength,
     digest: `sha256:${digest(content).toString("hex")}`,
+    created,
   };
 }
 
@@ -139,6 +147,29 @@ function read(
     found: true,
     contentBase64: readFileSync(realpathSync(target)).toString("base64"),
   };
+}
+
+function remove(root: string, body: unknown): { readonly removed: number } {
+  const record = object(body);
+  const paths = record["paths"];
+  if (!Array.isArray(paths) || paths.length > 20_000) {
+    throw new Error("sandbox cleanup paths are invalid");
+  }
+  let removed = 0;
+  for (const value of paths) {
+    if (typeof value !== "string") {
+      throw new Error("sandbox cleanup path is invalid");
+    }
+    const target = safePath(root, value, false);
+    if (!existsSync(target)) continue;
+    const stat = lstatSync(target);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+      throw new Error("sandbox cleanup target is unsafe");
+    }
+    unlinkSync(target);
+    removed += 1;
+  }
+  return { removed };
 }
 
 async function execute(

@@ -12,6 +12,7 @@ import type {
   VerificationEvidenceEnvelope,
   VerificationRun,
   VerificationRunIdentity,
+  VerificationMaterialization,
   VerificationTenant,
   VerificationVerdict,
 } from "./types.js";
@@ -37,6 +38,7 @@ export function createCheckEvidence(
     content: json({
       identity: verificationRunIdentity(run),
       runRef: run.runRef,
+      materialization: run.materialization ?? null,
       runVersion: run.version,
       attempt: run.attempt,
       profile: {
@@ -85,6 +87,7 @@ export function createVerdictEvidence(
     content: json({
       identity: verificationRunIdentity(run),
       runRef: run.runRef,
+      materialization: run.materialization ?? null,
       runVersion: run.version,
       attempt: run.attempt,
       profile: {
@@ -139,6 +142,9 @@ export async function resolveEvidenceEnvelope(
   return {
     ...tenant,
     identity: binding.identity,
+    ...(binding.materialization === undefined
+      ? {}
+      : { materialization: binding.materialization }),
     ...(binding.checkRef === undefined ? {} : { checkRef: binding.checkRef }),
     ref: canonicalRef,
     digest,
@@ -205,6 +211,7 @@ export async function putVerifiedEvidence(
 export function verificationEvidenceBinding(evidence: Evidence): {
   readonly identity: VerificationRunIdentity;
   readonly checkRef?: string;
+  readonly materialization?: VerificationMaterialization;
 } {
   const content = object(evidence.content, "verification Evidence content");
   const runRef = text(content["runRef"], "verification Evidence runRef");
@@ -218,6 +225,10 @@ export function verificationEvidenceBinding(evidence: Evidence): {
   const identity = parseVerificationRunIdentity(
     { ...rawIdentity, runRef },
     "verification Evidence identity",
+  );
+  const materialization = parseEvidenceMaterialization(
+    content["materialization"],
+    identity.sourceBundleDigest,
   );
   const profile = object(
     content["profile"],
@@ -261,7 +272,11 @@ export function verificationEvidenceBinding(evidence: Evidence): {
         text(record["digest"], "verification Evidence artifact digest"),
       );
     }
-    return { identity, checkRef };
+    return {
+      identity,
+      ...(materialization === undefined ? {} : { materialization }),
+      checkRef,
+    };
   }
   if (evidence.kind === "deterministic-verification-verdict") {
     const verdict = object(
@@ -288,9 +303,79 @@ export function verificationEvidenceBinding(evidence: Evidence): {
         text(record["digest"], "verification verdict Evidence digest"),
       );
     }
-    return { identity };
+    return {
+      identity,
+      ...(materialization === undefined ? {} : { materialization }),
+    };
   }
   throw new Error("unsupported verification Evidence kind");
+}
+
+function parseEvidenceMaterialization(
+  value: unknown,
+  sourceBundleDigest: string,
+): VerificationMaterialization | undefined {
+  if (value === null || value === undefined) return undefined;
+  const record = object(value, "verification Evidence materialization");
+  const expected = new Set([
+    "schemaVersion",
+    "ref",
+    "runtimeDescriptorDigest",
+    "authoritativeSourceBundleDigest",
+    "entryCount",
+    "totalBytes",
+  ]);
+  const keys = Object.keys(record);
+  if (
+    keys.length !== expected.size ||
+    keys.some((key) => !expected.has(key)) ||
+    record["schemaVersion"] !== "octopus.reef.materialization/v1" ||
+    typeof record["ref"] !== "string" ||
+    !/^materialization:[0-9a-f]{64}$/.test(record["ref"])
+  ) {
+    throw new Error("verification Evidence materialization is invalid");
+  }
+  const runtimeDescriptorDigest = text(
+    record["runtimeDescriptorDigest"],
+    "verification Evidence materialization descriptor digest",
+  );
+  const authoritativeSourceBundleDigest = text(
+    record["authoritativeSourceBundleDigest"],
+    "verification Evidence authoritative source bundle digest",
+  );
+  assertDigest(runtimeDescriptorDigest);
+  assertDigest(authoritativeSourceBundleDigest);
+  if (
+    record["ref"] !==
+    `materialization:${runtimeDescriptorDigest.slice("sha256:".length)}`
+  ) {
+    throw new Error(
+      "verification Evidence materialization ref/digest mismatch",
+    );
+  }
+  if (authoritativeSourceBundleDigest !== sourceBundleDigest) {
+    throw new Error(
+      "verification Evidence materialization/source digest mismatch",
+    );
+  }
+  const entryCount = record["entryCount"];
+  const totalBytes = record["totalBytes"];
+  if (
+    !Number.isSafeInteger(entryCount) ||
+    Number(entryCount) < 1 ||
+    !Number.isSafeInteger(totalBytes) ||
+    Number(totalBytes) < 0
+  ) {
+    throw new Error("verification Evidence materialization counts are invalid");
+  }
+  return {
+    schemaVersion: "octopus.reef.materialization/v1",
+    ref: record["ref"],
+    runtimeDescriptorDigest,
+    authoritativeSourceBundleDigest,
+    entryCount: Number(entryCount),
+    totalBytes: Number(totalBytes),
+  };
 }
 
 function subjects(

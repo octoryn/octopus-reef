@@ -132,6 +132,7 @@ export class VerificationService {
         clearFailure: true,
         clearVerdict: true,
         clearLease: true,
+        clearMaterialization: true,
       },
       {
         type: "verification.retried",

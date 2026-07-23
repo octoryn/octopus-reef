@@ -21,7 +21,10 @@ import {
   defineTrustedProfile,
   type SourceBundleDescriptor,
   type TrustedVerificationProfile,
+  type VerificationMaterialization,
   type VerificationRunRequest,
+  type VerificationSandbox,
+  type VerificationSandboxProvisioner,
   type VerificationTenant,
 } from "../src/index.js";
 import {
@@ -71,6 +74,8 @@ test("crash after a durable check checkpoint resumes without executing it twice"
   });
   await assert.rejects(firstWorker.runOnce(), VerificationWorkerProcessCrash);
   const interrupted = await setup.store.get(tenant, setup.run.runRef);
+  assert.ok(interrupted?.materialization);
+  const firstMaterialization = interrupted.materialization;
   assert.deepEqual(
     interrupted?.checks.map((result) => result.checkRef),
     ["first"],
@@ -82,6 +87,7 @@ test("crash after a durable check checkpoint resumes without executing it twice"
   const completed = await setup.store.get(tenant, setup.run.runRef);
   assert.equal(completed?.state, "completed");
   assert.equal(completed?.verdict?.outcome, "passed");
+  assert.deepEqual(completed?.materialization, firstMaterialization);
   assert.deepEqual(
     completed?.checks.map((result) => result.checkRef),
     ["first", "second"],
@@ -90,6 +96,71 @@ test("crash after a durable check checkpoint resumes without executing it twice"
     (await setup.store.checkpoints(tenant, setup.run.runRef)).length,
     2,
   );
+  assert.equal(
+    (await setup.store.events(tenant, setup.run.runRef, "0")).filter(
+      (event) => event.type === "verification.materialized",
+    ).length,
+    1,
+  );
+});
+
+test("infrastructure retry fences the prior attempt materialization descriptor", async () => {
+  const setup = await fixture(
+    makeProfile([check("tests", ["node", "-e", "process.exit(0)"])]),
+  );
+  let failOnce = true;
+  const wrap = (target: VerificationSandbox): VerificationSandbox => ({
+    id: target.id,
+    workspacePath: target.workspacePath,
+    writeFile: (path, value, signal) => target.writeFile(path, value, signal),
+    removeFiles: (paths, signal) => target.removeFiles(paths, signal),
+    execute: (definition, environment, signal) => {
+      if (failOnce) {
+        failOnce = false;
+        throw new Error("simulated sandbox infrastructure failure");
+      }
+      return target.execute(definition, environment, signal);
+    },
+    readFile: (path, maxBytes, signal) =>
+      target.readFile(path, maxBytes, signal),
+  });
+  const flakySandboxes: VerificationSandboxProvisioner = {
+    provision: async (spec, signal) =>
+      wrap(await setup.sandbox.provision(spec, signal)),
+    restore: async (spec, ref, signal) => {
+      const restored = await setup.sandbox.restore?.(spec, ref, signal);
+      return restored === undefined ? undefined : wrap(restored);
+    },
+    destroy: (target) => setup.sandbox.destroy(target),
+  };
+  const process = worker(setup, "worker-materialization-retry", {
+    retryBaseMs: 0,
+    sandboxes: flakySandboxes,
+  });
+  assert.equal(await process.runOnce(), true);
+  const retried = await setup.store.get(tenant, setup.run.runRef);
+  assert.equal(retried?.state, "queued");
+  assert.equal(retried?.attempt, 2);
+  assert.equal(retried?.materialization, undefined);
+
+  assert.equal(await process.runOnce(), true);
+  const completed = await setup.store.get(tenant, setup.run.runRef);
+  assert.equal(completed?.state, "completed");
+  assert.equal(completed?.attempt, 2);
+  assert.ok(completed?.materialization);
+  const materializedEvents = (
+    await setup.store.events(tenant, setup.run.runRef, "0")
+  ).filter((event) => event.type === "verification.materialized");
+  assert.equal(materializedEvents.length, 2);
+  const digests = materializedEvents.map(
+    (event) =>
+      (
+        event.data as {
+          materialization: VerificationMaterialization;
+        }
+      ).materialization.runtimeDescriptorDigest,
+  );
+  assert.notEqual(digests[0], digests[1]);
 });
 
 test("duplicate queue delivery is acknowledged without duplicate check execution", async () => {
@@ -224,6 +295,7 @@ test("a failed required test is completed with failed verdict, not operational f
     run.verdict.evidenceRef,
   );
   assert.ok(verdictEnvelope?.verifier.integrityVerified);
+  assert.deepEqual(verdictEnvelope?.materialization, run.materialization);
   const verdictContent = verdictEnvelope?.evidence.content as Record<
     string,
     unknown
@@ -239,6 +311,7 @@ test("a failed required test is completed with failed verdict, not operational f
     tenant,
     run.checks[0]!.evidenceRef,
   );
+  assert.deepEqual(checkEnvelope?.materialization, run.materialization);
   assert.equal(
     (checkEnvelope?.evidence.content as Record<string, unknown>)["runVersion"],
     run.version - 1,
@@ -381,23 +454,26 @@ async function fixture(
   });
   const content = Buffer.from("export const fixture = true;\n");
   const entry = {
+    kind: "file" as const,
     path: "fixture.js",
     size: content.byteLength,
     digest: sha(content),
-    contentRef: "source-object:fixture",
   };
   const unsigned = {
-    schemaVersion: "reef.source-bundle.v1" as const,
+    schemaVersion: "octopus.builder.source-bundle/v1" as const,
     ...tenant,
+    candidateRef: "foundation-candidate:fixture",
+    candidateDigest: sha(Buffer.from("candidate")),
     sourceBundleRef: "source-bundle:fixture",
     unicodeNormalization: "NFC" as const,
+    pathSemantics: "portable-nfc-casefold-v1" as const,
     entries: [entry],
   };
   const descriptor: SourceBundleDescriptor = {
     ...unsigned,
     sourceBundleDigest: computeBundleDigest(unsigned),
   };
-  source.add(descriptor, { [entry.contentRef]: content });
+  source.add(descriptor, { [entry.path]: content });
   const request: VerificationRunRequest = {
     ...tenant,
     candidateRef: "foundation-candidate:fixture",

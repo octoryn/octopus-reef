@@ -21,15 +21,18 @@ test("remote sandbox bridge authenticates and confines files, commands, and envi
   assert.ok(address && typeof address === "object");
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
-  assert.equal(
-    (
-      await request(baseUrl, token, "/v1/files/write", {
-        path: "input.txt",
-        contentBase64: Buffer.from("immutable input\n").toString("base64"),
-      })
-    ).status,
-    200,
-  );
+  const firstWrite = await request(baseUrl, token, "/v1/files/write", {
+    path: "input.txt",
+    contentBase64: Buffer.from("immutable input\n").toString("base64"),
+  });
+  assert.equal(firstWrite.status, 200);
+  assert.equal((firstWrite.body as { created: boolean }).created, true);
+  const repeatedWrite = await request(baseUrl, token, "/v1/files/write", {
+    path: "input.txt",
+    contentBase64: Buffer.from("immutable input\n").toString("base64"),
+  });
+  assert.equal(repeatedWrite.status, 200);
+  assert.equal((repeatedWrite.body as { created: boolean }).created, false);
   const execution = await request(baseUrl, token, "/v1/execute", {
     argv: [
       "node",

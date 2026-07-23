@@ -185,8 +185,14 @@ export class AwsS3VerificationStore implements SourceBundleStore {
     ) as SourceBundleDescriptor;
   }
 
-  content(tenant: VerificationTenant, contentRef: string): Promise<Uint8Array> {
-    return this.#get(this.#key(tenant, "source-objects", hash(contentRef)));
+  content(
+    tenant: VerificationTenant,
+    sourceBundleRef: string,
+    path: string,
+  ): Promise<Uint8Array> {
+    return this.#get(
+      this.#key(tenant, "source-objects", hash(`${sourceBundleRef}\0${path}`)),
+    );
   }
 
   async putArtifact(
@@ -268,9 +274,13 @@ export class AwsS3VerificationStore implements SourceBundleStore {
     content: Readonly<Record<string, Uint8Array>>,
   ): Promise<void> {
     const tenant: VerificationTenant = descriptor;
-    for (const [ref, bytes] of Object.entries(content)) {
+    for (const [path, bytes] of Object.entries(content)) {
       await this.#put(
-        this.#key(tenant, "source-objects", hash(ref)),
+        this.#key(
+          tenant,
+          "source-objects",
+          hash(`${descriptor.sourceBundleRef}\0${path}`),
+        ),
         bytes,
         "application/octet-stream",
       );
@@ -435,7 +445,7 @@ class EcsVerificationSandbox implements VerificationSandbox {
     path: string,
     content: Uint8Array,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<{ readonly created: boolean }> {
     const result = await request(
       this.fetchImpl,
       `${this.endpoint}/v1/files/write`,
@@ -443,8 +453,36 @@ class EcsVerificationSandbox implements VerificationSandbox {
       { path, contentBase64: Buffer.from(content).toString("base64") },
       signal,
     );
-    if (typeof result !== "object" || result === null || !("written" in result))
+    if (
+      typeof result !== "object" ||
+      result === null ||
+      !("written" in result) ||
+      !("created" in result) ||
+      typeof result.created !== "boolean"
+    )
       throw new Error("ECS sandbox write response is invalid");
+    return { created: result.created };
+  }
+
+  async removeFiles(
+    paths: readonly string[],
+    signal: AbortSignal,
+  ): Promise<void> {
+    const result = await request(
+      this.fetchImpl,
+      `${this.endpoint}/v1/files/remove`,
+      this.authToken,
+      { paths },
+      signal,
+    );
+    if (
+      typeof result !== "object" ||
+      result === null ||
+      !("removed" in result) ||
+      typeof result.removed !== "number"
+    ) {
+      throw new Error("ECS sandbox remove response is invalid");
+    }
   }
 
   async execute(

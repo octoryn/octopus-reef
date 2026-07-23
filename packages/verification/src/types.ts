@@ -107,6 +107,7 @@ export interface VerificationRun extends VerificationIdentity {
   readonly failure?: VerificationFailure;
   readonly lease?: VerificationLease;
   readonly sandboxRef?: string;
+  readonly materialization?: VerificationMaterialization;
 }
 
 export interface VerificationEvent extends VerificationTenant {
@@ -179,23 +180,70 @@ export interface TrustedVerificationProfile {
   readonly checks: readonly VerificationCheckDefinition[];
 }
 
-export interface SourceBundleEntry {
+export interface BuilderSourceBundleEntryV1 {
+  readonly kind: "file";
   readonly path: string;
   readonly size: number;
   readonly digest: string;
-  readonly contentRef: string;
 }
 
-export interface SourceBundleDescriptor extends VerificationTenant {
-  readonly schemaVersion: "reef.source-bundle.v1";
+/**
+ * The Builder-owned, candidate-bound neutral inventory. Reef verifies this
+ * exact v1 digest contract but never redefines the candidate source digest.
+ */
+export interface BuilderSourceBundleInventoryV1 extends VerificationTenant {
+  readonly schemaVersion: "octopus.builder.source-bundle/v1";
+  readonly candidateRef: string;
+  readonly candidateDigest: string;
   readonly sourceBundleRef: string;
   readonly sourceBundleDigest: string;
   readonly unicodeNormalization: "NFC";
-  readonly entries: readonly SourceBundleEntry[];
+  readonly pathSemantics: "portable-nfc-casefold-v1";
+  readonly entries: readonly BuilderSourceBundleEntryV1[];
+}
+
+/** @deprecated Use BuilderSourceBundleInventoryV1. */
+export type SourceBundleDescriptor = BuilderSourceBundleInventoryV1;
+
+export interface ExternalMaterializationRequestV1 extends VerificationRunIdentity {
+  readonly schemaVersion: "octopus.reef.external-materialization-request/v1";
+  readonly attempt: number;
+}
+
+export interface RuntimeMaterializationDescriptorV1 {
+  readonly schemaVersion: "octopus.reef.materialization-descriptor/v1";
+  readonly contractVersion: "1.0.0";
+  readonly identity: VerificationRunIdentity;
+  readonly attempt: number;
+  readonly authoritativeSourceBundle: {
+    readonly schemaVersion: "octopus.builder.source-bundle/v1";
+    readonly ref: string;
+    readonly digest: string;
+  };
+  readonly policy: {
+    readonly unicodeNormalization: "NFC";
+    readonly pathSemantics: "portable-nfc-casefold-v1";
+    readonly maxFiles: number;
+    readonly maxFileBytes: number;
+    readonly maxTotalBytes: number;
+    readonly maxPathBytes: number;
+  };
+  readonly entries: readonly BuilderSourceBundleEntryV1[];
+  readonly descriptorDigest: string;
+}
+
+export interface VerificationMaterialization {
+  readonly schemaVersion: "octopus.reef.materialization/v1";
+  readonly ref: string;
+  readonly runtimeDescriptorDigest: string;
+  readonly authoritativeSourceBundleDigest: string;
+  readonly entryCount: number;
+  readonly totalBytes: number;
 }
 
 export interface VerificationEvidenceEnvelope extends VerificationTenant {
   readonly identity: VerificationRunIdentity;
+  readonly materialization?: VerificationMaterialization;
   readonly checkRef?: string;
   readonly ref: string;
   readonly digest: string;
@@ -223,11 +271,16 @@ export interface VerificationSandboxSpec extends VerificationIdentity {
 export interface VerificationSandbox {
   readonly id: string;
   readonly workspacePath: string;
+  /**
+   * Atomically creates a file or verifies identical retained content. A
+   * rejected write must not leave a newly created or partially written file.
+   */
   writeFile(
     path: string,
     content: Uint8Array,
     signal: AbortSignal,
-  ): Promise<void>;
+  ): Promise<VerificationSandboxWriteResult>;
+  removeFiles(paths: readonly string[], signal: AbortSignal): Promise<void>;
   execute(
     check: VerificationCheckDefinition,
     environment: Readonly<Record<string, string>>,
@@ -240,6 +293,14 @@ export interface VerificationSandbox {
   ): Promise<Uint8Array | undefined>;
 }
 
+export interface VerificationSandboxWriteResult {
+  /**
+   * True only when this call created the file. Materialization cleanup must
+   * never remove an identical file retained from an earlier checkpoint.
+   */
+  readonly created: boolean;
+}
+
 export interface VerificationMutation {
   readonly state?: VerificationState;
   readonly attempt?: number;
@@ -250,7 +311,9 @@ export interface VerificationMutation {
   readonly startedAt?: string;
   readonly finishedAt?: string;
   readonly sandboxRef?: string;
+  readonly materialization?: VerificationMaterialization;
   readonly clearFailure?: boolean;
   readonly clearVerdict?: boolean;
   readonly clearLease?: boolean;
+  readonly clearMaterialization?: boolean;
 }

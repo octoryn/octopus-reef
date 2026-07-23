@@ -149,7 +149,21 @@ export class DeterministicVerificationWorker {
         "verification.sandbox_ready",
         { sandboxRef: sandbox.id },
       );
-      await this.#options.materializer.materialize(run, sandbox, abort.signal);
+      const materialization = await this.#options.materializer.materialize(
+        run,
+        sandbox,
+        abort.signal,
+      );
+      if (run.materialization === undefined) {
+        run = await this.#mutate(
+          tenant,
+          run,
+          fence,
+          { materialization },
+          "verification.materialized",
+          { materialization },
+        );
+      }
       run = await this.#transition(tenant, run, fence, "running");
       const executionStarted = Date.now();
       for (const check of profile.checks) {
@@ -243,6 +257,7 @@ export class DeterministicVerificationWorker {
             state: "queued",
             attempt: run.attempt + 1,
             clearLease: true,
+            clearMaterialization: true,
           },
           "verification.infrastructure_retry",
           { attempt: run.attempt + 1, retryAt: availableAt },

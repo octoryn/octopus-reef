@@ -75,11 +75,86 @@ The release record binds both the profile's canonical digest and its sandbox
 image manifest digest. Test-only smoke profiles and placeholder digests are
 never a published deployment contract.
 
-Source bundles use the documented `reef.source-bundle.v1` descriptor and NFC
-Unicode normalization. Materialization verifies the tenant, descriptor digest,
-inventory, every file size and digest, total limits, path confinement, duplicate
-and case-ambiguous names, and regular-file storage. URLs, archive extraction,
-absolute/traversal/backslash paths, symlinks, and hardlinks are rejected.
+### External materialization contract
+
+The stable deployment-neutral boundary is `ExternalMaterializationPort` with
+contract version `1.0.0`. `DeterministicSourceBundleMaterializer` accepts that
+Port directly. `SourceBundleStoreMaterializationBridge` adapts a trusted local,
+ArtifactStore, or S3-backed server-side store without exposing its location or
+credentials.
+
+The Port request schema is
+`octopus.reef.external-materialization-request/v1`. It contains exactly the
+full organisation/project/candidate/source/profile/run identity and the
+positive attempt. All refs are bounded opaque refs. URL, URI, bucket, key,
+command, argv, cwd, environment, raw credential, and caller-chosen secret-ref
+fields are absent and rejected. Storage location, authentication, and routing
+are trusted deployment configuration only.
+
+The resolved inventory is the Builder-owned,
+candidate-bound `octopus.builder.source-bundle/v1` contract:
+
+```ts
+{
+  schemaVersion: "octopus.builder.source-bundle/v1";
+  organisationRef: string;
+  projectRef: string;
+  candidateRef: string;
+  candidateDigest: `sha256:${string}`;
+  sourceBundleRef: string;
+  sourceBundleDigest: `sha256:${string}`;
+  unicodeNormalization: "NFC";
+  pathSemantics: "portable-nfc-casefold-v1";
+  entries: Array<{
+    kind: "file";
+    path: string;
+    size: number;
+    digest: `sha256:${string}`;
+  }>;
+}
+```
+
+Reef verifies but never redefines `sourceBundleDigest`. Its canonical input is
+the inventory above without `sourceBundleDigest`, in the displayed field
+structure, hashed as lowercase `sha256:` plus the `octopus-evidence`
+`canonicalHash`. Entries must be uniquely ascending by their UTF-8 path bytes.
+Paths must already be NFC relative `/` paths. The exact
+`portable-nfc-casefold-v1` collision key is
+`NFC(lowercase(uppercase(NFC(path))))` using locale-independent ECMAScript
+Unicode casing.
+
+The default limits are 20,000 files, 16 MiB per file, 512 MiB total, and 1,024
+UTF-8 bytes per path. Empty inventories, unsafe integers, duplicate or
+case-fold-ambiguous paths, absolute/traversal/backslash paths, trailing dot or
+space segments, control characters, symlinks, hardlinks, FIFO/device/socket
+entries, size drift, and content digest drift fail closed. Every object is
+staged and verified before sandbox writes; a failed atomic write cleans only
+files created by that materialization call.
+
+Reef independently generates
+`octopus.reef.materialization-descriptor/v1`. Its canonical digest covers
+contract version `1.0.0`, the full run identity, attempt, authoritative Builder
+ref/digest, exact policy limits, and validated entries. The Run, materialized
+event, persistence columns, typed client, and Evidence expose only:
+
+```ts
+{
+  schemaVersion: "octopus.reef.materialization/v1";
+  ref: `materialization:${string}`;
+  runtimeDescriptorDigest: `sha256:${string}`;
+  authoritativeSourceBundleDigest: `sha256:${string}`;
+  entryCount: number;
+  totalBytes: number;
+}
+```
+
+The materialization ref suffix must equal the runtime descriptor digest suffix.
+The authoritative source-bundle digest and runtime descriptor digest are
+distinct identities and are never substituted for one another. Restart
+recomputes and verifies the same descriptor; a different descriptor,
+cross-tenant response, or stale-attempt replay is rejected. Public payloads do
+not contain local paths, source content, customer data, storage locators, or
+secrets.
 
 Production uses PostgreSQL for durable runs, exact cursors, checkpoints,
 transactional outbox, queue leases, and fencing. The Worker checks its fence

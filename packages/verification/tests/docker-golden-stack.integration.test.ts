@@ -14,8 +14,8 @@ import {
   VerificationService,
   computeBundleDigest,
   createGoldenStackProfile,
+  type BuilderSourceBundleEntryV1,
   type SourceBundleDescriptor,
-  type SourceBundleEntry,
   type VerificationRunRequest,
   type VerificationTenant,
 } from "../src/index.js";
@@ -187,19 +187,28 @@ function sourceBundle(
 } {
   const files = walk(root);
   const content: Record<string, Uint8Array> = {};
-  const entries: SourceBundleEntry[] = files.map((absolute) => {
-    const path = relative(root, absolute).split(sep).join("/");
-    const bytes = Uint8Array.from(readFileSync(absolute));
-    const digest = sha(bytes);
-    const contentRef = `source-object:${createHash("sha256").update(path).digest("hex")}`;
-    content[contentRef] = bytes;
-    return { path, size: bytes.byteLength, digest, contentRef };
-  });
+  const entries: BuilderSourceBundleEntryV1[] = files
+    .map((absolute) => {
+      const path = relative(root, absolute).split(sep).join("/");
+      const bytes = Uint8Array.from(readFileSync(absolute));
+      const digest = sha(bytes);
+      content[path] = bytes;
+      return { kind: "file", path, size: bytes.byteLength, digest };
+    })
+    .sort((left, right) =>
+      Buffer.compare(
+        Buffer.from(left.path, "utf8"),
+        Buffer.from(right.path, "utf8"),
+      ),
+    );
   const unsigned = {
-    schemaVersion: "reef.source-bundle.v1" as const,
+    schemaVersion: "octopus.builder.source-bundle/v1" as const,
     ...tenant,
+    candidateRef: "foundation-candidate:golden-stack",
+    candidateDigest: sha(Buffer.from("generated-golden-stack-v1")),
     sourceBundleRef: "source-bundle:golden-next-fastapi-postgres",
     unicodeNormalization: "NFC" as const,
+    pathSemantics: "portable-nfc-casefold-v1" as const,
     entries,
   };
   return {

@@ -562,11 +562,14 @@ export class MemorySourceBundleStore implements SourceBundleStore {
       bundleKey(tenant, descriptor.sourceBundleRef),
       clone(descriptor),
     );
-    for (const [ref, value] of Object.entries(content)) {
-      this.#content.set(bundleKey(tenant, ref), {
-        tenant: clone(tenant),
-        value: Uint8Array.from(value),
-      });
+    for (const [path, value] of Object.entries(content)) {
+      this.#content.set(
+        bundleKey(tenant, `${descriptor.sourceBundleRef}\0${path}`),
+        {
+          tenant: clone(tenant),
+          value: Uint8Array.from(value),
+        },
+      );
     }
   }
 
@@ -580,8 +583,14 @@ export class MemorySourceBundleStore implements SourceBundleStore {
     return Promise.resolve(clone(value));
   }
 
-  content(tenant: VerificationTenant, contentRef: string): Promise<Uint8Array> {
-    const value = this.#content.get(bundleKey(tenant, contentRef));
+  content(
+    tenant: VerificationTenant,
+    sourceBundleRef: string,
+    path: string,
+  ): Promise<Uint8Array> {
+    const value = this.#content.get(
+      bundleKey(tenant, `${sourceBundleRef}\0${path}`),
+    );
     if (value === undefined) throw new Error("source bundle content not found");
     return Promise.resolve(Uint8Array.from(value.value));
   }
@@ -615,6 +624,9 @@ function mutate(
     ...(mutation.sandboxRef !== undefined
       ? { sandboxRef: mutation.sandboxRef }
       : {}),
+    ...(mutation.materialization !== undefined
+      ? { materialization: clone(mutation.materialization) }
+      : {}),
     version: current.version + 1,
     eventCursor: parseVerificationDecimalCursor(
       mutation.eventCursor ?? eventCursor,
@@ -625,6 +637,11 @@ function mutate(
     const { lease, ...withoutLease } = next;
     void lease;
     next = withoutLease;
+  }
+  if (mutation.clearMaterialization) {
+    const { materialization, ...withoutMaterialization } = next;
+    void materialization;
+    next = withoutMaterialization;
   }
   if (mutation.clearFailure) {
     const { failure, ...withoutFailure } = next;

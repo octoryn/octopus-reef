@@ -1,6 +1,6 @@
 import type { Evidence } from "octopus-evidence";
 import type {
-  SourceBundleDescriptor,
+  ExternalMaterializationRequestV1,
   TrustedVerificationProfile,
   VerificationArtifact,
   VerificationCheckpoint,
@@ -11,6 +11,7 @@ import type {
   VerificationRun,
   VerificationSandbox,
   VerificationSandboxSpec,
+  VerificationMaterialization,
   VerificationTenant,
 } from "./types.js";
 import type { TrustedVerificationProfileRegistry } from "./profile.js";
@@ -151,8 +152,30 @@ export interface SourceBundleStore {
   descriptor(
     tenant: VerificationTenant,
     sourceBundleRef: string,
-  ): Promise<SourceBundleDescriptor>;
-  content(tenant: VerificationTenant, contentRef: string): Promise<Uint8Array>;
+  ): Promise<unknown>;
+  content(
+    tenant: VerificationTenant,
+    sourceBundleRef: string,
+    path: string,
+  ): Promise<Uint8Array>;
+}
+
+export interface ResolvedExternalMaterialization {
+  readonly inventory: unknown;
+  read(path: string, signal: AbortSignal): Promise<Uint8Array>;
+}
+
+/**
+ * Versioned deployment-neutral bridge used by the server-side worker.
+ *
+ * The request contains no location, command, credential, or secret selector.
+ * Deployment adapters resolve opaque refs using trusted configuration.
+ */
+export interface ExternalMaterializationPort {
+  resolve(
+    request: ExternalMaterializationRequestV1,
+    signal: AbortSignal,
+  ): Promise<ResolvedExternalMaterialization>;
 }
 
 export interface SourceBundleMaterializer {
@@ -160,7 +183,7 @@ export interface SourceBundleMaterializer {
     run: VerificationRun,
     sandbox: VerificationSandbox,
     signal: AbortSignal,
-  ): Promise<void>;
+  ): Promise<VerificationMaterialization>;
 }
 
 export interface VerificationArtifactStore {

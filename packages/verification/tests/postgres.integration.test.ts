@@ -142,6 +142,9 @@ test(
       ),
       ["first"],
     );
+    const interruptedMaterialization = (await store.get(tenant, run.runRef))
+      ?.materialization;
+    assert.ok(interruptedMaterialization);
     await store.close();
 
     now += 31_000;
@@ -159,11 +162,18 @@ test(
     assert.equal(await resumed.runOnce(), true);
     const completed = await store.get(tenant, run.runRef);
     assert.equal(completed?.state, "completed");
+    assert.deepEqual(completed?.materialization, interruptedMaterialization);
     assert.deepEqual(
       completed?.checks.map((item) => item.checkRef),
       ["first", "second"],
     );
     assert.equal((await store.checkpoints(tenant, run.runRef)).length, 2);
+    assert.equal(
+      (await store.events(tenant, run.runRef, "0")).filter(
+        (event) => event.type === "verification.materialized",
+      ).length,
+      1,
+    );
 
     await store.enqueue(tenant, run.runRef, run.attempt);
     assert.equal(await resumed.runOnce(), true);
@@ -324,16 +334,19 @@ function writeBundle(
   mkdirSync(root, { recursive: true });
   const content = Buffer.from("export const postgresFixture = true;\n");
   const entry = {
+    kind: "file" as const,
     path: "fixture.js",
     size: content.byteLength,
     digest: shaBytes(content),
-    contentRef: "source-object:pg",
   };
   const unsigned = {
-    schemaVersion: "reef.source-bundle.v1" as const,
+    schemaVersion: "octopus.builder.source-bundle/v1" as const,
     ...tenant,
+    candidateRef: "foundation-candidate:pg",
+    candidateDigest: sha("candidate"),
     sourceBundleRef: "source-bundle:pg",
     unicodeNormalization: "NFC" as const,
+    pathSemantics: "portable-nfc-casefold-v1" as const,
     entries: [entry],
   };
   const descriptor: SourceBundleDescriptor = {
@@ -354,7 +367,7 @@ function writeBundle(
     root,
     tenantDirectory,
     "objects",
-    hash(entry.contentRef),
+    hash(`${descriptor.sourceBundleRef}\0${entry.path}`),
   );
   mkdirSync(dirname(descriptorPath), { recursive: true });
   mkdirSync(dirname(objectPath), { recursive: true });

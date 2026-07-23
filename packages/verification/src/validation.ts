@@ -1,5 +1,6 @@
 import { canonicalHash } from "octopus-evidence";
 import type {
+  BuilderSourceBundleInventoryV1,
   SourceBundleDescriptor,
   TrustedVerificationProfile,
   VerificationRunRequest,
@@ -31,24 +32,29 @@ const FORBIDDEN_KEYS = new Set([
   "credentials",
   "apiKey",
   "token",
+  "url",
+  "uri",
+  "s3Uri",
+  "bucket",
+  "key",
+  "workingDirectory",
+  "secretRef",
 ]);
 
 const SOURCE_BUNDLE_DESCRIPTOR_KEYS = new Set([
   "schemaVersion",
   "organisationRef",
   "projectRef",
+  "candidateRef",
+  "candidateDigest",
   "sourceBundleRef",
   "sourceBundleDigest",
   "unicodeNormalization",
+  "pathSemantics",
   "entries",
 ]);
 
-const SOURCE_BUNDLE_ENTRY_KEYS = new Set([
-  "path",
-  "size",
-  "digest",
-  "contentRef",
-]);
+const SOURCE_BUNDLE_ENTRY_KEYS = new Set(["kind", "path", "size", "digest"]);
 
 export function parseVerificationRunRequest(
   value: unknown,
@@ -131,6 +137,13 @@ export function assertTenantBinding(
 export function parseSourceBundleDescriptor(
   value: unknown,
 ): SourceBundleDescriptor {
+  return parseBuilderSourceBundleInventory(value);
+}
+
+/** Strict parser for the Builder-owned octopus.builder.source-bundle/v1. */
+export function parseBuilderSourceBundleInventory(
+  value: unknown,
+): BuilderSourceBundleInventoryV1 {
   try {
     const descriptor = strictObject(value, "source bundle descriptor");
     exactKeys(
@@ -138,14 +151,19 @@ export function parseSourceBundleDescriptor(
       SOURCE_BUNDLE_DESCRIPTOR_KEYS,
       "source bundle descriptor",
     );
-    if (descriptor["schemaVersion"] !== "reef.source-bundle.v1") {
+    if (descriptor["schemaVersion"] !== "octopus.builder.source-bundle/v1") {
       throw new Error("unsupported source bundle schemaVersion");
     }
     if (descriptor["unicodeNormalization"] !== "NFC") {
       throw new Error("source bundle must use NFC Unicode normalization");
     }
+    if (descriptor["pathSemantics"] !== "portable-nfc-casefold-v1") {
+      throw new Error("unsupported source bundle pathSemantics");
+    }
     const organisationRef = opaqueReference(descriptor, "organisationRef");
     const projectRef = opaqueReference(descriptor, "projectRef");
+    const candidateRef = opaqueReference(descriptor, "candidateRef");
+    const candidateDigest = digest(descriptor, "candidateDigest");
     const sourceBundleRef = opaqueReference(descriptor, "sourceBundleRef");
     const sourceBundleDigest = digest(descriptor, "sourceBundleDigest");
     const rawEntries = descriptor["entries"];
@@ -158,6 +176,9 @@ export function parseSourceBundleDescriptor(
         SOURCE_BUNDLE_ENTRY_KEYS,
         `source bundle entry ${index}`,
       );
+      if (entry["kind"] !== "file") {
+        throw new Error(`source bundle entry ${index} must be a regular file`);
+      }
       const path = assertRelativePath(
         nonempty(entry, "path"),
         "source bundle path",
@@ -167,16 +188,23 @@ export function parseSourceBundleDescriptor(
         throw new Error(`source bundle entry ${index} size is invalid`);
       }
       const entryDigest = digest(entry, "digest");
-      const contentRef = opaqueReference(entry, "contentRef");
-      return { path, size: Number(size), digest: entryDigest, contentRef };
+      return {
+        kind: "file" as const,
+        path,
+        size: Number(size),
+        digest: entryDigest,
+      };
     });
     return {
-      schemaVersion: "reef.source-bundle.v1",
+      schemaVersion: "octopus.builder.source-bundle/v1",
       organisationRef,
       projectRef,
+      candidateRef,
+      candidateDigest,
       sourceBundleRef,
       sourceBundleDigest,
       unicodeNormalization: "NFC",
+      pathSemantics: "portable-nfc-casefold-v1",
       entries,
     };
   } catch (error) {
@@ -212,12 +240,21 @@ export function computeProfileDigest(
 export function computeBundleDigest(
   descriptor: Omit<SourceBundleDescriptor, "sourceBundleDigest">,
 ): string {
+  return computeBuilderSourceBundleDigest(descriptor);
+}
+
+export function computeBuilderSourceBundleDigest(
+  descriptor: Omit<BuilderSourceBundleInventoryV1, "sourceBundleDigest">,
+): string {
   return `sha256:${canonicalHash({
     schemaVersion: descriptor.schemaVersion,
     organisationRef: descriptor.organisationRef,
     projectRef: descriptor.projectRef,
+    candidateRef: descriptor.candidateRef,
+    candidateDigest: descriptor.candidateDigest,
     sourceBundleRef: descriptor.sourceBundleRef,
     unicodeNormalization: descriptor.unicodeNormalization,
+    pathSemantics: descriptor.pathSemantics,
     entries: descriptor.entries,
   } as never)}`;
 }
@@ -229,16 +266,25 @@ export function assertDigest(value: string, name = "digest"): void {
 }
 
 export function assertRelativePath(value: string, name = "path"): string {
+  const segments = value.split("/");
   if (
     value.length === 0 ||
     value.length > 1024 ||
     value.includes("\\") ||
     value.startsWith("/") ||
     value.endsWith("/") ||
-    value
-      .split("/")
-      .some((part) => part === "" || part === "." || part === "..") ||
-    value.normalize("NFC") !== value
+    segments.some(
+      (part) =>
+        part === "" ||
+        part === "." ||
+        part === ".." ||
+        part.endsWith(".") ||
+        part.endsWith(" ") ||
+        part.includes(":"),
+    ) ||
+    value.normalize("NFC") !== value ||
+    /\p{Cc}/u.test(value) ||
+    /^[A-Za-z]:/.test(value)
   ) {
     throw new Error(`${name} is not a canonical NFC relative path`);
   }

@@ -13,4 +13,11 @@ export const VERIFICATION_MIGRATIONS: readonly VerificationMigration[] = [
       "utf8",
     ),
   },
+  {
+    id: "0002_materialization",
+    sql: readFileSync(
+      new URL("../../migrations/0002_materialization.sql", import.meta.url),
+      "utf8",
+    ),
+  },
 ];

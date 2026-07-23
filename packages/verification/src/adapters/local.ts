@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -55,13 +56,14 @@ export class LocalSourceBundleStore implements SourceBundleStore {
 
   async content(
     tenant: VerificationTenant,
-    contentRef: string,
+    sourceBundleRef: string,
+    sourcePath: string,
   ): Promise<Uint8Array> {
     const path = join(
       this.#root,
       tenantHash(tenant),
       "objects",
-      hash(contentRef),
+      hash(`${sourceBundleRef}\0${sourcePath}`),
     );
     return Uint8Array.from(readRegularFile(this.#root, path));
   }
@@ -242,12 +244,26 @@ class LocalVerificationSandbox implements VerificationSandbox {
     path: string,
     content: Uint8Array,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<{ readonly created: boolean }> {
     abort(signal);
     const target = safeWorkspacePath(this.workspacePath, path, false);
     mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
     rejectSymlinkAncestors(this.workspacePath, target);
-    writeContentAddressed(target, content);
+    return Promise.resolve({ created: writeContentAddressed(target, content) });
+  }
+
+  removeFiles(paths: readonly string[], signal: AbortSignal): Promise<void> {
+    for (const path of paths) {
+      abort(signal);
+      const target = safeWorkspacePath(this.workspacePath, path, false);
+      if (!existsSync(target)) continue;
+      rejectSymlinkAncestors(this.workspacePath, target);
+      const stat = lstatSync(target);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+        throw new Error("verification cleanup target is not a regular file");
+      }
+      unlinkSync(target);
+    }
     return Promise.resolve();
   }
 
@@ -479,8 +495,8 @@ class DockerVerificationSandbox extends LocalVerificationSandbox {
     path: string,
     content: Uint8Array,
     signal: AbortSignal,
-  ): Promise<void> {
-    await super.writeFile(path, content, signal);
+  ): Promise<{ readonly created: boolean }> {
+    const result = await super.writeFile(path, content, signal);
     const target = safeWorkspacePath(this.workspacePath, path, true);
     chmodSync(target, 0o660);
     let directory = dirname(target);
@@ -489,6 +505,7 @@ class DockerVerificationSandbox extends LocalVerificationSandbox {
       if (directory === this.workspacePath) break;
       directory = dirname(directory);
     }
+    return result;
   }
 
   override async execute(
@@ -699,7 +716,7 @@ function safeWorkspacePath(
   return target;
 }
 
-function writeContentAddressed(path: string, content: Uint8Array): void {
+function writeContentAddressed(path: string, content: Uint8Array): boolean {
   if (existsSync(path)) {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
@@ -717,9 +734,10 @@ function writeContentAddressed(path: string, content: Uint8Array): void {
         "content-addressed verification object conflicts with existing content",
       );
     }
-    return;
+    return false;
   }
   writeFileSync(path, content, { mode: 0o600, flag: "wx" });
+  return true;
 }
 
 function readRegularFile(root: string, path: string): Buffer {

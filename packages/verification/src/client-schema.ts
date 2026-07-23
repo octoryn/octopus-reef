@@ -8,6 +8,7 @@ import {
   type VerificationFailure,
   type VerificationIdentity,
   type VerificationLease,
+  type VerificationMaterialization,
   type VerificationRun,
   type VerificationRunIdentity,
   type VerificationToolIdentity,
@@ -43,6 +44,20 @@ export function parseVerificationRunResponse(value: unknown): VerificationRun {
   optionalTimestamp(run, "startedAt");
   optionalTimestamp(run, "finishedAt");
   optionalString(run, "sandboxRef");
+  const materialization = optionalRecord(
+    run,
+    "materialization",
+    parseVerificationMaterializationResponse,
+  );
+  if (
+    materialization !== undefined &&
+    materialization.authoritativeSourceBundleDigest !==
+      runIdentity.sourceBundleDigest
+  ) {
+    throw new Error(
+      "verification materialization/source bundle digest mismatch",
+    );
+  }
 
   const checks = array(run, "checks").map(parseVerificationCheckResultResponse);
   for (const check of checks) {
@@ -139,6 +154,22 @@ export function parseVerificationEventResponse(
       "verification completed event identity",
     );
   }
+  if (type === "verification.materialized") {
+    const materialization = parseVerificationMaterializationResponse(
+      record(
+        data["materialization"],
+        "verification materialized event identity",
+      ),
+    );
+    if (
+      materialization.authoritativeSourceBundleDigest !==
+      identity.sourceBundleDigest
+    ) {
+      throw new Error(
+        "verification materialized event/source bundle digest mismatch",
+      );
+    }
+  }
   return value as VerificationEvent;
 }
 
@@ -186,6 +217,14 @@ export function parseVerificationEvidenceResponse(
     identity,
     "verification Evidence content identity",
   );
+  const envelopeMaterialization = optionalRecord(
+    envelope,
+    "materialization",
+    parseVerificationMaterializationResponse,
+  );
+  if (!sameMaterialization(envelopeMaterialization, binding.materialization)) {
+    throw new Error("verification Evidence materialization identity mismatch");
+  }
   if (binding.checkRef === undefined) {
     if (envelope["checkRef"] !== undefined) {
       throw new Error("verification verdict Evidence cannot claim a checkRef");
@@ -216,6 +255,47 @@ export function assertSameIdentity(
     if (actual[key] !== expected[key])
       throw new Error(`${name} mismatch: ${key}`);
   }
+}
+
+export function parseVerificationMaterializationResponse(
+  value: Record<string, unknown>,
+): VerificationMaterialization {
+  const keys = Object.keys(value);
+  const expected = new Set([
+    "schemaVersion",
+    "ref",
+    "runtimeDescriptorDigest",
+    "authoritativeSourceBundleDigest",
+    "entryCount",
+    "totalBytes",
+  ]);
+  if (keys.length !== expected.size || keys.some((key) => !expected.has(key))) {
+    throw new Error(
+      "verification materialization contains missing or unsupported fields",
+    );
+  }
+  if (value["schemaVersion"] !== "octopus.reef.materialization/v1") {
+    throw new Error("unsupported verification materialization version");
+  }
+  if (
+    typeof value["ref"] !== "string" ||
+    !/^materialization:[0-9a-f]{64}$/.test(value["ref"])
+  ) {
+    throw new Error("verification materialization ref is not canonical");
+  }
+  const runtimeDescriptorDigest = digest(value, "runtimeDescriptorDigest");
+  if (
+    value["ref"] !==
+    `materialization:${runtimeDescriptorDigest.slice("sha256:".length)}`
+  ) {
+    throw new Error(
+      "verification materialization ref/descriptor digest mismatch",
+    );
+  }
+  digest(value, "authoritativeSourceBundleDigest");
+  positiveInteger(value, "entryCount");
+  nonnegativeInteger(value, "totalBytes");
+  return value as unknown as VerificationMaterialization;
 }
 
 export function parseVerificationCheckResultResponse(
@@ -437,6 +517,22 @@ function optionalRecord<T>(
 function unique(values: readonly string[], name: string): void {
   if (new Set(values).size !== values.length)
     throw new Error(`duplicate ${name}`);
+}
+
+function sameMaterialization(
+  left: VerificationMaterialization | undefined,
+  right: VerificationMaterialization | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return (
+    left.schemaVersion === right.schemaVersion &&
+    left.ref === right.ref &&
+    left.runtimeDescriptorDigest === right.runtimeDescriptorDigest &&
+    left.authoritativeSourceBundleDigest ===
+      right.authoritativeSourceBundleDigest &&
+    left.entryCount === right.entryCount &&
+    left.totalBytes === right.totalBytes
+  );
 }
 
 const IDENTITY_KEYS = VERIFICATION_IDENTITY_KEYS;

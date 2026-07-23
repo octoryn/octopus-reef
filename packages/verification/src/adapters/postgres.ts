@@ -26,6 +26,7 @@ import {
 import {
   parseVerificationCheckResultResponse,
   parseVerificationEventResponse,
+  parseVerificationMaterializationResponse,
   parseVerificationRunResponse,
 } from "../client-schema.js";
 import {
@@ -73,6 +74,12 @@ interface RunRow {
   readonly lease_owner: string | null;
   readonly lease_expires_at: unknown | null;
   readonly fencing_token: string | number | null;
+  readonly materialization_schema_version: string | null;
+  readonly materialization_ref: string | null;
+  readonly materialization_descriptor_digest: string | null;
+  readonly authoritative_source_bundle_digest: string | null;
+  readonly materialization_entry_count: string | number | null;
+  readonly materialization_total_bytes: string | number | null;
 }
 
 interface EventRow {
@@ -244,7 +251,10 @@ export class PostgresVerificationStore
     runRef: string,
   ): Promise<VerificationRun | undefined> {
     const result = await this.#pool.query<RunRow>(
-      `SELECT run_data, version, state, lease_owner, lease_expires_at, fencing_token
+      `SELECT run_data, version, state, lease_owner, lease_expires_at, fencing_token,
+              materialization_schema_version, materialization_ref,
+              materialization_descriptor_digest, authoritative_source_bundle_digest,
+              materialization_entry_count, materialization_total_bytes
        FROM verification_runs WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3`,
       [tenant.organisationRef, tenant.projectRef, runRef],
     );
@@ -669,7 +679,10 @@ export class PostgresVerificationStore
     runRef: string,
   ): Promise<VerificationRun | undefined> {
     const result = await client.query<RunRow>(
-      `SELECT run_data, version, state, lease_owner, lease_expires_at, fencing_token
+      `SELECT run_data, version, state, lease_owner, lease_expires_at, fencing_token,
+              materialization_schema_version, materialization_ref,
+              materialization_descriptor_digest, authoritative_source_bundle_digest,
+              materialization_entry_count, materialization_total_bytes
        FROM verification_runs WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3
        FOR UPDATE`,
       [tenant.organisationRef, tenant.projectRef, runRef],
@@ -686,7 +699,10 @@ export class PostgresVerificationStore
     lock: boolean,
   ): Promise<VerificationRun | undefined> {
     const result = await client.query<RunRow>(
-      `SELECT run_data, version, state, lease_owner, lease_expires_at, fencing_token
+      `SELECT run_data, version, state, lease_owner, lease_expires_at, fencing_token,
+              materialization_schema_version, materialization_ref,
+              materialization_descriptor_digest, authoritative_source_bundle_digest,
+              materialization_entry_count, materialization_total_bytes
        FROM verification_runs WHERE organisation_ref=$1 AND project_ref=$2 AND idempotency_key=$3
        ${lock ? "FOR UPDATE" : ""}`,
       [tenant.organisationRef, tenant.projectRef, idempotencyKey],
@@ -752,7 +768,11 @@ export class PostgresVerificationStore
     await client.query(
       `UPDATE verification_runs SET state=$4, version=$5, attempt=$6, event_cursor=$7,
          run_data=$8::jsonb, lease_owner=$9, lease_expires_at=$10,
-         fencing_token=$11, updated_at=$12
+         fencing_token=$11, updated_at=$12,
+         materialization_schema_version=$13, materialization_ref=$14,
+         materialization_descriptor_digest=$15,
+         authoritative_source_bundle_digest=$16,
+         materialization_entry_count=$17, materialization_total_bytes=$18
        WHERE organisation_ref=$1 AND project_ref=$2 AND run_ref=$3`,
       [
         run.organisationRef,
@@ -767,6 +787,12 @@ export class PostgresVerificationStore
         run.lease?.expiresAt ?? null,
         run.lease?.fencingToken ?? null,
         run.updatedAt,
+        run.materialization?.schemaVersion ?? null,
+        run.materialization?.ref ?? null,
+        run.materialization?.runtimeDescriptorDigest ?? null,
+        run.materialization?.authoritativeSourceBundleDigest ?? null,
+        run.materialization?.entryCount ?? null,
+        run.materialization?.totalBytes ?? null,
       ],
     );
   }
@@ -810,13 +836,66 @@ function runFromRow(row: RunRow): VerificationRun {
     throw new Error("persisted verification run checks must be an array");
   }
   const verdict = run["verdict"];
-  return parseVerificationRunResponse({
+  const parsed = parseVerificationRunResponse({
     ...run,
     checks: checks.map((check) => bindNestedIdentity(check, identity)),
     ...(verdict === undefined
       ? {}
       : { verdict: bindNestedIdentity(verdict, identity) }),
   });
+  const columns = materializationFromRow(row);
+  if (!isDeepStrictEqual(parsed.materialization, columns)) {
+    throw new Error(
+      "persisted verification materialization column/document mismatch",
+    );
+  }
+  return parsed;
+}
+
+function materializationFromRow(
+  row: RunRow,
+): VerificationRun["materialization"] {
+  const values = [
+    row.materialization_schema_version,
+    row.materialization_ref,
+    row.materialization_descriptor_digest,
+    row.authoritative_source_bundle_digest,
+    row.materialization_entry_count,
+    row.materialization_total_bytes,
+  ];
+  if (values.every((value) => value === null)) return undefined;
+  if (values.some((value) => value === null)) {
+    throw new Error("persisted verification materialization is partial");
+  }
+  return parseVerificationMaterializationResponse({
+    schemaVersion: row.materialization_schema_version,
+    ref: row.materialization_ref,
+    runtimeDescriptorDigest: row.materialization_descriptor_digest,
+    authoritativeSourceBundleDigest: row.authoritative_source_bundle_digest,
+    entryCount: safePersistedCount(
+      row.materialization_entry_count,
+      "materialization entry count",
+    ),
+    totalBytes: safePersistedCount(
+      row.materialization_total_bytes,
+      "materialization total bytes",
+    ),
+  });
+}
+
+function safePersistedCount(
+  value: string | number | null,
+  name: string,
+): number {
+  const number = typeof value === "string" ? Number(value) : value;
+  if (
+    typeof number !== "number" ||
+    !Number.isSafeInteger(number) ||
+    number < 0
+  ) {
+    throw new Error(`persisted ${name} is invalid`);
+  }
+  return number;
 }
 
 function mutable(
@@ -856,6 +935,9 @@ function applyMutation(
     ...(mutation.sandboxRef === undefined
       ? {}
       : { sandboxRef: mutation.sandboxRef }),
+    ...(mutation.materialization === undefined
+      ? {}
+      : { materialization: mutation.materialization }),
     version: current.version + 1,
     eventCursor: parseVerificationDecimalCursor(
       mutation.eventCursor ?? eventCursor,
@@ -866,6 +948,11 @@ function applyMutation(
   if (mutation.clearLease) {
     const { lease, ...rest } = next;
     void lease;
+    next = rest;
+  }
+  if (mutation.clearMaterialization) {
+    const { materialization, ...rest } = next;
+    void materialization;
     next = rest;
   }
   if (mutation.clearFailure) {
