@@ -142,7 +142,7 @@ jobs:
           test "$(docker image inspect reef-verification-worker:preflight --format '{{.Config.User}}')" = node
 
       - name: Scan source tree and preflight images before any publish
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@v0.32.0
         with:
           scan-type: fs
           scan-ref: .
@@ -150,21 +150,21 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
       - name: Scan API image before any publish
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@v0.32.0
         with:
           image-ref: reef-verification-api:preflight
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
       - name: Scan Worker image before any publish
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@v0.32.0
         with:
           image-ref: reef-verification-worker:preflight
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
       - name: Scan Golden Stack sandbox before any publish
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@v0.32.0
         with:
           image-ref: reef-verification-golden-stack:preflight
           severity: HIGH,CRITICAL
@@ -305,21 +305,21 @@ jobs:
           format: cyclonedx-json
           output-file: profile-image.cdx.json
       - name: Scan published content-addressed API image
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@v0.32.0
         with:
           image-ref: ${{ env.API_REPOSITORY }}@${{ steps.api.outputs.digest }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
       - name: Scan published content-addressed Worker image
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@v0.32.0
         with:
           image-ref: ${{ env.WORKER_REPOSITORY }}@${{ steps.worker.outputs.digest }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
       - name: Scan published content-addressed Golden Stack sandbox
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@v0.32.0
         with:
           image-ref: ${{ env.PROFILE_REPOSITORY }}@${{ steps.profile.outputs.digest }}
           severity: HIGH,CRITICAL

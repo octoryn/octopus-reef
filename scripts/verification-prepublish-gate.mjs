@@ -86,7 +86,7 @@ for (const marker of [
   "npm publish --provenance",
   "linux/amd64,linux/arm64",
   "anchore/sbom-action",
-  "aquasecurity/trivy-action",
+  "aquasecurity/trivy-action@v0.32.0",
   "attest-build-provenance",
   "verification-release-record.json",
   "REEF_TEST_DOCKER_IMAGE",
