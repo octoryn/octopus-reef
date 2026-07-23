@@ -33,6 +33,25 @@ import {
 
 const databaseUrl = process.env["REEF_TEST_POSTGRES_URL"];
 
+const materializationColumns = [
+  "materialization_schema_version",
+  "materialization_ref",
+  "materialization_descriptor_ref",
+  "materialization_descriptor_digest",
+  "authoritative_source_bundle_digest",
+  "builder_source_bundle_ref",
+  "builder_source_bundle_digest",
+  "builder_source_bundle_binding_ref",
+  "builder_source_bundle_binding_digest",
+  "materialization_entry_count",
+  "materialization_total_bytes",
+] as const;
+
+type MaterializationColumn = (typeof materializationColumns)[number];
+type MaterializationTuple = Readonly<
+  Record<MaterializationColumn, string | number | null>
+>;
+
 test(
   "real PostgreSQL migrates 0.3 rows without reinterpreting the colliding materialization",
   {
@@ -149,6 +168,276 @@ test(
         store.get(run, run.runRef),
         /0\.3 materialization contract is incompatible with 0\.4/,
       );
+    } finally {
+      await pool.end();
+      await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await admin.end();
+    }
+  },
+);
+
+test(
+  "real PostgreSQL total materialization CHECK rejects every partial and malformed tuple",
+  {
+    skip:
+      databaseUrl === undefined
+        ? "REEF_TEST_POSTGRES_URL is not configured"
+        : false,
+  },
+  async () => {
+    const admin = postgresPool(databaseUrl!);
+    const schema = `reef_v041_total_check_${process.pid}_${Date.now()}`;
+    await admin.query(`CREATE SCHEMA "${schema}"`);
+    const isolated = new URL(databaseUrl!);
+    isolated.searchParams.set("options", `-csearch_path=${schema}`);
+    const pool = postgresPool(isolated.toString());
+    const store = new PostgresVerificationStore(pool);
+    const allNull = materializationTuple();
+    const v1 = materializationTuple({
+      materialization_schema_version: "octopus.reef.materialization/v1",
+      materialization_ref: `materialization:${"1".repeat(64)}`,
+      materialization_descriptor_digest: `sha256:${"2".repeat(64)}`,
+      authoritative_source_bundle_digest: `sha256:${"3".repeat(64)}`,
+      materialization_entry_count: 1,
+      materialization_total_bytes: 0,
+    });
+    const builderDigest = `sha256:${"4".repeat(64)}`;
+    const v2 = materializationTuple({
+      materialization_schema_version: "octopus.reef.materialization/v2",
+      materialization_ref: `materialization:${"5".repeat(64)}`,
+      materialization_descriptor_ref: `materialization-descriptor:${"6".repeat(64)}`,
+      materialization_descriptor_digest: `sha256:${"7".repeat(64)}`,
+      authoritative_source_bundle_digest: builderDigest,
+      builder_source_bundle_ref: `source-bundle:${builderDigest}`,
+      builder_source_bundle_digest: builderDigest,
+      builder_source_bundle_binding_ref: `builder-source-bundle-binding:${"8".repeat(64)}`,
+      builder_source_bundle_binding_digest: `sha256:${"9".repeat(64)}`,
+      materialization_entry_count: 2,
+      materialization_total_bytes: 3,
+    });
+    try {
+      for (const migration of VERIFICATION_MIGRATIONS.slice(0, 3)) {
+        await pool.query(migration.sql);
+      }
+      await insertConstraintFixture(pool, "all-null");
+      await insertConstraintFixture(pool, "complete-v1");
+      await insertConstraintFixture(pool, "complete-v2");
+      await updateMaterialization(pool, "complete-v1", v1);
+      await updateMaterialization(pool, "complete-v2", v2);
+      await assert.rejects(store.ready(), /readiness failed/);
+
+      await pool.query(VERIFICATION_MIGRATIONS[3]!.sql);
+      await store.ready();
+
+      for (const column of materializationColumns) {
+        await assertMaterializationConstraintViolation(
+          updateMaterialization(
+            pool,
+            "all-null",
+            materializationTuple({
+              [column]: v2[column],
+            }),
+          ),
+          `only ${column}`,
+        );
+      }
+      await updateMaterialization(pool, "all-null", allNull);
+
+      const v1Required = [
+        "materialization_schema_version",
+        "materialization_ref",
+        "materialization_descriptor_digest",
+        "authoritative_source_bundle_digest",
+        "materialization_entry_count",
+        "materialization_total_bytes",
+      ] as const;
+      for (const column of v1Required) {
+        await assertMaterializationConstraintViolation(
+          updateMaterialization(
+            pool,
+            "complete-v1",
+            materializationTuple({ ...v1, [column]: null }),
+          ),
+          `v1 missing ${column}`,
+        );
+      }
+      for (const [label, tuple] of [
+        [
+          "v1 malformed schema",
+          materializationTuple({
+            ...v1,
+            materialization_schema_version: "octopus.reef.materialization/v0",
+          }),
+        ],
+        [
+          "v1 malformed ref",
+          materializationTuple({
+            ...v1,
+            materialization_ref: "materialization:01",
+          }),
+        ],
+        [
+          "v1 malformed descriptor digest",
+          materializationTuple({
+            ...v1,
+            materialization_descriptor_digest: "sha256:01",
+          }),
+        ],
+        [
+          "v1 malformed authoritative digest",
+          materializationTuple({
+            ...v1,
+            authoritative_source_bundle_digest: "sha256:01",
+          }),
+        ],
+        [
+          "v1 zero entries",
+          materializationTuple({ ...v1, materialization_entry_count: 0 }),
+        ],
+        [
+          "v1 negative bytes",
+          materializationTuple({ ...v1, materialization_total_bytes: -1 }),
+        ],
+        [
+          "v1 mixed with v2-only field",
+          materializationTuple({
+            ...v1,
+            materialization_descriptor_ref: v2.materialization_descriptor_ref,
+          }),
+        ],
+      ] as const) {
+        await assertMaterializationConstraintViolation(
+          updateMaterialization(pool, "complete-v1", tuple),
+          label,
+        );
+      }
+
+      for (const column of materializationColumns) {
+        await assertMaterializationConstraintViolation(
+          updateMaterialization(
+            pool,
+            "complete-v2",
+            materializationTuple({ ...v2, [column]: null }),
+          ),
+          `v2 missing ${column}`,
+        );
+      }
+      for (const [label, tuple] of [
+        [
+          "v2 malformed schema",
+          materializationTuple({
+            ...v2,
+            materialization_schema_version: "octopus.reef.materialization/v3",
+          }),
+        ],
+        [
+          "v2 malformed ref",
+          materializationTuple({
+            ...v2,
+            materialization_ref: "materialization:01",
+          }),
+        ],
+        [
+          "v2 malformed descriptor ref",
+          materializationTuple({
+            ...v2,
+            materialization_descriptor_ref: "materialization-descriptor:01",
+          }),
+        ],
+        [
+          "v2 malformed descriptor digest",
+          materializationTuple({
+            ...v2,
+            materialization_descriptor_digest: "sha256:01",
+          }),
+        ],
+        [
+          "v2 malformed source bundle ref",
+          materializationTuple({
+            ...v2,
+            builder_source_bundle_ref: "source-bundle:sha256:01",
+          }),
+        ],
+        [
+          "v2 malformed source bundle digest",
+          materializationTuple({
+            ...v2,
+            authoritative_source_bundle_digest: "sha256:01",
+            builder_source_bundle_digest: "sha256:01",
+          }),
+        ],
+        [
+          "v2 source bundle digest mismatch",
+          materializationTuple({
+            ...v2,
+            authoritative_source_bundle_digest: `sha256:${"a".repeat(64)}`,
+          }),
+        ],
+        [
+          "v2 malformed binding ref",
+          materializationTuple({
+            ...v2,
+            builder_source_bundle_binding_ref:
+              "builder-source-bundle-binding:01",
+          }),
+        ],
+        [
+          "v2 malformed binding digest",
+          materializationTuple({
+            ...v2,
+            builder_source_bundle_binding_digest: "sha256:01",
+          }),
+        ],
+        [
+          "v2 zero entries",
+          materializationTuple({ ...v2, materialization_entry_count: 0 }),
+        ],
+        [
+          "v2 negative bytes",
+          materializationTuple({ ...v2, materialization_total_bytes: -1 }),
+        ],
+      ] as const) {
+        await assertMaterializationConstraintViolation(
+          updateMaterialization(pool, "complete-v2", tuple),
+          label,
+        );
+      }
+
+      await updateMaterialization(pool, "all-null", allNull);
+      await updateMaterialization(pool, "complete-v1", v1);
+      await updateMaterialization(pool, "complete-v2", v2);
+      await pool.query(VERIFICATION_MIGRATIONS[3]!.sql);
+
+      const restartedPool = postgresPool(isolated.toString());
+      const restartedStore = new PostgresVerificationStore(restartedPool);
+      try {
+        await restartedStore.ready();
+        const rows = await restartedPool.query<{
+          readonly run_ref: string;
+          readonly materialization_schema_version: string | null;
+        }>(
+          `SELECT run_ref, materialization_schema_version
+           FROM verification_runs
+           WHERE run_ref IN ('verification:all-null', 'verification:complete-v1', 'verification:complete-v2')
+           ORDER BY run_ref`,
+        );
+        assert.deepEqual(rows.rows, [
+          {
+            run_ref: "verification:all-null",
+            materialization_schema_version: null,
+          },
+          {
+            run_ref: "verification:complete-v1",
+            materialization_schema_version: "octopus.reef.materialization/v1",
+          },
+          {
+            run_ref: "verification:complete-v2",
+            materialization_schema_version: "octopus.reef.materialization/v2",
+          },
+        ]);
+      } finally {
+        await restartedPool.end();
+      }
     } finally {
       await pool.end();
       await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
@@ -544,4 +833,79 @@ function postgresPool(
     }) => VerificationPgPoolLike & { end(): Promise<void> };
   };
   return new Pool({ connectionString });
+}
+
+function materializationTuple(
+  values: Partial<MaterializationTuple> = {},
+): MaterializationTuple {
+  return Object.fromEntries(
+    materializationColumns.map((column) => [column, values[column] ?? null]),
+  ) as unknown as MaterializationTuple;
+}
+
+async function insertConstraintFixture(
+  pool: VerificationPgPoolLike,
+  suffix: string,
+): Promise<void> {
+  const digest = `sha256:${"a".repeat(64)}`;
+  await pool.query(
+    `INSERT INTO verification_runs (
+      organisation_ref, project_ref, run_ref, idempotency_key,
+      candidate_ref, candidate_digest, source_bundle_ref, source_bundle_digest,
+      verification_profile_ref, verification_profile_version, verification_profile_digest,
+      state, version, attempt, event_cursor, run_data, created_at, updated_at
+    ) VALUES (
+      'organisation:constraint', 'project:constraint', $1, $2,
+      'foundation-candidate:constraint', $3, 'source-bundle:constraint', $3,
+      'verification-profile:constraint', '1.0.0', $3,
+      'queued', 1, 1, 0, '{}'::jsonb, now(), now()
+    )`,
+    [`verification:${suffix}`, `constraint:${suffix}`, digest],
+  );
+}
+
+function updateMaterialization(
+  pool: VerificationPgPoolLike,
+  suffix: string,
+  tuple: MaterializationTuple,
+): Promise<unknown> {
+  return pool.query(
+    `UPDATE verification_runs SET
+      materialization_schema_version=$1,
+      materialization_ref=$2,
+      materialization_descriptor_ref=$3,
+      materialization_descriptor_digest=$4,
+      authoritative_source_bundle_digest=$5,
+      builder_source_bundle_ref=$6,
+      builder_source_bundle_digest=$7,
+      builder_source_bundle_binding_ref=$8,
+      builder_source_bundle_binding_digest=$9,
+      materialization_entry_count=$10,
+      materialization_total_bytes=$11
+    WHERE organisation_ref='organisation:constraint'
+      AND project_ref='project:constraint'
+      AND run_ref=$12`,
+    [
+      ...materializationColumns.map((column) => tuple[column]),
+      `verification:${suffix}`,
+    ],
+  );
+}
+
+async function assertMaterializationConstraintViolation(
+  operation: Promise<unknown>,
+  label: string,
+): Promise<void> {
+  await assert.rejects(
+    operation,
+    (error: unknown) => {
+      assert.equal(
+        (error as { readonly code?: string }).code,
+        "23514",
+        `${label} must fail with check_violation`,
+      );
+      return true;
+    },
+    label,
+  );
 }

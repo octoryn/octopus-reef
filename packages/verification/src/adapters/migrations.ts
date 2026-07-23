@@ -27,4 +27,14 @@ export const VERIFICATION_MIGRATIONS: readonly VerificationMigration[] = [
       "utf8",
     ),
   },
+  {
+    id: "0004_materialization_identity_total_check",
+    sql: readFileSync(
+      new URL(
+        "../../migrations/0004_materialization_identity_total_check.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  },
 ];

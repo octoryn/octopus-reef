@@ -9,6 +9,10 @@ test("runtime migration bytes exactly match the published migration asset", () =
     ["0001_verification", "0001_verification.sql"],
     ["0002_materialization", "0002_materialization.sql"],
     ["0003_builder_v1_binding", "0003_builder_v1_binding.sql"],
+    [
+      "0004_materialization_identity_total_check",
+      "0004_materialization_identity_total_check.sql",
+    ],
   ] as const;
   assert.equal(VERIFICATION_MIGRATIONS.length, expected.length);
   for (const [index, [id, filename]] of expected.entries()) {

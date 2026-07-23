@@ -199,6 +199,8 @@ export class PostgresVerificationStore
           WHERE conrelid='verification_runs'::regclass
             AND conname='verification_runs_materialization_identity_check'
             AND pg_get_constraintdef(oid) LIKE '%octopus.reef.materialization/v2%'
+            AND pg_get_constraintdef(oid) LIKE '%num_nonnulls%'
+            AND pg_get_constraintdef(oid) LIKE '%IS TRUE%'
         ) AS ok`,
     );
     if (result.rows[0]?.ok !== true)
