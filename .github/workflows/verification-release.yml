@@ -65,9 +65,6 @@ jobs:
           test "$(node -p 'require("./packages/verification/package.json").version')" = "$VERSION"
           test "$(node -p 'require("./packages/control-plane/package.json").dependencies["@octopus-reef/verification"]')" = "$VERSION"
           test "$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.visibility')" = "public"
-          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/${GITHUB_REPOSITORY}/immutable-releases" \
-            --jq 'select(.enabled == true)'
           for package in @octopus-reef/control-plane @octopus-reef/verification; do
             if npm view "${package}@${VERSION}" --json > existing-package.json 2>/dev/null; then
               test "$(jq -r '.gitHead' existing-package.json)" = "$GITHUB_SHA"
