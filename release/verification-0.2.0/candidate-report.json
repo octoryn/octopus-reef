@@ -1,9 +1,9 @@
 {
   "schemaVersion": "reef.verification-candidate-report.v1",
   "decision": "READY_FOR_INDEPENDENT_AUDIT",
-  "implementationCommit": "71679c5e9840f2a69601d74f3a7e212b457eaacf",
+  "implementationCommit": "e57b95ff70f1fefb735e7e2d47810cf644ee286a",
   "recoveredFromCommit": "5d73dd32bcf00393ab359c38e165bac86d62e942",
-  "preparedAt": "2026-07-23T01:29:49Z",
+  "preparedAt": "2026-07-23T01:40:02Z",
   "releaseIdentity": {
     "publicPackage": "@octopus-reef/control-plane@0.2.0",
     "formalRuntimePackage": "@octopus-reef/verification@0.2.0",
@@ -55,6 +55,14 @@
       "failure": "The services and health checks passed, but Docker Compose emitted one JSON object for the migration service while the exit assertion assumed an array.",
       "publishedArtifacts": [],
       "disposition": "The gate now normalizes both supported object and array JSON shapes, still requires exactly one migration service, verifies its identity and requires ExitCode 0. The exact Compose gate passed locally after the fix."
+    },
+    {
+      "runId": 29971978435,
+      "tagCommit": "aa05be8296b598bbb2c1b59300cd0b272cbe874d",
+      "stage": "Trivy setup before the first source vulnerability scan",
+      "failure": "trivy-action v0.32.0 attempted to install its retired default Trivy v0.64.1 release and exited before scanning; no vulnerability result was produced.",
+      "publishedArtifacts": [],
+      "disposition": "All seven source, preflight-image and registry-image scans now pin official trivy-action v0.36.0 by immutable tag SHA; its Trivy v0.70.0 source scan completed locally with zero HIGH and zero CRITICAL findings. Scan severities and fail-closed exit codes are unchanged."
     }
   ],
   "prepublishGates": {
@@ -68,6 +76,12 @@
       "note": "The six environment-gated integrations were executed separately with real PostgreSQL and Docker."
     },
     "dependencyAudit": {
+      "high": 0,
+      "critical": 0
+    },
+    "sourceVulnerabilityScan": {
+      "passed": true,
+      "scanner": "Trivy 0.70.0",
       "high": 0,
       "critical": 0
     },
