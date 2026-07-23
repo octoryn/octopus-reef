@@ -58,6 +58,7 @@ jobs:
           test "$(node -p 'require("./packages/control-plane/package.json").version')" = "$VERSION"
           test "$(node -p 'require("./packages/verification/package.json").version')" = "$VERSION"
           test "$(node -p 'require("./packages/control-plane/package.json").dependencies["@octopus-reef/verification"]')" = "$VERSION"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.visibility')" = "public"
           ! npm view "@octopus-reef/control-plane@${VERSION}" version >/dev/null 2>&1
           ! npm view "@octopus-reef/verification@${VERSION}" version >/dev/null 2>&1
           ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1
@@ -229,6 +230,12 @@ jobs:
 
       - name: Reverify preflight digests after environment approval
         run: (cd release-assets && sha256sum --check preflight-checks.sha256)
+
+      - name: Rebuild and match exact publishable npm payloads
+        run: |
+          set -euo pipefail
+          node scripts/verification-prepublish-gate.mjs > publish-package-gate.json
+          cmp release-assets/verification-package-gate.json publish-package-gate.json
 
       - name: Build and publish immutable multi-architecture API image
         id: api

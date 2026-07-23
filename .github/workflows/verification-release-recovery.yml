@@ -2,7 +2,7 @@ name: deterministic-verification-release-recovery
 
 on:
   push:
-    tags: ["control-plane-v0.2.0-recovery.1"]
+    tags: ["control-plane-v0.2.0-recovery.*"]
 
 permissions:
   contents: write
@@ -18,6 +18,7 @@ env:
   RELEASE_TAG: control-plane-v0.2.0
   RELEASE_COMMIT: 0f48f1eba430db0919e94736639d329db7774bb8
   INITIAL_RUN_ID: "29973863378"
+  PRIVATE_PROVENANCE_RUN_ID: "29975098080"
   API_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-api
   API_DIGEST: sha256:5c92606b97fda21b3e9070a1e669a2f50f0a9685c174c74c6a5670f4674b82ac
   WORKER_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-worker
@@ -51,12 +52,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF_NAME" = "control-plane-v${VERSION}-recovery.1"
+          [[ "$GITHUB_REF_NAME" =~ ^control-plane-v${VERSION}-recovery\.[0-9]+$ ]]
           test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$RELEASE_COMMIT"
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           test "$(node -p 'require("./packages/control-plane/package.json").version')" = "$VERSION"
           test "$(node -p 'require("./packages/verification/package.json").version')" = "$VERSION"
           test "$(node -p 'require("./packages/control-plane/package.json").dependencies["@octopus-reef/verification"]')" = "$VERSION"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.visibility')" = "public"
           ! npm view "@octopus-reef/control-plane@${VERSION}" version >/dev/null 2>&1
           ! npm view "@octopus-reef/verification@${VERSION}" version >/dev/null 2>&1
           ! gh release view "$RELEASE_TAG" >/dev/null 2>&1
@@ -152,6 +154,7 @@ jobs:
             --arg recoveryTag "$GITHUB_REF_NAME" \
             --arg recoveryCommit "$GITHUB_SHA" \
             --arg initialRunId "$INITIAL_RUN_ID" \
+            --arg privateProvenanceRunId "$PRIVATE_PROVENANCE_RUN_ID" \
             --arg recoveryRunId "$GITHUB_RUN_ID" \
             --arg apiDigest "$API_DIGEST" \
             --arg workerDigest "$WORKER_DIGEST" \
@@ -163,8 +166,9 @@ jobs:
               recoveryTag: $recoveryTag,
               recoveryCommit: $recoveryCommit,
               initialRunId: $initialRunId,
+              privateProvenanceRunId: $privateProvenanceRunId,
               recoveryRunId: $recoveryRunId,
-              reason: "GitHub repository attestation persistence is unavailable on the private organization plan",
+              reason: "The initial private-repository run could not persist GitHub repository attestations, and npm rejected native provenance because it requires a public source repository",
               provenance: "BuildKit SLSA v1 OCI attestations embedded in each digest-bound multi-architecture manifest",
               apiDigest: $apiDigest,
               workerDigest: $workerDigest,
@@ -223,6 +227,12 @@ jobs:
       - name: Reverify recovery evidence after environment approval
         run: (cd release-assets && sha256sum --check recovery-preflight-checks.sha256)
 
+      - name: Rebuild and match exact publishable npm payloads
+        run: |
+          set -euo pipefail
+          node scripts/verification-prepublish-gate.mjs > publish-package-gate.json
+          cmp release-assets/verification-package-gate.json publish-package-gate.json
+
       - name: Publish exact compatible npm packages with provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -277,7 +287,7 @@ jobs:
               provenance: {
                 format: "SLSA v1 OCI attestations",
                 storage: "digest-bound BuildKit attestation manifests in GHCR",
-                githubRepositoryAttestation: "unavailable on the private organization plan"
+                githubRepositoryAttestation: "not produced in the initial private-repository run; digest-bound OCI provenance was independently reverified"
               },
               publicationRecovery: ($recovery[0] + {completedRunId: $recoveryRunId}),
               status: "candidate-awaiting-independent-audit",
@@ -301,8 +311,8 @@ jobs:
           Release checks digest: ${checks_digest}
 
           Each image carries digest-bound BuildKit SLSA v1 OCI provenance and SBOM
-          attestations. GitHub repository attestation persistence is unavailable on
-          the private organization plan; publication recovery evidence is attached.
+          attestations. GitHub repository attestation persistence was unavailable
+          during the initial private-repository run; recovery evidence is attached.
           This Release remains draft until an independent registry/tag/digest audit.
           EOF
           gh release create "$RELEASE_TAG" \

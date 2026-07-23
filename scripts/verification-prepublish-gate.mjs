@@ -84,6 +84,8 @@ for (const forbidden of ["`command`", "`argv`", "raw credential", "AgentRun"]) {
 const workflow = text(".github/workflows/verification-release.yml");
 for (const marker of [
   "npm publish --provenance",
+  "publish-package-gate.json",
+  'gh api "repos/${GITHUB_REPOSITORY}" --jq',
   "linux/amd64,linux/arm64",
   "anchore/sbom-action",
   "aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8",
@@ -170,10 +172,18 @@ try {
     "verification tarball is missing its PostgreSQL migration",
   );
   assert(
+    verificationPack.files.some((file) => file.path === "dist/bin.js"),
+    "verification tarball is missing its executable entrypoint",
+  );
+  assert(
     controlPlanePack.files.some(
       (file) => file.path === "dist/verification-client.js",
     ),
     "control-plane tarball is missing its verification client compatibility export",
+  );
+  assert(
+    controlPlanePack.files.some((file) => file.path === "dist/bin.js"),
+    "control-plane tarball is missing its executable entrypoint",
   );
 
   const verificationTarball = join(temporary, verificationPack.filename);
