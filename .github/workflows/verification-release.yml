@@ -2,6 +2,12 @@ name: deterministic-verification-release
 
 on:
   workflow_dispatch:
+    inputs:
+      recover_immutable_0_3_0:
+        description: Recover publication without moving the existing immutable 0.3.0 tag
+        required: false
+        default: false
+        type: boolean
   push:
     tags: ["control-plane-v0.3.0"]
 
@@ -17,6 +23,9 @@ concurrency:
 
 env:
   VERSION: 0.3.0
+  RELEASE_TAG: control-plane-v0.3.0
+  RELEASE_COMMIT: ${{ inputs.recover_immutable_0_3_0 && 'e75f5bdb2c81e0d72be88b9830a24d59f8cd509c' || github.sha }}
+  RECOVERY_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.recover_immutable_0_3_0 && 'true' || 'false' }}
   API_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-api
   WORKER_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-worker
   PROFILE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-golden-stack
@@ -43,6 +52,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.recover_immutable_0_3_0 && env.RELEASE_TAG || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22.17.1"
@@ -56,12 +66,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            test "$GITHUB_REF_NAME" = "control-plane-v${VERSION}"
-            test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
+          if [[ "$GITHUB_REF" == refs/tags/* || "$RECOVERY_MODE" == true ]]; then
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              test "$GITHUB_REF_NAME" = "$RELEASE_TAG"
+            fi
+            test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" > release-tag-ref.json
+            test "$(jq -r '.object.type' release-tag-ref.json)" = tag
+            tag_object="$(jq -r '.object.sha' release-tag-ref.json)"
+            gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" > release-tag-object.json
+            test "$(jq -r '.object.type' release-tag-object.json)" = commit
+            test "$(jq -r '.object.sha' release-tag-object.json)" = "$RELEASE_COMMIT"
           else
             test "$GITHUB_EVENT_NAME" = workflow_dispatch
-            ! git show-ref --verify --quiet "refs/tags/control-plane-v${VERSION}"
+            ! git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
           fi
           test "$(node -p 'require("./packages/control-plane/package.json").version')" = "$VERSION"
           test "$(node -p 'require("./packages/verification/package.json").version')" = "$VERSION"
@@ -69,17 +87,17 @@ jobs:
           test "$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.visibility')" = "public"
           for package in @octopus-reef/control-plane @octopus-reef/verification; do
             if npm view "${package}@${VERSION}" --json > existing-package.json 2>/dev/null; then
-              test "$(jq -r '.gitHead' existing-package.json)" = "$GITHUB_SHA"
+              test "$(jq -r '.gitHead' existing-package.json)" = "$RELEASE_COMMIT"
             fi
           done
-          release_tag="control-plane-v${VERSION}"
+          release_tag="$RELEASE_TAG"
           if gh release view "$release_tag" --json tagName > existing-release.json 2>/dev/null; then
             test "$(jq -r '.tagName' existing-release.json)" = "$release_tag"
-            test "$GITHUB_REF" = "refs/tags/${release_tag}"
+            test "$RECOVERY_MODE" = true || test "$GITHUB_REF" = "refs/tags/${release_tag}"
           fi
           for repository in "$API_REPOSITORY" "$WORKER_REPOSITORY" "$PROFILE_REPOSITORY"; do
             if version_digest="$(docker buildx imagetools inspect "${repository}:${VERSION}" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
-              commit_digest="$(docker buildx imagetools inspect "${repository}:sha-${GITHUB_SHA}" --format '{{.Manifest.Digest}}')"
+              commit_digest="$(docker buildx imagetools inspect "${repository}:sha-${RELEASE_COMMIT}" --format '{{.Manifest.Digest}}')"
               test "$version_digest" = "$commit_digest"
             fi
           done
@@ -89,9 +107,10 @@ jobs:
           set -euo pipefail
           report=release/verification-0.3.0/candidate-report.json
           test -f "$report"
-          implementation_commit="$(git rev-parse "$GITHUB_SHA^")"
-          test "$(git diff --name-only "$implementation_commit" "$GITHUB_SHA" | wc -l | tr -d ' ')" = 1
-          test "$(git diff --name-only "$implementation_commit" "$GITHUB_SHA")" = "$report"
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+          implementation_commit="$(git rev-parse "${RELEASE_COMMIT}^")"
+          test "$(git diff --name-only "$implementation_commit" "$RELEASE_COMMIT" | wc -l | tr -d ' ')" = 1
+          test "$(git diff --name-only "$implementation_commit" "$RELEASE_COMMIT")" = "$report"
           jq -e --arg sha "$implementation_commit" '
             .schemaVersion == "reef.verification-candidate-report.v1" and
             .decision == "READY_FOR_INDEPENDENT_AUDIT" and
@@ -450,7 +469,7 @@ jobs:
             --slurpfile packageGate verification-package-gate.json \
             '{
               schemaVersion: "reef.verification-preflight-summary.v1",
-              gitCommit: env.GITHUB_SHA,
+              gitCommit: env.RELEASE_COMMIT,
               sourceTests: $candidate[0].prepublishGates.fullSourceTests,
               postgres: $candidate[0].realPostgresTests,
               docker: $candidate[0].isolatedDockerTests,
@@ -484,7 +503,7 @@ jobs:
             > preflight-checks.sha256
       - uses: actions/upload-artifact@v4
         with:
-          name: deterministic-verification-preflight-${{ github.sha }}
+          name: deterministic-verification-preflight-${{ env.RELEASE_COMMIT }}
           if-no-files-found: error
           retention-days: 90
           path: |
@@ -516,13 +535,14 @@ jobs:
   publish:
     name: publish one complete immutable release bundle
     needs: preflight
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.recover_immutable_0_3_0)
     runs-on: ubuntu-latest
     environment: deterministic-verification-release
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.recover_immutable_0_3_0 && env.RELEASE_TAG || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22.17.1"
@@ -537,7 +557,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
-          name: deterministic-verification-preflight-${{ github.sha }}
+          name: deterministic-verification-preflight-${{ env.RELEASE_COMMIT }}
           path: release-assets
       - run: npm ci --ignore-scripts
 
@@ -557,7 +577,7 @@ jobs:
         run: |
           set -euo pipefail
           version_ref="${REPOSITORY}:${VERSION}"
-          commit_ref="${REPOSITORY}:sha-${GITHUB_SHA}"
+          commit_ref="${REPOSITORY}:sha-${RELEASE_COMMIT}"
           version_exists=false
           commit_exists=false
           if docker buildx imagetools inspect "$version_ref" --format '{{.Manifest.Digest}}' > version-digest.txt 2>/dev/null; then
@@ -600,12 +620,12 @@ jobs:
           provenance: mode=max
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ env.RELEASE_COMMIT }}
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.licenses=Apache-2.0
           tags: |
             ${{ env.API_REPOSITORY }}:${{ env.VERSION }}
-            ${{ env.API_REPOSITORY }}:sha-${{ github.sha }}
+            ${{ env.API_REPOSITORY }}:sha-${{ env.RELEASE_COMMIT }}
       - name: Bind the immutable API manifest
         id: api_identity
         env:
@@ -624,7 +644,7 @@ jobs:
         run: |
           set -euo pipefail
           version_ref="${REPOSITORY}:${VERSION}"
-          commit_ref="${REPOSITORY}:sha-${GITHUB_SHA}"
+          commit_ref="${REPOSITORY}:sha-${RELEASE_COMMIT}"
           version_exists=false
           commit_exists=false
           if docker buildx imagetools inspect "$version_ref" --format '{{.Manifest.Digest}}' > version-digest.txt 2>/dev/null; then version_exists=true; fi
@@ -663,12 +683,12 @@ jobs:
           provenance: mode=max
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ env.RELEASE_COMMIT }}
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.licenses=Apache-2.0
           tags: |
             ${{ env.WORKER_REPOSITORY }}:${{ env.VERSION }}
-            ${{ env.WORKER_REPOSITORY }}:sha-${{ github.sha }}
+            ${{ env.WORKER_REPOSITORY }}:sha-${{ env.RELEASE_COMMIT }}
       - name: Bind the immutable Worker manifest
         id: worker_identity
         env:
@@ -687,7 +707,7 @@ jobs:
         run: |
           set -euo pipefail
           version_ref="${REPOSITORY}:${VERSION}"
-          commit_ref="${REPOSITORY}:sha-${GITHUB_SHA}"
+          commit_ref="${REPOSITORY}:sha-${RELEASE_COMMIT}"
           version_exists=false
           commit_exists=false
           if docker buildx imagetools inspect "$version_ref" --format '{{.Manifest.Digest}}' > version-digest.txt 2>/dev/null; then version_exists=true; fi
@@ -727,12 +747,12 @@ jobs:
             REEF_VERIFICATION_API_IMAGE=${{ env.API_REPOSITORY }}@${{ steps.api_identity.outputs.digest }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ env.RELEASE_COMMIT }}
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.licenses=Apache-2.0
           tags: |
             ${{ env.PROFILE_REPOSITORY }}:${{ env.VERSION }}
-            ${{ env.PROFILE_REPOSITORY }}:sha-${{ github.sha }}
+            ${{ env.PROFILE_REPOSITORY }}:sha-${{ env.RELEASE_COMMIT }}
       - name: Bind the immutable Golden manifest
         id: profile_identity
         env:
@@ -837,13 +857,13 @@ jobs:
           expected_verification_integrity="$(jq -r '.packages.verification.integrity' release-assets/verification-package-gate.json)"
           expected_control_integrity="$(jq -r '.packages.controlPlane.integrity' release-assets/verification-package-gate.json)"
           if npm view "@octopus-reef/verification@${VERSION}" --json > verification-existing.json 2>/dev/null; then
-            test "$(jq -r '.gitHead' verification-existing.json)" = "$GITHUB_SHA"
+            test "$(jq -r '.gitHead' verification-existing.json)" = "$RELEASE_COMMIT"
             test "$(jq -r '.dist.integrity' verification-existing.json)" = "$expected_verification_integrity"
           else
             npm publish --provenance --access public --workspace @octopus-reef/verification
           fi
           if npm view "@octopus-reef/control-plane@${VERSION}" --json > control-plane-existing.json 2>/dev/null; then
-            test "$(jq -r '.gitHead' control-plane-existing.json)" = "$GITHUB_SHA"
+            test "$(jq -r '.gitHead' control-plane-existing.json)" = "$RELEASE_COMMIT"
             test "$(jq -r '.dist.integrity' control-plane-existing.json)" = "$expected_control_integrity"
             test "$(jq -r '.dependencies[\"@octopus-reef/verification\"]' control-plane-existing.json)" = "$VERSION"
           else
@@ -876,8 +896,11 @@ jobs:
           profile_version="$(jq -r '.version' golden-profile.json)"
           profile_digest="$(jq -r '.digest' golden-profile.json)"
           jq -n \
-            --arg gitTag "$GITHUB_REF_NAME" \
-            --arg gitCommit "$GITHUB_SHA" \
+            --arg gitTag "$RELEASE_TAG" \
+            --arg gitCommit "$RELEASE_COMMIT" \
+            --arg publicationWorkflowCommit "$GITHUB_SHA" \
+            --arg publicationRunId "$GITHUB_RUN_ID" \
+            --arg recoveryMode "$RECOVERY_MODE" \
             --arg apiRepository "$API_REPOSITORY" \
             --arg apiDigest "$API_DIGEST" \
             --arg workerRepository "$WORKER_REPOSITORY" \
@@ -898,6 +921,12 @@ jobs:
               internalPackage: {name: "@octopus-reef/verification", version: "0.3.0"},
               gitTag: $gitTag,
               gitCommit: $gitCommit,
+              publicationWorkflow: {
+                workflowCommit: $publicationWorkflowCommit,
+                runId: $publicationRunId,
+                immutableTagRecovery: ($recoveryMode == "true"),
+                recoveryInvariant: "the annotated tag, release commit, package payloads, and image source remain unchanged"
+              },
               apiImage: {repository: $apiRepository, manifestDigest: $apiDigest},
               workerImage: {repository: $workerRepository, manifestDigest: $workerDigest},
               profileImage: {repository: $profileRepository, manifestDigest: $profileImageDigest},
@@ -1018,10 +1047,10 @@ jobs:
           cp release-assets/packages/verification/migrations/0002_materialization.sql .
           cp release-assets/docs/DETERMINISTIC-VERIFICATION-0.3-MIGRATION.md .
           recovery="$(mktemp -d)"
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            asset_count="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            asset_count="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')"
             if test "$asset_count" -gt 0; then
-              gh release download "$GITHUB_REF_NAME" --dir "$recovery"
+              gh release download "$RELEASE_TAG" --dir "$recovery"
             fi
             for existing in "$recovery"/*; do
               test -f "$existing" || continue
@@ -1032,7 +1061,7 @@ jobs:
               esac
             done
             if test -f verification-release-record.json; then
-              test "$(jq -r '.gitCommit' verification-release-record.json)" = "$GITHUB_SHA"
+              test "$(jq -r '.gitCommit' verification-release-record.json)" = "$RELEASE_COMMIT"
             fi
           fi
           sha256sum --check verification-release-record.sha256
@@ -1075,8 +1104,8 @@ jobs:
           if test -f "$recovery/release-bundle.sha256.sha256"; then
             cmp "$recovery/release-bundle.sha256.sha256" release-bundle.sha256.sha256
           fi
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" \
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
               --verify-tag \
               --prerelease \
               --title "@octopus-reef/control-plane ${VERSION} deterministic verification" \
@@ -1107,8 +1136,8 @@ jobs:
             release-bundle.sha256 release-bundle.sha256.sha256
           )
           for asset in "${assets[@]}"; do
-            if ! gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | grep -Fx "$asset" >/dev/null; then
-              gh release upload "$GITHUB_REF_NAME" "$asset"
+            if ! gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fx "$asset" >/dev/null; then
+              gh release upload "$RELEASE_TAG" "$asset"
             fi
           done
 
@@ -1117,13 +1146,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release view "$GITHUB_REF_NAME" \
+          gh release view "$RELEASE_TAG" \
             --json isDraft,isPrerelease \
             --jq 'select(.isDraft == false and .isPrerelease == true)'
           anonymous="$(mktemp -d)"
           trap 'rm -rf "$anonymous"' EXIT
           curl --fail --silent --show-error \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
             > "$anonymous/release.json"
           jq -r '.assets[].browser_download_url' "$anonymous/release.json" |
             while IFS= read -r url; do
