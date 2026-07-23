@@ -2,7 +2,7 @@ name: deterministic-verification-release
 
 on:
   push:
-    tags: ["control-plane-v0.2.1"]
+    tags: ["control-plane-v0.2.2"]
 
 permissions:
   contents: write
@@ -11,11 +11,11 @@ permissions:
   security-events: write
 
 concurrency:
-  group: deterministic-verification-0.2.1
+  group: deterministic-verification-0.2.2
   cancel-in-progress: false
 
 env:
-  VERSION: 0.2.1
+  VERSION: 0.2.2
   API_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-api
   WORKER_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-worker
   PROFILE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-golden-stack
@@ -69,7 +69,7 @@ jobs:
       - name: Require a report-only release authorization commit
         run: |
           set -euo pipefail
-          report=release/verification-0.2.1/candidate-report.json
+          report=release/verification-0.2.2/candidate-report.json
           test -f "$report"
           implementation_commit="$(git rev-parse "$GITHUB_SHA^")"
           test "$(git diff --name-only "$implementation_commit" "$GITHUB_SHA" | wc -l | tr -d ' ')" = 1
@@ -198,7 +198,7 @@ jobs:
             --username reef_verification \
             --dbname reef_verification \
             --tuples-only --no-align \
-            --command \"select indexdef from pg_indexes where indexname='verification_queue_claim_idx'\")" = \
+            --command "select indexdef from pg_indexes where indexname='verification_queue_claim_idx'")" = \
             "CREATE INDEX verification_queue_claim_idx ON public.verification_queue USING btree (available_at, created_at)"
 
       - name: Scan source tree and preflight images before any publish
@@ -244,7 +244,7 @@ jobs:
           set -euo pipefail
           npm sbom --workspace @octopus-reef/verification --sbom-format cyclonedx > verification-package.cdx.json
           npm sbom --workspace @octopus-reef/control-plane --sbom-format cyclonedx > control-plane-package.cdx.json
-          cp release/verification-0.2.1/candidate-report.json candidate-report.json
+          cp release/verification-0.2.2/candidate-report.json candidate-report.json
           sha256sum \
             verification-package-gate.json \
             verification-package.cdx.json \
@@ -481,8 +481,8 @@ jobs:
             --slurpfile verification verification-registry.json \
             '{
               schemaVersion: "reef.verification-release.v1",
-              package: {name: "@octopus-reef/control-plane", version: "0.2.1"},
-              internalPackage: {name: "@octopus-reef/verification", version: "0.2.1"},
+              package: {name: "@octopus-reef/control-plane", version: "0.2.2"},
+              internalPackage: {name: "@octopus-reef/verification", version: "0.2.2"},
               gitTag: $gitTag,
               gitCommit: $gitCommit,
               apiImage: {repository: $apiRepository, manifestDigest: $apiDigest},

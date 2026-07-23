@@ -15,19 +15,19 @@ assert(
   "control-plane package identity drifted",
 );
 assert(
-  controlPlane.version === "0.2.1",
-  "control-plane release must be exactly 0.2.1",
+  controlPlane.version === "0.2.2",
+  "control-plane release must be exactly 0.2.2",
 );
 assert(
   verification.name === "@octopus-reef/verification",
   "verification package identity drifted",
 );
 assert(
-  verification.version === "0.2.1",
-  "verification release must be exactly 0.2.1",
+  verification.version === "0.2.2",
+  "verification release must be exactly 0.2.2",
 );
 assert(
-  controlPlane.dependencies?.["@octopus-reef/verification"] === "0.2.1",
+  controlPlane.dependencies?.["@octopus-reef/verification"] === "0.2.2",
   "control-plane must declare the exact formal verification compatibility version",
 );
 

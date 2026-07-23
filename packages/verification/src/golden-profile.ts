@@ -13,7 +13,7 @@ export function createGoldenStackProfile(
   assertDigest(sandboxImageDigest, "Golden Stack sandbox image digest");
   const tool = {
     name: "golden-stack-sandbox",
-    version: "0.2.1",
+    version: "0.2.2",
     imageDigest: sandboxImageDigest,
   };
   const definition = (
