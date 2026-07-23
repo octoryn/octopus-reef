@@ -1,9 +1,9 @@
 {
   "schemaVersion": "reef.verification-candidate-report.v1",
   "decision": "READY_FOR_INDEPENDENT_AUDIT",
-  "implementationCommit": "b0f80bc4e1789d9a29515293869ceafba961f363",
+  "implementationCommit": "71679c5e9840f2a69601d74f3a7e212b457eaacf",
   "recoveredFromCommit": "5d73dd32bcf00393ab359c38e165bac86d62e942",
-  "preparedAt": "2026-07-23T01:21:25Z",
+  "preparedAt": "2026-07-23T01:29:49Z",
   "releaseIdentity": {
     "publicPackage": "@octopus-reef/control-plane@0.2.0",
     "formalRuntimePackage": "@octopus-reef/verification@0.2.0",
@@ -47,6 +47,14 @@
       "failure": "PostgreSQL correctly created postgres.log with owner-only permissions, so the host Worker could not collect the optional expected artifact before sandbox teardown.",
       "publishedArtifacts": [],
       "disposition": "The non-root sandbox user now grants its private host group access after each command and immediately before artifact collection, while excluding symlinks and retaining a mode-0700 host root. The real Golden Stack passed after the fix."
+    },
+    {
+      "runId": 29971645669,
+      "tagCommit": "349981cce54c218e3cd92087c5128f0596a24105",
+      "stage": "real generated Next.js, FastAPI and PostgreSQL Docker Compose preflight",
+      "failure": "The services and health checks passed, but Docker Compose emitted one JSON object for the migration service while the exit assertion assumed an array.",
+      "publishedArtifacts": [],
+      "disposition": "The gate now normalizes both supported object and array JSON shapes, still requires exactly one migration service, verifies its identity and requires ExitCode 0. The exact Compose gate passed locally after the fix."
     }
   ],
   "prepublishGates": {
