@@ -4,6 +4,19 @@
 
 本项目所有重要变更记录于此。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.1] — 2026-07-23
+
+### 修复
+
+- 将发布包中的 Verification SQL 资产设为运行时迁移的唯一来源，并新增构建期逐字节绑定门禁。0.2.0 的 Release 记录摘要与运行时嵌入迁移不一致，因此由本版本取代。
+- 保留 0.2.0 运行时实际创建的普通 queue claim 索引，使升级数据库与全新安装数据库收敛到同一 PostgreSQL schema。
+- 远程 Golden Stack 镜像必须注入当前不可变 API manifest，不再允许使用过期的默认 runner 镜像。
+
+### 变更
+
+- 发布候选现在先提供公开、checksum 绑定的 prerelease，供 detached 黑盒审计；最终化只附加审计，不改写任何已审计资产。
+- 远程可信 profile 身份更新为 `1.0.2`。
+
 ## [0.2.0] — 2026-07-08
 
 指挥官版本:Reef 现在不只治理单个智能体的一场会话,而是治理一整支**舰队**,并证明这支舰队做过什么。
@@ -33,5 +46,6 @@
 - **执行安全** —— `reefAllowlist`(允许已知安全者)加上可选的 `SandboxExecutor`:无 shell、拒绝网络、写入限定在工作区、`$HOME` 机密不可读、中和 git 配置驱动的代码执行。
 - **各形态** —— CLI(`run` · `verify` · `replay` · `serve`)、真实的 Claude driver、服务端守护进程(HTTP + SSE)、Web UI(Vite + React)、VS Code IDE 扩展,以及一键 Docker。
 
+[0.2.1]: https://github.com/octoryn/octopus-reef/releases/tag/control-plane-v0.2.1
 [0.2.0]: https://github.com/octoryn/octopus-reef/releases/tag/v0.2.0
 [0.1.0]: https://github.com/octoryn/octopus-reef/releases/tag/v0.1.0

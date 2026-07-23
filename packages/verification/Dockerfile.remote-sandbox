@@ -1,7 +1,8 @@
-# The remote sandbox composes the exact published Golden Stack toolchain with
-# the exact runner compiled into the published API image. Both bases are
-# immutable multi-architecture manifests from the 0.2.0 release candidate.
-ARG REEF_VERIFICATION_API_IMAGE=ghcr.io/octoryn/octopus-reef-verification-api@sha256:5c92606b97fda21b3e9070a1e669a2f50f0a9685c174c74c6a5670f4674b82ac
+# The release workflow must inject the exact current API manifest so a stale
+# sandbox runner can never be selected by a mutable or default image name.
+ARG REEF_VERIFICATION_API_IMAGE
+# The reviewed Golden toolchain is already immutable and contains no Reef
+# runtime code; the current runner is copied from REEF_VERIFICATION_API_IMAGE.
 ARG REEF_VERIFICATION_GOLDEN_IMAGE=ghcr.io/octoryn/octopus-reef-verification-golden-stack@sha256:5f7ba00a8b4757a96124fe3aa2ba8f7b565a67ee9fec13803cce526225103d29
 
 FROM ${REEF_VERIFICATION_API_IMAGE} AS reef-runtime

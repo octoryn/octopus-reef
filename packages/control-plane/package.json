@@ -1,6 +1,6 @@
 {
   "name": "@octopus-reef/control-plane",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Reef control plane with separate durable AgentRun and deterministic Verification Run public contracts.",
   "license": "Apache-2.0",
   "author": "Ran Tao <ran@octopusos.ai>",
@@ -81,7 +81,7 @@
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
-    "@octopus-reef/verification": "0.2.0",
+    "@octopus-reef/verification": "0.2.1",
     "@octopus-reef/adapter-runtime": "^0.1.1",
     "@octopus-reef/agent": "^0.2.3",
     "@octopus-reef/engine": "^0.2.1",

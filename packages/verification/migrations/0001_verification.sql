@@ -102,5 +102,4 @@ CREATE TABLE IF NOT EXISTS verification_queue (
 );
 
 CREATE INDEX IF NOT EXISTS verification_queue_claim_idx
-  ON verification_queue (available_at, created_at)
-  WHERE receipt IS NULL OR lease_expires_at IS NOT NULL;
+  ON verification_queue (available_at, created_at);

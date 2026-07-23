@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-07-23
+
+### Fixed
+
+- Made the published Verification SQL asset the single runtime migration source
+  and added a build-time exact-byte binding gate. This supersedes 0.2.0, whose
+  release-record migration digest described different bytes from the embedded
+  runtime migration.
+- Preserved the ordinary queue claim index actually created by 0.2.0 so upgraded
+  and newly installed databases converge on the same PostgreSQL schema.
+- Required the remote Golden Stack image to inject the current immutable API
+  manifest instead of accepting a stale default runner image.
+
+### Changed
+
+- Release candidates now expose a public checksum-bound prerelease for detached
+  black-box audit. Finalization attaches the audit without rewriting any audited
+  bundle asset.
+- Bumped the remote trusted profile identity to `1.0.2`.
+
 ## [0.2.0] — 2026-07-08
 
 The conductor release: Reef now governs not just one agent's session but a whole
@@ -65,5 +85,6 @@ Initial workspace release: the governed agentic engineering surface.
   driver, a server daemon (HTTP + SSE), a Web UI (Vite + React), a VS Code IDE
   extension, and one-click Docker.
 
+[0.2.1]: https://github.com/octoryn/octopus-reef/releases/tag/control-plane-v0.2.1
 [0.2.0]: https://github.com/octoryn/octopus-reef/releases/tag/v0.2.0
 [0.1.0]: https://github.com/octoryn/octopus-reef/releases/tag/v0.1.0

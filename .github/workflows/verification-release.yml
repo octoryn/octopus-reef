@@ -2,7 +2,7 @@ name: deterministic-verification-release
 
 on:
   push:
-    tags: ["control-plane-v0.2.0"]
+    tags: ["control-plane-v0.2.1"]
 
 permissions:
   contents: write
@@ -11,11 +11,11 @@ permissions:
   security-events: write
 
 concurrency:
-  group: deterministic-verification-0.2.0
+  group: deterministic-verification-0.2.1
   cancel-in-progress: false
 
 env:
-  VERSION: 0.2.0
+  VERSION: 0.2.1
   API_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-api
   WORKER_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-worker
   PROFILE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/octopus-reef-verification-golden-stack
@@ -69,7 +69,7 @@ jobs:
       - name: Require a report-only release authorization commit
         run: |
           set -euo pipefail
-          report=release/verification-0.2.0/candidate-report.json
+          report=release/verification-0.2.1/candidate-report.json
           test -f "$report"
           implementation_commit="$(git rev-parse "$GITHUB_SHA^")"
           test "$(git diff --name-only "$implementation_commit" "$GITHUB_SHA" | wc -l | tr -d ' ')" = 1
@@ -136,6 +136,11 @@ jobs:
           set -euo pipefail
           docker build --target api -f packages/verification/Dockerfile -t reef-verification-api:preflight .
           docker build --target worker -f packages/verification/Dockerfile -t reef-verification-worker:preflight .
+          docker build \
+            --build-arg REEF_VERIFICATION_API_IMAGE=reef-verification-api:preflight \
+            -f packages/verification/Dockerfile.remote-sandbox \
+            -t reef-verification-remote-sandbox:preflight \
+            .
           docker run --rm \
             --network host \
             --env REEF_VERIFICATION_DATABASE_URL \
@@ -147,6 +152,54 @@ jobs:
           docker run --rm --entrypoint sh reef-verification-worker:preflight -c '! command -v npm && test ! -d /usr/local/lib/node_modules/npm'
           test "$(docker image inspect reef-verification-api:preflight --format '{{.Config.User}}')" = node
           test "$(docker image inspect reef-verification-worker:preflight --format '{{.Config.User}}')" = node
+          test "$(docker image inspect reef-verification-remote-sandbox:preflight --format '{{.Config.User}}')" = node
+
+          docker run --detach --name reef-verification-pg17 \
+            --publish 127.0.0.1:5433:5432 \
+            --env POSTGRES_DB=reef_verification \
+            --env POSTGRES_USER=reef_verification \
+            --env POSTGRES_PASSWORD=reef-verification-release-test \
+            postgres:17-alpine
+          cleanup_pg17() {
+            docker rm --force reef-verification-pg17 >/dev/null 2>&1 || true
+          }
+          trap cleanup_pg17 EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec reef-verification-pg17 \
+              pg_isready -U reef_verification -d reef_verification; then
+              break
+            fi
+            test "$attempt" -lt 30
+            sleep 1
+          done
+          pg17_url=postgresql://reef_verification:reef-verification-release-test@127.0.0.1:5433/reef_verification
+          docker run --rm --network host \
+            --env "REEF_VERIFICATION_DATABASE_URL=${pg17_url}" \
+            --env REEF_VERIFICATION_DATABASE_SSL_MODE=disable \
+            reef-verification-api:preflight migrate
+          docker run --rm --network host \
+            --env "REEF_VERIFICATION_DATABASE_URL=${pg17_url}" \
+            --env REEF_VERIFICATION_DATABASE_SSL_MODE=disable \
+            reef-verification-api:preflight migrate
+          docker restart reef-verification-pg17
+          for attempt in $(seq 1 30); do
+            if docker exec reef-verification-pg17 \
+              pg_isready -U reef_verification -d reef_verification; then
+              break
+            fi
+            test "$attempt" -lt 30
+            sleep 1
+          done
+          docker run --rm --network host \
+            --env "REEF_VERIFICATION_DATABASE_URL=${pg17_url}" \
+            --env REEF_VERIFICATION_DATABASE_SSL_MODE=disable \
+            reef-verification-api:preflight migrate
+          test "$(docker exec reef-verification-pg17 psql \
+            --username reef_verification \
+            --dbname reef_verification \
+            --tuples-only --no-align \
+            --command \"select indexdef from pg_indexes where indexname='verification_queue_claim_idx'\")" = \
+            "CREATE INDEX verification_queue_claim_idx ON public.verification_queue USING btree (available_at, created_at)"
 
       - name: Scan source tree and preflight images before any publish
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
@@ -177,13 +230,21 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+      - name: Scan remote Golden Stack sandbox before any publish
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: reef-verification-remote-sandbox:preflight
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
 
       - name: Generate package SBOMs and digest-bound preflight record
         run: |
           set -euo pipefail
           npm sbom --workspace @octopus-reef/verification --sbom-format cyclonedx > verification-package.cdx.json
           npm sbom --workspace @octopus-reef/control-plane --sbom-format cyclonedx > control-plane-package.cdx.json
-          cp release/verification-0.2.0/candidate-report.json candidate-report.json
+          cp release/verification-0.2.1/candidate-report.json candidate-report.json
           sha256sum \
             verification-package-gate.json \
             verification-package.cdx.json \
@@ -248,6 +309,11 @@ jobs:
           push: true
           sbom: true
           provenance: mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.licenses=Apache-2.0
           tags: |
             ${{ env.API_REPOSITORY }}:${{ env.VERSION }}
             ${{ env.API_REPOSITORY }}:sha-${{ github.sha }}
@@ -262,19 +328,31 @@ jobs:
           push: true
           sbom: true
           provenance: mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.licenses=Apache-2.0
           tags: |
             ${{ env.WORKER_REPOSITORY }}:${{ env.VERSION }}
             ${{ env.WORKER_REPOSITORY }}:sha-${{ github.sha }}
-      - name: Build and publish immutable multi-architecture Golden Stack sandbox
+      - name: Build and publish immutable multi-architecture remote Golden Stack sandbox
         id: profile
         uses: docker/build-push-action@v6
         with:
-          context: packages/verification/tests/fixtures/golden-stack
-          file: packages/verification/tests/fixtures/golden-stack/Dockerfile.sandbox
+          context: .
+          file: packages/verification/Dockerfile.remote-sandbox
           platforms: linux/amd64,linux/arm64
           push: true
           sbom: true
           provenance: mode=max
+          build-args: |
+            REEF_VERIFICATION_API_IMAGE=${{ env.API_REPOSITORY }}@${{ steps.api.outputs.digest }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.licenses=Apache-2.0
           tags: |
             ${{ env.PROFILE_REPOSITORY }}:${{ env.VERSION }}
             ${{ env.PROFILE_REPOSITORY }}:sha-${{ github.sha }}
@@ -346,10 +424,10 @@ jobs:
         run: |
           set -euo pipefail
           npm run build --workspace @octopus-reef/verification
-          node scripts/write-verification-golden-profile.mjs "$PROFILE_DIGEST" golden-profile.json
+          node scripts/write-verification-remote-profile.mjs "$PROFILE_DIGEST" golden-profile.json
           jq -e --arg digest "$PROFILE_DIGEST" '
             .ref == "verification-profile:golden-next-fastapi-postgres" and
-            .version == "1.0.0" and
+            .version == "1.0.2" and
             .sandboxImageDigest == $digest and
             (.checks | length == 8) and
             (.checks | all(.[]; .required == true and .tool.imageDigest == $digest))
@@ -379,7 +457,9 @@ jobs:
           PROFILE_DIGEST: ${{ steps.profile.outputs.digest }}
         run: |
           set -euo pipefail
-          migration_digest="sha256:$(sha256sum packages/verification/migrations/0001_verification.sql | awk '{print $1}')"
+          migration_digest="$(jq -r '.migrationSetDigest' release-assets/verification-package-gate.json)"
+          migration_exact="$(jq -r '.migrationBindings[0].exactBytes' release-assets/verification-package-gate.json)"
+          test "$migration_exact" = true
           profile_ref="$(jq -r '.ref' golden-profile.json)"
           profile_version="$(jq -r '.version' golden-profile.json)"
           profile_digest="$(jq -r '.digest' golden-profile.json)"
@@ -397,27 +477,51 @@ jobs:
             --arg profileVersion "$profile_version" \
             --arg profileDigest "$profile_digest" \
             --slurpfile candidate release-assets/candidate-report.json \
+            --slurpfile control control-plane-registry.json \
+            --slurpfile verification verification-registry.json \
             '{
               schemaVersion: "reef.verification-release.v1",
-              package: {name: "@octopus-reef/control-plane", version: "0.2.0"},
-              internalPackage: {name: "@octopus-reef/verification", version: "0.2.0"},
+              package: {name: "@octopus-reef/control-plane", version: "0.2.1"},
+              internalPackage: {name: "@octopus-reef/verification", version: "0.2.1"},
               gitTag: $gitTag,
               gitCommit: $gitCommit,
               apiImage: {repository: $apiRepository, manifestDigest: $apiDigest},
               workerImage: {repository: $workerRepository, manifestDigest: $workerDigest},
               profileImage: {repository: $profileRepository, manifestDigest: $profileImageDigest},
+              platforms: ["linux/amd64", "linux/arm64"],
+              npm: {
+                controlPlane: {
+                  integrity: $control[0].dist.integrity,
+                  shasum: $control[0].dist.shasum,
+                  gitHead: $control[0].gitHead,
+                  verificationDependency: $control[0].dependencies["@octopus-reef/verification"]
+                },
+                verification: {
+                  integrity: $verification[0].dist.integrity,
+                  shasum: $verification[0].dist.shasum,
+                  gitHead: $verification[0].gitHead
+                }
+              },
               schemaHead: "0001_verification",
               migrationSetDigest: $migrationSetDigest,
+              migrationBinding: {
+                asset: "migrations/0001_verification.sql",
+                runtimeModule: "dist/adapters/migrations.js",
+                exactBytes: true
+              },
               profile: {ref: $profileRef, version: $profileVersion, digest: $profileDigest},
               typedClientContract: "/v1/verifications",
               evidenceContract: "octopus-evidence@0.2.0/store-untrusting",
-              status: "candidate-awaiting-independent-audit",
+              status: "public-candidate-awaiting-detached-audit",
               candidateReport: $candidate[0],
-              independentAudit: null
+              independentAudit: {
+                required: true,
+                binding: "sha256(release-bundle.sha256)"
+              }
             }' > verification-release-record.json
           sha256sum verification-release-record.json > verification-release-record.sha256
 
-      - name: Create immutable draft Release awaiting registry/tag/digest black-box audit
+      - name: Create immutable public prerelease awaiting registry/tag/digest black-box audit
         env:
           GH_TOKEN: ${{ github.token }}
           API_DIGEST: ${{ steps.api.outputs.digest }}
@@ -438,9 +542,26 @@ jobs:
           and reef-verification worker. Pin package, tag and images exactly; mutable
           tags and partial artifacts are not compatible release identities.
           EOF
+          cp release-assets/verification-package-gate.json .
+          cp release-assets/verification-package.cdx.json .
+          cp release-assets/control-plane-package.cdx.json .
+          cp release-assets/candidate-report.json .
+          sha256sum \
+            verification-release-record.json \
+            verification-release-record.sha256 \
+            golden-profile.json \
+            api-manifest.json worker-manifest.json profile-manifest.json \
+            api-image.cdx.json worker-image.cdx.json profile-image.cdx.json \
+            verification-registry.json control-plane-registry.json \
+            verification-package-gate.json \
+            verification-package.cdx.json \
+            control-plane-package.cdx.json \
+            candidate-report.json \
+            > release-bundle.sha256
+          sha256sum release-bundle.sha256 > release-bundle.sha256.sha256
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag \
-            --draft \
+            --prerelease \
             --title "@octopus-reef/control-plane ${VERSION} deterministic verification" \
             --notes-file release-notes.md \
             verification-release-record.json \
@@ -449,7 +570,31 @@ jobs:
             api-manifest.json worker-manifest.json profile-manifest.json \
             api-image.cdx.json worker-image.cdx.json profile-image.cdx.json \
             verification-registry.json control-plane-registry.json \
-            release-assets/verification-package.cdx.json \
-            release-assets/control-plane-package.cdx.json \
-            release-assets/preflight-checks.sha256 \
-            release-assets/candidate-report.json
+            verification-package-gate.json \
+            verification-package.cdx.json \
+            control-plane-package.cdx.json \
+            candidate-report.json \
+            release-bundle.sha256 \
+            release-bundle.sha256.sha256
+
+      - name: Prove the candidate bundle is anonymously public
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$GITHUB_REF_NAME" \
+            --json isDraft,isPrerelease \
+            --jq 'select(.isDraft == false and .isPrerelease == true)'
+          anonymous="$(mktemp -d)"
+          trap 'rm -rf "$anonymous"' EXIT
+          curl --fail --silent --show-error \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" \
+            > "$anonymous/release.json"
+          jq -r '.assets[].browser_download_url' "$anonymous/release.json" |
+            while IFS= read -r url; do
+              curl --fail --silent --show-error --location \
+                --output "$anonymous/$(basename "$url")" \
+                "$url"
+            done
+          (cd "$anonymous" && sha256sum --check release-bundle.sha256.sha256)
+          (cd "$anonymous" && sha256sum --check release-bundle.sha256)

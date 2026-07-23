@@ -1,0 +1,181 @@
+name: deterministic-verification-release-finalize-0.2.1
+
+on:
+  push:
+    tags: ["verification-finalize-v0.2.1"]
+
+permissions:
+  contents: write
+  packages: read
+
+concurrency:
+  group: deterministic-verification-0.2.1
+  cancel-in-progress: false
+
+env:
+  VERSION: 0.2.1
+  RELEASE_TAG: control-plane-v0.2.1
+  AUDIT_PATH: release/verification-0.2.1/independent-audit.json
+
+jobs:
+  finalize:
+    name: verify detached black-box GO and finalize the public Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.17.1"
+          registry-url: https://registry.npmjs.org
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Verify the report-only audit commit and public candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "verification-finalize-v${VERSION}"
+          test -f "$AUDIT_PATH"
+          audit_parent="$(git rev-parse "$GITHUB_SHA^")"
+          test "$(git diff --name-only "$audit_parent" "$GITHUB_SHA" | wc -l | tr -d ' ')" = 1
+          test "$(git diff --name-only "$audit_parent" "$GITHUB_SHA")" = "$AUDIT_PATH"
+
+          release_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
+          jq -e --arg sha "$release_commit" '
+            .schemaVersion == "reef.verification-independent-audit.v2" and
+            .decision == "GO for Builder compatibility review" and
+            .gitCommit == $sha and
+            (.bundleDigest | test("^sha256:[0-9a-f]{64}$")) and
+            (.gates | type == "array" and length == 10) and
+            (.gates | all(.[]; .status == "GO")) and
+            (.knownUnverified | type == "array")
+          ' "$AUDIT_PATH"
+
+          gh release view "$RELEASE_TAG" \
+            --json isDraft,isPrerelease \
+            --jq 'select(.isDraft == false and .isPrerelease == true)'
+          test "$(npm view "@octopus-reef/control-plane@${VERSION}" gitHead)" = "$release_commit"
+          test "$(npm view "@octopus-reef/verification@${VERSION}" gitHead)" = "$release_commit"
+          test "$(npm view "@octopus-reef/control-plane@${VERSION}" dependencies.@octopus-reef/verification)" = "$VERSION"
+
+      - name: Anonymously download and verify the immutable bundle
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          curl --fail --silent --show-error \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+            > release-assets/release.json
+          jq -r '.assets[].browser_download_url' release-assets/release.json |
+            while IFS= read -r url; do
+              curl --fail --silent --show-error --location \
+                --output "release-assets/$(basename "$url")" \
+                "$url"
+            done
+          (cd release-assets && sha256sum --check release-bundle.sha256.sha256)
+          (cd release-assets && sha256sum --check release-bundle.sha256)
+          bundle_digest="sha256:$(sha256sum release-assets/release-bundle.sha256 | awk '{print $1}')"
+          test "$(jq -r '.bundleDigest' "$AUDIT_PATH")" = "$bundle_digest"
+
+      - name: Reverify record, migration binding, packages and OCI manifests
+        run: |
+          set -euo pipefail
+          release_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
+          record=release-assets/verification-release-record.json
+          gate=release-assets/verification-package-gate.json
+          jq -e \
+            --arg sha "$release_commit" \
+            --arg version "$VERSION" \
+            --arg migration "$(jq -r '.migrationSetDigest' "$gate")" '
+              .gitCommit == $sha and
+              .gitTag == "control-plane-v0.2.1" and
+              .package.version == $version and
+              .internalPackage.version == $version and
+              .npm.controlPlane.gitHead == $sha and
+              .npm.verification.gitHead == $sha and
+              .npm.controlPlane.verificationDependency == $version and
+              .migrationSetDigest == $migration and
+              .migrationBinding.exactBytes == true and
+              .profile.version == "1.0.2" and
+              .profile.sandboxImageDigest == .profileImage.manifestDigest and
+              (.platforms | sort == ["linux/amd64", "linux/arm64"])
+            ' "$record"
+          jq -e '
+            .migrationBindings == [{
+              id: "0001_verification",
+              asset: "migrations/0001_verification.sql",
+              runtimeModule: "dist/adapters/migrations.js",
+              digest: .migrationSetDigest,
+              exactBytes: true
+            }]
+          ' "$gate"
+          for component in apiImage workerImage profileImage; do
+            repository="$(jq -r --arg component "$component" '.[$component].repository' "$record")"
+            digest="$(jq -r --arg component "$component" '.[$component].manifestDigest' "$record")"
+            docker buildx imagetools inspect --raw "${repository}@${digest}" |
+              jq -e '
+                ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | length) == 1 and
+                ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length) == 1 and
+                ([.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")] | length) >= 2
+              '
+          done
+
+      - name: Attach the detached audit and finalize without changing bundle assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp "$AUDIT_PATH" independent-audit.json
+          gh release upload "$RELEASE_TAG" independent-audit.json
+          record=release-assets/verification-release-record.json
+          api="$(jq -r '.apiImage.repository + "@" + .apiImage.manifestDigest' "$record")"
+          worker="$(jq -r '.workerImage.repository + "@" + .workerImage.manifestDigest' "$record")"
+          profile="$(jq -r '.profileImage.repository + "@" + .profileImage.manifestDigest' "$record")"
+          migration="$(jq -r '.migrationSetDigest' "$record")"
+          profile_digest="$(jq -r '.profile.digest' "$record")"
+          bundle="$(jq -r '.bundleDigest' "$AUDIT_PATH")"
+          cat > release-notes.md <<EOF
+          @octopus-reef/control-plane@${VERSION} — Deterministic Verification Runtime
+
+          Independent result: GO for Builder compatibility review
+          Detached audit bundle: ${bundle}
+
+          npm:
+          - @octopus-reef/control-plane@${VERSION}
+          - @octopus-reef/verification@${VERSION}
+
+          API: ${api}
+          Worker: ${worker}
+          Remote Golden Stack sandbox: ${profile}
+
+          Schema head: 0001_verification
+          Migration set: ${migration}
+          Trusted profile: verification-profile:golden-next-fastapi-postgres@1.0.2
+          Profile digest: ${profile_digest}
+
+          Verification remains independent from AgentRun and cannot approve a
+          Builder deliverable or advance Builder Project State.
+          EOF
+          gh release edit "$RELEASE_TAG" \
+            --notes-file release-notes.md \
+            --prerelease=false \
+            --latest=false
+
+      - name: Prove the final bundle and audit are anonymously public
+        run: |
+          set -euo pipefail
+          final="$(mktemp -d)"
+          trap 'rm -rf "$final"' EXIT
+          curl --fail --silent --show-error \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+            > "$final/release.json"
+          jq -e '.draft == false and .prerelease == false' "$final/release.json"
+          jq -r '.assets[].browser_download_url' "$final/release.json" |
+            while IFS= read -r url; do
+              curl --fail --silent --show-error --location \
+                --output "$final/$(basename "$url")" \
+                "$url"
+            done
+          (cd "$final" && sha256sum --check release-bundle.sha256)
+          cmp "$AUDIT_PATH" "$final/independent-audit.json"
