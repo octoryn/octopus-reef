@@ -505,6 +505,8 @@ jobs:
               knownUnverified: [
                 "Fresh independent read-only black-box audit is intentionally pending.",
                 "The source commit and annotated Git tag are not GPG/SSH signed; public identity is bound by the exact peeled commit, immutable GitHub Release, npm provenance/integrity/gitHead, OCI provenance/manifest digests, and release-bundle checksums.",
+                "The macOS Chrome CDP N11/N11c tests were not independently revalidated after building workspace dist in the focused 0.4.1 audit; the targeted invocation stopped at module load because @octopus-reef/agent dist was intentionally not built. This is outside the verification-runtime 0004 production blocker.",
+                "npm audit reports four moderate GHSA-frvp-7c67-39w9 findings through development-only MCP packages with no upstream fix available; npm audit --audit-level=high and signature verification pass.",
                 "Deployment-owned AWS IAM, bucket policies, and customer staging configuration are outside the upstream release preflight.",
                 "No Builder AWS, Staging, or Production deployment was performed."
               ]
