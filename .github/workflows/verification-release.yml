@@ -504,6 +504,7 @@ jobs:
               },
               knownUnverified: [
                 "Fresh independent read-only black-box audit is intentionally pending.",
+                "The source commit and annotated Git tag are not GPG/SSH signed; public identity is bound by the exact peeled commit, immutable GitHub Release, npm provenance/integrity/gitHead, OCI provenance/manifest digests, and release-bundle checksums.",
                 "Deployment-owned AWS IAM, bucket policies, and customer staging configuration are outside the upstream release preflight.",
                 "No Builder AWS, Staging, or Production deployment was performed."
               ]
