@@ -196,7 +196,11 @@ function darwinProfile(
 ): string {
   const subpaths = (roots: readonly string[]): string =>
     roots.map((r) => `(subpath "${sbplEscape(r)}")`).join(" ");
-  const home = homedir();
+  // Compare and constrain filesystem identities, not spelling aliases. On
+  // macOS `/var` resolves to `/private/var`; leaving HOME uncanonicalized can
+  // both bypass the workspace-is-HOME refusal and make the SBPL deny target a
+  // path spelling that does not cover the same canonical files.
+  const home = canonicalRoot(homedir());
   const lines = [
     "(version 1)",
     "(allow default)",
@@ -465,7 +469,7 @@ export class SandboxExecutor implements ActionExecutor {
     // real HOME (or an ancestor, or "/"), that allow would re-open ALL of HOME
     // and nullify the whole confinement. There is no safe way to both confine
     // HOME and treat HOME as the workspace, so refuse rather than leak.
-    const home = homedir();
+    const home = canonicalRoot(homedir());
     if (!safeReadAllow(this.#root, home)) {
       return {
         ok: false,
