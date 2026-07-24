@@ -184,7 +184,7 @@ test(
         ? "REEF_TEST_POSTGRES_URL is not configured"
         : false,
   },
-  async () => {
+  async (t) => {
     const admin = postgresPool(databaseUrl!);
     const schema = `reef_v041_total_check_${process.pid}_${Date.now()}`;
     await admin.query(`CREATE SCHEMA "${schema}"`);
@@ -243,6 +243,9 @@ test(
         await materializationConstraintDefinition(pool),
         /num_nonnulls/,
       );
+      t.diagnostic(
+        "0004 pre-scan rejected one 0.4 partial row with SQLSTATE 23514 and preserved the prior constraint",
+      );
       await updateMaterialization(pool, "invalid-partial", allNull);
       await pool.query(VERIFICATION_MIGRATIONS[3]!.sql);
       await store.ready();
@@ -250,6 +253,9 @@ test(
       assert.match(totalConstraint, /num_nonnulls/);
       assert.match(totalConstraint, /CASE/);
       assert.match(totalConstraint, /IS TRUE/i);
+      t.diagnostic(
+        "database constraint introspection confirms CASE + num_nonnulls + IS TRUE",
+      );
 
       const v1PresenceValues = materializationTuple({
         ...v2,
@@ -283,6 +289,9 @@ test(
         }
       }
       assert.equal(rejectedV1PresenceMasks, 2046);
+      t.diagnostic(
+        `v1 exhaustive presence masks rejected=${rejectedV1PresenceMasks} accepted=2`,
+      );
 
       const v2CompleteMask = (1 << materializationColumns.length) - 1;
       let rejectedV2PresenceMasks = 0;
@@ -299,6 +308,9 @@ test(
         }
       }
       assert.equal(rejectedV2PresenceMasks, 2046);
+      t.diagnostic(
+        `v2 exhaustive presence masks rejected=${rejectedV2PresenceMasks} accepted=2`,
+      );
 
       for (const column of materializationColumns) {
         await assertMaterializationConstraintViolation(
@@ -473,6 +485,9 @@ test(
           label,
         );
       }
+      t.diagnostic(
+        "explicit only-one, missing-field, malformed complete, digest mismatch, and numeric-bound cases all failed with SQLSTATE 23514",
+      );
 
       await updateMaterialization(pool, "all-null", allNull);
       await updateMaterialization(pool, "complete-v1", v1);
@@ -506,6 +521,9 @@ test(
             materialization_schema_version: "octopus.reef.materialization/v2",
           },
         ]);
+        t.diagnostic(
+          "all-null, complete v1, and complete v2 controls survived repeated migration and a new connection restart",
+        );
       } finally {
         await restartedPool.end();
       }
