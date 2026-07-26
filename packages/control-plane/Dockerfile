@@ -85,14 +85,93 @@ CMD ["worker"]
 
 FROM runtime-base AS sandbox
 # The sandbox self-materialises its workspace from the Builder source binding
-# (`REEF_SOURCE_BINDING`) by cloning an IAM-authenticated CodeCommit repo. The
-# aws CLI provides the `aws codecommit credential-helper` used by the default
-# git credential helper; credentials resolve from the sandbox task role only.
+# (`REEF_SOURCE_BINDING`) by cloning an IAM-authenticated CodeCommit repo, then
+# runs the generated Next.js + FastAPI project's install/test commands with NO
+# network egress. It therefore ships a fully offline toolchain closure, mirroring
+# the proven verification golden sandbox (python3 + /opt/wheels + seeded npm
+# cache):
+#   * awscli   — `aws codecommit credential-helper` for the IAM-authenticated
+#     CodeCommit clone (credentials resolve from the sandbox task role only).
+#   * Python 3.12 (python-build-standalone; self-contained/relocatable) — the
+#     generated backend pins `requires-python>=3.12` and installs editable via
+#     `pip install -e ".[dev]"`, so bookworm's 3.11 is insufficient.
+#   * /opt/wheels — the flattened backend dependency closure plus build backends
+#     (pip/setuptools/wheel), consumed offline via
+#     `pip install --no-index --find-links=/opt/wheels` (PIP_NO_INDEX default).
+#   * /opt/npm-cache — the golden-path frontend tarball closure, consumed offline
+#     via `npm install` (npm_config_offline default).
+# All fetches happen at build time; the runtime stays no-egress except the
+# CodeCommit clone endpoint. Stays non-root (node); only the /workspace and /tmp
+# volumes are writable at runtime.
 USER root
+
+# awscli for the CodeCommit credential helper; xz-utils to unpack the Python
+# standalone archive.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends awscli \
+    && apt-get install -y --no-install-recommends awscli xz-utils \
     && apt-get clean \
     && find /var/lib/apt/lists -mindepth 1 -delete
+
+# --- Python 3.12 (self-contained, relocatable; checksum-pinned) --------------
+# python-build-standalone locates its stdlib relative to the interpreter's own
+# bin/ directory; invoking it through an external symlink (e.g. under
+# /usr/local/bin) breaks `venv` home resolution (the derived interpreter falls
+# back to the build-time `/install` prefix and cannot import `encodings`).
+# Prepend its own bin/ to PATH instead — `python`/`python3` then resolve inside
+# /opt/python/bin and venvs inherit the correct base prefix.
+ENV PATH="/opt/python/bin:${PATH}"
+ARG PY_STANDALONE_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20241219/cpython-3.12.8+20241219-x86_64-unknown-linux-gnu-install_only.tar.gz"
+ARG PY_STANDALONE_SHA256="e172c063cdad4ab016f78834b1ef9fedfac80aae08918188fe6ebb3b325ce347"
+RUN curl --fail --silent --show-error --location "${PY_STANDALONE_URL}" \
+      --output /tmp/python-standalone.tar.gz \
+    && echo "${PY_STANDALONE_SHA256}  /tmp/python-standalone.tar.gz" \
+      | sha256sum --check --strict \
+    && tar -xzf /tmp/python-standalone.tar.gz -C /opt \
+    && rm /tmp/python-standalone.tar.gz \
+    && test "$(python3 --version)" = "Python 3.12.8" \
+    && python3 -m venv /tmp/venv-probe \
+    && /tmp/venv-probe/bin/python -c "import encodings, ssl, sqlite3, ctypes" \
+    && rm -rf /tmp/venv-probe
+
+# --- Backend offline wheelhouse (/opt/wheels) --------------------------------
+# The generated backend/requirements.txt is a deterministic flattened closure;
+# pip download resolves the full transitive tree as linux/amd64 manylinux wheels
+# (this stage builds under linux/amd64). pip/setuptools/wheel are added so the
+# editable `pip install -e .` build isolation resolves its backend offline too.
+COPY packages/control-plane/sandbox-seed/backend-requirements.txt \
+     /opt/sandbox-seed/backend-requirements.txt
+RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && python3 -m pip download --no-cache-dir --dest /opt/wheels \
+         --requirement /opt/sandbox-seed/backend-requirements.txt \
+    && python3 -m pip download --no-cache-dir --dest /opt/wheels \
+         pip setuptools wheel \
+    && chmod -R a+rX /opt/wheels /opt/python
+
+# --- Frontend offline npm cache (/opt/npm-cache) -----------------------------
+# Seed the content-addressed cache with the golden-path frontend tarball closure
+# from the generated lockfile; `npm ci --ignore-scripts` populates the cache, and
+# node_modules is discarded (only the cache is retained for offline installs).
+ENV npm_config_cache=/opt/npm-cache
+COPY packages/control-plane/sandbox-seed/frontend/package.json \
+     packages/control-plane/sandbox-seed/frontend/package-lock.json \
+     /opt/sandbox-seed/frontend/
+RUN cd /opt/sandbox-seed/frontend \
+    && npm ci --ignore-scripts \
+    && rm -rf node_modules \
+    && npm cache verify \
+    && chmod -R a+rX /opt/npm-cache
+
+# --- Offline resolution defaults (no-egress runtime) -------------------------
+ENV PIP_NO_INDEX=1 \
+    PIP_FIND_LINKS=/opt/wheels \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    npm_config_cache=/opt/npm-cache \
+    npm_config_offline=true \
+    npm_config_audit=false \
+    npm_config_fund=false \
+    NEXT_TELEMETRY_DISABLED=1
+
 USER node
 ENV REEF_SANDBOX_HOST=0.0.0.0 \
     REEF_SANDBOX_PORT=8081 \

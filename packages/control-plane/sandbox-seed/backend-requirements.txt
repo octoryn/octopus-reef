@@ -1,0 +1,18 @@
+# Deterministic flattened install closure for the Reef golden-stack sandbox
+# backend-dependencies check:
+#   python3 -m venv .venv
+#   .venv/bin/pip install --no-index --find-links=/opt/wheels -r requirements.txt
+# Generated from backend/pyproject.toml; keep both in sync (asserted by tests).
+# Runtime dependencies
+alembic>=1.14,<2
+email-validator>=2,<3
+fastapi>=0.115,<1
+psycopg[binary]>=3.2,<4
+pydantic-settings>=2.8,<3
+pwdlib[argon2]>=0.2,<1
+PyJWT>=2.10,<3
+sqlalchemy>=2.0,<3
+uvicorn[standard]>=0.34,<1
+# Development / verification dependencies (pytest, httpx-backed TestClient)
+httpx>=0.28,<1
+pytest>=8.3,<9
