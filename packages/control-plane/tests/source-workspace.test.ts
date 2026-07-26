@@ -8,6 +8,7 @@ import type { CommandRunner } from "../src/adapters/local.js";
 import type { SandboxExecutionResult } from "../src/types.js";
 import { codeCommitCloneUrl } from "../src/source-binding.js";
 import {
+  codeCommitCredentialEnv,
   prepareSourceWorkspace,
   SourceWorkspaceError,
 } from "../src/source-workspace.js";
@@ -56,6 +57,7 @@ function mintBinding(): Record<string, unknown> {
 interface RecordedCall {
   readonly argv: readonly string[];
   readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 function recordingRunner(
@@ -64,7 +66,11 @@ function recordingRunner(
   const calls: RecordedCall[] = [];
   const runner: CommandRunner = {
     run(argv, options = {}) {
-      calls.push({ argv, ...(options.cwd ? { cwd: options.cwd } : {}) });
+      calls.push({
+        argv,
+        ...(options.cwd ? { cwd: options.cwd } : {}),
+        ...(options.env ? { env: options.env } : {}),
+      });
       return Promise.resolve(responder(argv));
     },
   };
@@ -88,12 +94,24 @@ test("clones the sealed revision with an IAM credential helper and no persistent
       scope: { organisationId: "org-1", projectId: "proj-1" },
       workspacePath,
       runner,
+      processEnv: {
+        AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/v2/credentials/task-guid",
+        AWS_REGION: REGION,
+      },
     });
     assert.equal(prepared.cloned, true);
     assert.equal(prepared.revision, REVISION);
 
     const clone = calls.find((c) => c.argv.includes("clone"))!;
     assert.ok(clone, "expected a git clone");
+    // The clone subprocess must carry the AWS task-role credential environment
+    // so git-remote-codecommit / the credential helper can sign the request.
+    assert.equal(
+      clone.env?.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI,
+      "/v2/credentials/task-guid",
+    );
+    assert.equal(clone.env?.AWS_REGION, REGION);
+    assert.equal(clone.env?.AWS_DEFAULT_REGION, REGION);
     // IAM credential helper is configured inline; inherited helpers cleared.
     assert.ok(clone.argv.includes("credential.helper="));
     assert.ok(
@@ -112,6 +130,36 @@ test("clones the sealed revision with an IAM credential helper and no persistent
   } finally {
     rmSync(workspacePath, { recursive: true, force: true });
   }
+});
+
+test("codeCommitCredentialEnv forwards container creds and falls back to the binding region", () => {
+  const forwarded = codeCommitCredentialEnv(REGION, {
+    AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/v2/credentials/task-guid",
+    AWS_CONTAINER_AUTHORIZATION_TOKEN: "tok",
+    HOME: "/home/reef",
+  });
+  assert.equal(
+    forwarded.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI,
+    "/v2/credentials/task-guid",
+  );
+  assert.equal(forwarded.AWS_CONTAINER_AUTHORIZATION_TOKEN, "tok");
+  // Region falls back to the binding region when the task did not set it.
+  assert.equal(forwarded.AWS_REGION, REGION);
+  assert.equal(forwarded.AWS_DEFAULT_REGION, REGION);
+  assert.equal(forwarded.HOME, "/home/reef");
+
+  // An ambient region wins over the binding fallback; HOME defaults when absent.
+  const ambient = codeCommitCredentialEnv(REGION, {
+    AWS_REGION: "us-east-1",
+    AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://169.254.170.23/creds",
+  });
+  assert.equal(ambient.AWS_REGION, "us-east-1");
+  assert.equal(ambient.AWS_DEFAULT_REGION, REGION);
+  assert.equal(
+    ambient.AWS_CONTAINER_CREDENTIALS_FULL_URI,
+    "http://169.254.170.23/creds",
+  );
+  assert.equal(ambient.HOME, "/tmp/reef-home");
 });
 
 test("fails closed on a scope mismatch before running any git command", async () => {

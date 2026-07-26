@@ -22,6 +22,53 @@ export const DEFAULT_CODECOMMIT_CREDENTIAL_HELPER =
 /** Bound the clone; a materialised Foundation bundle is small and immutable. */
 const DEFAULT_CLONE_TIMEOUT_MS = 5 * 60_000;
 
+/**
+ * Ambient AWS variables that let `git-remote-codecommit` / the CodeCommit
+ * credential helper resolve the sandbox task role. The subprocess runner uses a
+ * strict env allowlist and does NOT inherit these from the parent, so they must
+ * be threaded through explicitly for the `git clone`. `AWS_CONTAINER_CREDENTIALS_*`
+ * point botocore at the ECS/Fargate task-role credentials endpoint;
+ * `AWS_REGION` / `AWS_DEFAULT_REGION` are required for SigV4 signing.
+ *
+ * These are scoped to the source-materialisation clone only — untrusted agent
+ * commands run through `sandbox-runner`'s `childEnvironment`, which strips every
+ * `AWS_*` variable so task-role credentials never leak into executed code.
+ */
+const CODECOMMIT_CREDENTIAL_ENV_PASSTHROUGH = [
+  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+  "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+  "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+  "AWS_REGION",
+  "AWS_DEFAULT_REGION",
+] as const;
+
+/**
+ * Build the minimal AWS credential environment the CodeCommit clone needs.
+ *
+ * Passes through the ambient container-credential and region variables when the
+ * task set them, and falls back to the binding's own `git.region` for
+ * `AWS_REGION` / `AWS_DEFAULT_REGION` so signing has a region even if the task
+ * definition omitted one. `HOME` is provided so git and the awscli-based helper
+ * can resolve their config/cache dirs under the read-only rootfs. No secret is
+ * ever synthesised here — only ambient references are forwarded.
+ */
+export function codeCommitCredentialEnv(
+  region: string,
+  source: Readonly<Record<string, string | undefined>> = process.env,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of CODECOMMIT_CREDENTIAL_ENV_PASSTHROUGH) {
+    const value = source[name];
+    if (value !== undefined && value !== "") env[name] = value;
+  }
+  if (env.AWS_REGION === undefined) env.AWS_REGION = region;
+  if (env.AWS_DEFAULT_REGION === undefined) env.AWS_DEFAULT_REGION = region;
+  const home = source.HOME;
+  env.HOME = home !== undefined && home !== "" ? home : "/tmp/reef-home";
+  return env;
+}
+
 export interface PrepareSourceWorkspaceOptions {
   /** Untrusted binding read from run metadata; validated before any git runs. */
   readonly binding: unknown;
@@ -32,6 +79,12 @@ export interface PrepareSourceWorkspaceOptions {
   /** Git credential helper for IAM CodeCommit auth. */
   readonly credentialHelper?: string;
   readonly timeoutMs?: number;
+  /**
+   * Ambient environment the AWS credential passthrough is read from. Defaults to
+   * the process environment; injectable for tests. Only the container-credential
+   * and region variables are forwarded to the clone subprocess.
+   */
+  readonly processEnv?: Readonly<Record<string, string | undefined>>;
 }
 
 export interface PreparedSourceWorkspace {
@@ -67,6 +120,13 @@ export async function prepareSourceWorkspace(
   const helper =
     options.credentialHelper ?? DEFAULT_CODECOMMIT_CREDENTIAL_HELPER;
   const { cloneUrl, revision } = binding.git;
+  // AWS task-role credential environment for the CodeCommit clone. The runner's
+  // env allowlist drops inherited AWS_* vars, so the git-remote-codecommit /
+  // credential-helper subprocess only sees credentials if we forward them here.
+  const credentialEnv = codeCommitCredentialEnv(
+    binding.git.region,
+    options.processEnv,
+  );
 
   if (existsSync(join(options.workspacePath, ".git"))) {
     return {
@@ -103,7 +163,7 @@ export async function prepareSourceWorkspace(
       cloneUrl,
       options.workspacePath,
     ],
-    { timeoutMs },
+    { timeoutMs, env: credentialEnv },
   );
   if (clone.exitCode !== 0) {
     throw new SourceWorkspaceError(
