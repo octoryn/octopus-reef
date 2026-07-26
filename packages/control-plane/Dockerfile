@@ -119,7 +119,23 @@ RUN apt-get update \
 # back to the build-time `/install` prefix and cannot import `encodings`).
 # Prepend its own bin/ to PATH instead — `python`/`python3` then resolve inside
 # /opt/python/bin and venvs inherit the correct base prefix.
+#
+# CRITICAL (agent-facing): the sandbox executes EVERY agent shell command via
+# `/bin/sh -lc <cmd>` (a LOGIN shell — see control-plane sandbox-executor). On
+# Debian, a login /bin/sh sources /etc/profile, which HARD-RESETS PATH to the
+# system default and discards this ENV PATH — so inside the agent's commands
+# `python3` would resolve to the system /usr/bin/python3 (no pip/pytest) and
+# `python` would not exist at all. The image ENV alone is therefore NOT enough.
+# Restore /opt/python/bin as the highest-priority entry for login shells via a
+# /etc/profile.d drop-in (sourced by /etc/profile AFTER it sets PATH). This uses
+# the interpreter's REAL path (not a symlink), so `python`/`python3`/`pip`/`pip3`
+# resolve to /opt/python AND `python -m venv` still resolves its base prefix
+# correctly. Applied here so it exists before any later RUN; re-affirmed as a
+# file below with locked permissions.
 ENV PATH="/opt/python/bin:${PATH}"
+RUN printf '%s\n' 'PATH="/opt/python/bin:$PATH"' 'export PATH' \
+      > /etc/profile.d/00-opt-python.sh \
+    && chmod 0444 /etc/profile.d/00-opt-python.sh
 ARG PY_STANDALONE_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20241219/cpython-3.12.8+20241219-x86_64-unknown-linux-gnu-install_only.tar.gz"
 ARG PY_STANDALONE_SHA256="e172c063cdad4ab016f78834b1ef9fedfac80aae08918188fe6ebb3b325ce347"
 RUN curl --fail --silent --show-error --location "${PY_STANDALONE_URL}" \
@@ -145,23 +161,71 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
          --requirement /opt/sandbox-seed/backend-requirements.txt \
     && python3 -m pip download --no-cache-dir --dest /opt/wheels \
          pip setuptools wheel \
+    # Pre-install the full backend closure (INCLUDING pytest) into the
+    # interpreter's global site-packages so `python3 -m pytest`, `pytest`, and
+    # `python -m pytest` work the instant the repo is cloned — no manual venv,
+    # no `pip install` step, no network. The sandbox-runner spawns every agent
+    # command with a stripped, curated env (only PATH/HOME/TMPDIR/LANG), so the
+    # offline test toolchain must already be resident, not env- or install-
+    # gated. The venv path (`python3 -m venv .venv && .venv/bin/pip install
+    # --no-index --find-links=/opt/wheels ...`) keeps working unchanged.
+    && python3 -m pip install --no-cache-dir --no-index --find-links=/opt/wheels \
+         --requirement /opt/sandbox-seed/backend-requirements.txt \
+    && python3 -m pytest --version \
     && chmod -R a+rX /opt/wheels /opt/python
 
 # --- Frontend offline npm cache (/opt/npm-cache) -----------------------------
 # Seed the content-addressed cache with the golden-path frontend tarball closure
-# from the generated lockfile; `npm ci --ignore-scripts` populates the cache, and
-# node_modules is discarded (only the cache is retained for offline installs).
+# from the generated lockfile; `npm ci` populates the cache, and node_modules is
+# discarded (only the cache is retained for offline installs).
+#   * `--include=dev` is MANDATORY: runtime-base sets NODE_ENV=production, which
+#     otherwise makes npm omit devDependencies from the seed — but the agent's
+#     `npm run build`/`npm test` need the dev toolchain (typescript, tsx,
+#     cross-env, @types/*). Without this the offline `npm ci`/`npm install`
+#     fails ENOTCACHED on the first dev tarball. `--ignore-scripts` keeps the
+#     seed build hermetic (no lifecycle egress); lifecycle scripts still run in
+#     the agent's own install at runtime.
 ENV npm_config_cache=/opt/npm-cache
 COPY packages/control-plane/sandbox-seed/frontend/package.json \
      packages/control-plane/sandbox-seed/frontend/package-lock.json \
      /opt/sandbox-seed/frontend/
 RUN cd /opt/sandbox-seed/frontend \
-    && npm ci --ignore-scripts \
+    && npm ci --include=dev --ignore-scripts \
     && rm -rf node_modules \
     && npm cache verify \
     && chmod -R a+rX /opt/npm-cache
 
-# --- Offline resolution defaults (no-egress runtime) -------------------------
+# --- Offline resolution defaults as GLOBAL CONFIG (survives env stripping) ----
+# CRITICAL: the sandbox-runner (dist/sandbox-runner.js -> childEnvironment)
+# spawns agent commands with a minimal, allow-listed env — PATH, HOME, TMPDIR,
+# LANG, AWS_EC2_METADATA_DISABLED only. The PIP_*/npm_config_* ENV below are
+# therefore NOT inherited by agent child processes, so the agent's bare
+# `pip install` / `npm install` would otherwise fall back to the public indexes
+# and fail under no-egress. Persist the offline defaults in root-owned global
+# config files that pip and npm always read independent of HOME/env:
+#   * /etc/pip.conf        — pip's global config (confirmed read by the
+#     python-build-standalone interpreter via `pip config debug`).
+#   * /usr/local/etc/npmrc — npm's globalconfig for this Node install.
+# The agent's `pip install ...` / `npm install` now resolve from the pre-seeded
+# /opt/wheels wheelhouse and /opt/npm-cache with no network.
+RUN printf '%s\n' \
+      '[global]' \
+      'no-index = true' \
+      'find-links = /opt/wheels' \
+      'disable-pip-version-check = true' \
+      'no-cache-dir = true' \
+      > /etc/pip.conf \
+    && printf '%s\n' \
+      'cache=/opt/npm-cache' \
+      'offline=true' \
+      'audit=false' \
+      'fund=false' \
+      > /usr/local/etc/npmrc \
+    && chmod 0444 /etc/pip.conf /usr/local/etc/npmrc
+
+# --- Offline resolution defaults (no-egress runtime; belt-and-suspenders) -----
+# Retained for the sandbox-runner's own process and any env-honouring tooling;
+# the global config files above are the durable channel for agent children.
 ENV PIP_NO_INDEX=1 \
     PIP_FIND_LINKS=/opt/wheels \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
