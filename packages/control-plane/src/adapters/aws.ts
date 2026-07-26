@@ -527,6 +527,14 @@ export class AwsEcsFargateSandboxProvisioner implements SandboxProvisioner {
                 ...(authToken === undefined
                   ? []
                   : [{ name: "REEF_SANDBOX_AUTH_TOKEN", value: authToken }]),
+                ...(spec.sourceBinding === undefined
+                  ? []
+                  : [
+                      {
+                        name: "REEF_SOURCE_BINDING",
+                        value: JSON.stringify(spec.sourceBinding),
+                      },
+                    ]),
               ],
             },
           ],

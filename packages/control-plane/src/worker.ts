@@ -14,6 +14,7 @@ import type {
   SandboxProvisioner,
   SecretResolver,
 } from "./ports.js";
+import { BUILDER_SOURCE_BUNDLE_BINDING_METADATA_KEY } from "./source-binding.js";
 import { isTerminal } from "./state-machine.js";
 import type {
   AgentKernel,
@@ -132,6 +133,8 @@ export class ControlPlaneWorker {
 
     try {
       run = await this.#enterProvisioning(scope, run, fence);
+      const sourceBinding =
+        run.metadata[BUILDER_SOURCE_BUNDLE_BINDING_METADATA_KEY];
       const sandboxSpec = {
         ...scope,
         runId,
@@ -139,6 +142,7 @@ export class ControlPlaneWorker {
         baselineRevisionRef: run.baselineRevisionRef,
         attempt: run.attempt,
         environment: { AWS_EC2_METADATA_DISABLED: "true" },
+        ...(sourceBinding !== undefined ? { sourceBinding } : {}),
       } as const;
       sandbox =
         (run.sandboxId !== undefined

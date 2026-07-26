@@ -11,6 +11,7 @@ import {
 } from "node:http";
 import { isAbsolute, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { prepareSourceWorkspace } from "./source-workspace.js";
 import type { SandboxExecution, SandboxExecutionResult } from "./types.js";
 
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
@@ -275,10 +276,50 @@ function json(response: ServerResponse, status: number, body: unknown): void {
   response.end(JSON.stringify(body));
 }
 
+/**
+ * Consume the Builder source binding delivered over the run metadata channel
+ * (via `REEF_SOURCE_BINDING`) and clone the sealed revision into the sandbox
+ * workspace before serving any command. Absent binding -> no-op (dev/local git
+ * worktree flow owns the workspace). Present but invalid, out-of-scope, or an
+ * unclonable binding -> throw so the task exits non-zero and the run fails
+ * closed rather than executing against an empty or wrong workspace.
+ */
+async function materialiseSourceWorkspace(
+  workspacePath: string,
+): Promise<void> {
+  const raw = process.env["REEF_SOURCE_BINDING"]?.trim();
+  if (raw === undefined || raw === "") return;
+  let binding: unknown;
+  try {
+    binding = JSON.parse(raw);
+  } catch {
+    throw new Error("REEF_SOURCE_BINDING must be a JSON source binding");
+  }
+  const prepared = await prepareSourceWorkspace({
+    binding,
+    scope: {
+      organisationId: required("REEF_ORGANISATION_ID"),
+      projectId: required("REEF_PROJECT_ID"),
+    },
+    workspacePath,
+    ...(process.env["REEF_SOURCE_GIT_CREDENTIAL_HELPER"]?.trim()
+      ? {
+          credentialHelper:
+            process.env["REEF_SOURCE_GIT_CREDENTIAL_HELPER"]!.trim(),
+        }
+      : {}),
+  });
+  process.stdout.write(
+    `reef-sandbox-runner materialised source ${prepared.revision} ` +
+      `(${prepared.cloned ? "cloned" : "reused"}) into ${workspacePath}\n`,
+  );
+}
+
 async function main(): Promise<void> {
   const authToken = required("REEF_SANDBOX_AUTH_TOKEN");
   const workspacePath = process.env["REEF_SANDBOX_WORKSPACE"] ?? "/workspace";
   mkdirSync("/tmp/reef-home", { recursive: true, mode: 0o700 });
+  await materialiseSourceWorkspace(workspacePath);
   const server = createSandboxRunnerServer({ authToken, workspacePath });
   const host = process.env["REEF_SANDBOX_HOST"] ?? "0.0.0.0";
   const port = integer("REEF_SANDBOX_PORT", 8081);

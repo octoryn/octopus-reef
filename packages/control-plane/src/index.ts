@@ -2,6 +2,7 @@ export * from "./types.js";
 export * from "./ports.js";
 export * from "./state-machine.js";
 export * from "./validation.js";
+export * from "./source-binding.js";
 export * from "./budget.js";
 export * from "./dispatch.js";
 export * from "./errors.js";

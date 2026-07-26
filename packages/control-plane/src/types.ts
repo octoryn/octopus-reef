@@ -209,6 +209,13 @@ export interface SandboxSpec extends TenantScope {
   readonly baselineRevisionRef: string;
   readonly attempt: number;
   readonly environment?: Readonly<Record<string, string>>;
+  /**
+   * Opaque, digest-sealed Builder source binding forwarded from run metadata
+   * (`octopus.reef.builder-source-bundle-binding/v1`). The provisioner hands it
+   * to the sandbox runner, which validates and clones the sealed revision. Left
+   * undefined for the local/docker git-worktree flow.
+   */
+  readonly sourceBinding?: unknown;
 }
 
 export interface SandboxExecution {

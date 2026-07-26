@@ -84,6 +84,16 @@ HEALTHCHECK NONE
 CMD ["worker"]
 
 FROM runtime-base AS sandbox
+# The sandbox self-materialises its workspace from the Builder source binding
+# (`REEF_SOURCE_BINDING`) by cloning an IAM-authenticated CodeCommit repo. The
+# aws CLI provides the `aws codecommit credential-helper` used by the default
+# git credential helper; credentials resolve from the sandbox task role only.
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends awscli \
+    && apt-get clean \
+    && find /var/lib/apt/lists -mindepth 1 -delete
+USER node
 ENV REEF_SANDBOX_HOST=0.0.0.0 \
     REEF_SANDBOX_PORT=8081 \
     REEF_SANDBOX_WORKSPACE=/workspace
