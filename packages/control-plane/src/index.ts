@@ -7,6 +7,7 @@ export * from "./budget.js";
 export * from "./dispatch.js";
 export * from "./errors.js";
 export * from "./sandbox-executor.js";
+export * from "./candidate-finalize.js";
 export * from "./memory.js";
 export * from "./service.js";
 export * from "./worker.js";

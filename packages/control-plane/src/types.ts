@@ -231,10 +231,66 @@ export interface SandboxExecutionResult {
   readonly stderr: string;
 }
 
+/**
+ * Candidate materialisation request. Run after the agent session completes to
+ * turn the sandbox working tree into a reviewable candidate: run the project's
+ * test suite, commit the agent's changes on top of the sealed baseline, capture
+ * the unified diff, and (for the CodeCommit source flow) push the candidate
+ * commit to a per-run branch so reviewers can retrieve it.
+ */
+export interface SandboxFinalizeRequest {
+  /** Per-run branch the candidate commit is pushed to (`refs/heads/<branch>`). */
+  readonly candidateBranch: string;
+  readonly commitMessage: string;
+  /**
+   * Explicit test command. When omitted the runner auto-detects the per-project
+   * contract (pyproject/pytest -> `python -m pytest`; package.json -> `npm test`).
+   */
+  readonly testCommand?: SandboxExecution;
+  /** Push the candidate commit to the materialised CodeCommit `origin`. */
+  readonly push?: boolean;
+  readonly timeoutMs?: number;
+}
+
+export interface SandboxFinalizeTestResult {
+  /** False when no test contract was found and none was supplied. */
+  readonly ran: boolean;
+  readonly command: readonly string[];
+  readonly exitCode: number;
+  /** exitCode === 0 when `ran`; true (vacuously) when no tests ran. */
+  readonly passed: boolean;
+  readonly report: string;
+  readonly reportTruncated: boolean;
+}
+
+export interface SandboxFinalizeResult {
+  /** Sealed baseline commit (detached HEAD) before the candidate commit. */
+  readonly baseline: string;
+  /** Candidate commit id created from the agent's working-tree changes. */
+  readonly commit: string;
+  readonly branch: string;
+  /** True when the candidate commit was pushed to the CodeCommit origin. */
+  readonly pushed: boolean;
+  /** Credential-free clone URL the candidate was pushed to, when pushed. */
+  readonly remoteUrl?: string;
+  /** Unified diff `baseline..commit`; may be truncated to a byte bound. */
+  readonly diff: string;
+  readonly diffTruncated: boolean;
+  /** False when the agent introduced no change (candidate == baseline tree). */
+  readonly changed: boolean;
+  readonly test: SandboxFinalizeTestResult;
+}
+
 export interface SandboxHandle {
   readonly id: string;
   readonly workspacePath: string;
   execute(command: SandboxExecution): Promise<SandboxExecutionResult>;
+  /**
+   * Materialise a reviewable candidate from the completed working tree. Optional:
+   * sandboxes without a git-backed workspace (no source binding) omit it and the
+   * worker completes the run without a candidate.
+   */
+  finalize?(request: SandboxFinalizeRequest): Promise<SandboxFinalizeResult>;
 }
 
 export interface ArtifactRef extends TenantScope {

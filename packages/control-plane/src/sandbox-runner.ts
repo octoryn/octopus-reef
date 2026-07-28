@@ -12,7 +12,12 @@ import {
 import { isAbsolute, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { prepareSourceWorkspace } from "./source-workspace.js";
-import type { SandboxExecution, SandboxExecutionResult } from "./types.js";
+import { finalizeCandidate } from "./candidate-finalize.js";
+import type {
+  SandboxExecution,
+  SandboxExecutionResult,
+  SandboxFinalizeRequest,
+} from "./types.js";
 
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
@@ -24,6 +29,8 @@ export interface SandboxRunnerOptions {
   readonly maxBodyBytes?: number;
   readonly maxOutputBytes?: number;
   readonly maxTimeoutMs?: number;
+  /** AWS region used to sign the candidate CodeCommit push during finalise. */
+  readonly codeCommitRegion?: string;
 }
 
 /** Private per-task command endpoint for the Fargate sandbox adapter. */
@@ -49,7 +56,10 @@ export function createSandboxRunnerHandler(
       });
       return;
     }
-    if (request.method !== "POST" || request.url !== "/v1/execute") {
+    const isExecute = request.method === "POST" && request.url === "/v1/execute";
+    const isFinalize =
+      request.method === "POST" && request.url === "/v1/finalize";
+    if (!isExecute && !isFinalize) {
       json(response, 404, { error: "not found" });
       return;
     }
@@ -62,9 +72,22 @@ export function createSandboxRunnerHandler(
       return;
     }
     running = true;
-    void readJson(request, options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES)
-      .then((body) => commandFromBody(body))
-      .then((command) => execute(workspacePath, command, options))
+    const handled = isFinalize
+      ? readJson(request, options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES)
+          .then((body) => finalizeRequestFromBody(body))
+          .then((finalizeRequest) =>
+            finalizeCandidate({
+              workspacePath,
+              request: finalizeRequest,
+              ...(options.codeCommitRegion !== undefined
+                ? { region: options.codeCommitRegion }
+                : {}),
+            }),
+          )
+      : readJson(request, options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES)
+          .then((body) => commandFromBody(body))
+          .then((command) => execute(workspacePath, command, options));
+    void handled
       .then((result) => json(response, 200, result))
       .catch((error: unknown) => {
         json(response, 400, {
@@ -210,6 +233,63 @@ function commandFromBody(value: unknown): SandboxExecution {
   };
 }
 
+function finalizeRequestFromBody(value: unknown): SandboxFinalizeRequest {
+  const record = object(value);
+  const nested =
+    "finalize" in record ? object(record["finalize"]) : record;
+  const candidateBranch = nested["candidateBranch"];
+  if (typeof candidateBranch !== "string" || candidateBranch === "") {
+    throw new Error("finalize.candidateBranch must be a non-empty string");
+  }
+  const commitMessage = nested["commitMessage"];
+  if (typeof commitMessage !== "string" || commitMessage === "") {
+    throw new Error("finalize.commitMessage must be a non-empty string");
+  }
+  const push = nested["push"];
+  if (push !== undefined && typeof push !== "boolean") {
+    throw new Error("finalize.push must be a boolean");
+  }
+  const timeoutMs = nested["timeoutMs"];
+  if (
+    timeoutMs !== undefined &&
+    (!Number.isInteger(timeoutMs) || (timeoutMs as number) < 1)
+  ) {
+    throw new Error("finalize.timeoutMs must be a positive integer");
+  }
+  const rawTest = nested["testCommand"];
+  const testCommand =
+    rawTest === undefined ? undefined : commandFromBody(rawTest);
+  return {
+    candidateBranch,
+    commitMessage,
+    ...(testCommand !== undefined ? { testCommand } : {}),
+    ...(push !== undefined ? { push } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs as number } : {}),
+  };
+}
+
+/**
+ * Resolve the AWS region used to sign the candidate CodeCommit push. Prefer the
+ * region sealed into the source binding (same repository the candidate is
+ * pushed to); fall back to the ambient AWS region.
+ */
+function codeCommitRegionFromEnvironment(): string | undefined {
+  const raw = process.env["REEF_SOURCE_BINDING"]?.trim();
+  if (raw !== undefined && raw !== "") {
+    try {
+      const binding = JSON.parse(raw) as { readonly git?: { region?: unknown } };
+      const region = binding.git?.region;
+      if (typeof region === "string" && region !== "") return region;
+    } catch {
+      // Ignore; fall through to the ambient region.
+    }
+  }
+  const ambient = (
+    process.env["AWS_REGION"] ?? process.env["AWS_DEFAULT_REGION"]
+  )?.trim();
+  return ambient === undefined || ambient === "" ? undefined : ambient;
+}
+
 function confinedCwd(workspacePath: string, requested: string): string {
   if (requested === "" || isAbsolute(requested)) {
     throw new Error("command.cwd must be relative to the sandbox workspace");
@@ -320,7 +400,12 @@ async function main(): Promise<void> {
   const workspacePath = process.env["REEF_SANDBOX_WORKSPACE"] ?? "/workspace";
   mkdirSync("/tmp/reef-home", { recursive: true, mode: 0o700 });
   await materialiseSourceWorkspace(workspacePath);
-  const server = createSandboxRunnerServer({ authToken, workspacePath });
+  const codeCommitRegion = codeCommitRegionFromEnvironment();
+  const server = createSandboxRunnerServer({
+    authToken,
+    workspacePath,
+    ...(codeCommitRegion !== undefined ? { codeCommitRegion } : {}),
+  });
   const host = process.env["REEF_SANDBOX_HOST"] ?? "0.0.0.0";
   const port = integer("REEF_SANDBOX_PORT", 8081);
   await new Promise<void>((resolveListen, reject) => {
