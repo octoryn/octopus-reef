@@ -202,10 +202,13 @@ test("autoDetectTestCommand honours the per-project test contract", () => {
       "-q",
     ]);
 
+    // A Node suite is only honoured once its dependencies are installed.
     writeFileSync(
       join(node, "package.json"),
       JSON.stringify({ scripts: { test: "vitest run" } }),
     );
+    assert.equal(autoDetectTestCommand(node), undefined);
+    mkdirSync(join(node, "node_modules"), { recursive: true });
     assert.deepEqual(autoDetectTestCommand(node)?.argv, [
       "npm",
       "test",
@@ -218,5 +221,36 @@ test("autoDetectTestCommand honours the per-project test contract", () => {
     for (const dir of [py, node, empty]) {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+});
+
+test("autoDetectTestCommand discovers backend/ + frontend/ monorepo suites", () => {
+  const root = mkdtempSync(join(tmpdir(), "reef-detect-mono-"));
+  try {
+    // Backend pytest suite (deps resident in the sandbox image).
+    mkdirSync(join(root, "backend"), { recursive: true });
+    writeFileSync(join(root, "backend", "pyproject.toml"), "[project]\nname='b'\n");
+    // Frontend npm suite WITH installed deps.
+    mkdirSync(join(root, "frontend", "node_modules"), { recursive: true });
+    writeFileSync(
+      join(root, "frontend", "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run" } }),
+    );
+
+    const detected = autoDetectTestCommand(root);
+    assert.deepEqual(detected?.argv.slice(0, 2), ["/bin/sh", "-lc"]);
+    const script = detected!.argv[2]!;
+    assert.match(script, /set -e;/);
+    assert.match(script, /cd 'backend' && python -m pytest -q/);
+    assert.match(script, /cd 'frontend' && npm test --silent/);
+
+    // A frontend without installed deps is skipped, leaving only backend,
+    // which runs directly with cwd set to its sub-directory.
+    rmSync(join(root, "frontend", "node_modules"), { recursive: true });
+    const backendOnly = autoDetectTestCommand(root);
+    assert.deepEqual(backendOnly?.argv, ["python", "-m", "pytest", "-q"]);
+    assert.equal(backendOnly?.cwd, "backend");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

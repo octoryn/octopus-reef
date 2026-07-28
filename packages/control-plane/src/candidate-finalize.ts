@@ -227,33 +227,116 @@ async function runTests(
 }
 
 /**
- * Per-project test contract detection. Backend Python projects run pytest;
- * Node/frontend projects run their `test` script. Returns undefined when no
- * recognised contract is present so the candidate is still reviewable.
+ * Directories searched for a per-project test contract. The generated
+ * golden-path deliverable is a monorepo whose suites live in `backend/`
+ * (pytest) and `frontend/` (npm), not at the materialised root, so a
+ * root-only probe misses them entirely. The empty string is the workspace
+ * root; the rest are the conventional sub-project layouts.
  */
-export function autoDetectTestCommand(
+const TEST_SEARCH_DIRS = [
+  "",
+  "backend",
+  "frontend",
+  "server",
+  "web",
+  "app",
+  "api",
+] as const;
+
+interface DetectedSuite {
+  /** Sub-directory relative to the workspace root ("" = root). */
+  readonly dir: string;
+  /** Shell command to run in that directory. */
+  readonly command: string;
+}
+
+function detectSuiteInDir(
   workspacePath: string,
-): SandboxExecution | undefined {
-  for (const marker of ["pyproject.toml", "pytest.ini", "tox.ini", "setup.py"]) {
-    if (existsSync(join(workspacePath, marker))) {
-      return { argv: ["python", "-m", "pytest", "-q"] };
+  dir: string,
+): DetectedSuite | undefined {
+  const base = dir === "" ? workspacePath : join(workspacePath, dir);
+  if (!existsSync(base)) return undefined;
+  for (const marker of [
+    "pyproject.toml",
+    "pytest.ini",
+    "tox.ini",
+    "setup.py",
+    "setup.cfg",
+  ]) {
+    if (existsSync(join(base, marker))) {
+      // The sandbox image ships the backend closure (pytest + deps) resident,
+      // so pytest runs offline without an install step.
+      return { dir, command: "python -m pytest -q" };
     }
   }
-  const packageJsonPath = join(workspacePath, "package.json");
+  const packageJsonPath = join(base, "package.json");
   if (existsSync(packageJsonPath)) {
     try {
       const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
         readonly scripts?: Readonly<Record<string, unknown>>;
       };
       const testScript = parsed.scripts?.["test"];
-      if (typeof testScript === "string" && testScript.trim() !== "") {
-        return { argv: ["npm", "test", "--silent"] };
+      if (
+        typeof testScript === "string" &&
+        testScript.trim() !== "" &&
+        !/no test specified/i.test(testScript) &&
+        // Only include a Node suite whose dependencies the agent already
+        // installed; otherwise `npm test` fails ENOTCACHED offline and would
+        // wrongly redden an otherwise-green candidate.
+        existsSync(join(base, "node_modules"))
+      ) {
+        return { dir, command: "npm test --silent" };
       }
     } catch {
       // Unparseable package.json -> no reliable test contract.
     }
   }
   return undefined;
+}
+
+/**
+ * Per-project test contract detection. Prefers an explicit
+ * `config.candidateTestCommand` (threaded by the worker); when absent this
+ * discovers pytest/npm suites at the workspace root AND the conventional
+ * `backend/`+`frontend/` sub-projects, running every discovered suite under a
+ * fail-fast shell. Returns undefined when no runnable contract is present so the
+ * candidate stays reviewable rather than falsely failing.
+ */
+export function autoDetectTestCommand(
+  workspacePath: string,
+): SandboxExecution | undefined {
+  const suites: DetectedSuite[] = [];
+  const seen = new Set<string>();
+  for (const dir of TEST_SEARCH_DIRS) {
+    const suite = detectSuiteInDir(workspacePath, dir);
+    if (suite !== undefined && !seen.has(suite.dir)) {
+      seen.add(suite.dir);
+      suites.push(suite);
+    }
+  }
+  if (suites.length === 0) return undefined;
+  if (suites.length === 1) {
+    // A single suite runs directly (clearer report) with cwd set to its dir.
+    const only = suites[0]!;
+    const argv = only.command.startsWith("python")
+      ? ["python", "-m", "pytest", "-q"]
+      : ["npm", "test", "--silent"];
+    return { argv, ...(only.dir !== "" ? { cwd: only.dir } : {}) };
+  }
+  const script =
+    "set -e; " +
+    suites
+      .map((suite) =>
+        suite.dir === ""
+          ? `( ${suite.command} )`
+          : `( cd ${shellQuote(suite.dir)} && ${suite.command} )`,
+      )
+      .join("; ");
+  return { argv: ["/bin/sh", "-lc", script] };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function boundText(
