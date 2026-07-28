@@ -99,6 +99,15 @@ const DEFAULT_SYSTEM = [
   "Call `done` ONLY after a test command has actually PASSED (exit code 0). Do not narrate outside tool calls.",
 ].join(" ");
 
+/** Fed back when a response is cut off at the output-token ceiling. */
+const TRUNCATION_NOTICE = [
+  "Your previous response was cut off at the output-token limit before it",
+  "finished, so its tool call was discarded (an incomplete write_file would",
+  "have truncated the file to 0 bytes). Retry with a smaller, self-contained",
+  "step: prefer editing one function or a small region over rewriting a large",
+  "file in a single write_file call.",
+].join(" ");
+
 const TOOLS: readonly ToolSpec[] = [
   {
     name: "read_file",
@@ -272,6 +281,10 @@ export class AgentWorker implements Driver {
       let toolUses: readonly ToolUseBlock[];
       let results: ToolResultBlock[];
       let nextToolIndex: number;
+      // Set when the model hit its output-token ceiling mid-response: any
+      // tool call it emitted may carry truncated/empty input, so we must NOT
+      // execute it (a truncated `write_file` writes a 0-byte file).
+      let truncated = false;
 
       if (resumeBoundary !== undefined) {
         toolUses = cloneTools(resumeBoundary.pendingToolUses);
@@ -309,6 +322,7 @@ export class AgentWorker implements Driver {
         toolUses = response.content.filter(
           (b): b is ToolUseBlock => b.type === "tool_use",
         );
+        truncated = response.stopReason === "max_tokens";
         results = [];
         nextToolIndex = 0;
         await this.#checkpoint({
@@ -334,6 +348,34 @@ export class AgentWorker implements Driver {
         if (said.length > 0) {
           yield { type: "message", text: said.slice(0, 500) };
         }
+      }
+
+      // A response cut off at the output-token ceiling cannot be trusted: the
+      // final tool call's JSON input is likely incomplete, so `write_file`
+      // would receive empty/partial `content` and clobber the file with 0
+      // bytes. Never execute a truncated turn — bounce it back and let the
+      // model retry with a smaller, complete step. Costs exactly one turn.
+      if (truncated) {
+        yield {
+          type: "observe",
+          summary:
+            `model response truncated at max_tokens (turn ${turn}); ` +
+            "discarded the partial tool call and asked for a smaller edit",
+        };
+        messages.push(
+          toolUses.length > 0
+            ? {
+                role: "user",
+                content: toolUses.map((tool) => ({
+                  type: "tool_result" as const,
+                  tool_use_id: tool.id,
+                  content: TRUNCATION_NOTICE,
+                  is_error: true,
+                })),
+              }
+            : { role: "user", content: TRUNCATION_NOTICE },
+        );
+        continue;
       }
 
       if (toolUses.length === 0) {

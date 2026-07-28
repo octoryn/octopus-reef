@@ -155,6 +155,58 @@ test("worker drives read → run(fail) → fix → run(pass) → done, feeding r
   assert.ok(fedBack, "the failing test result was fed back to the model");
 });
 
+test("worker discards a max_tokens-truncated tool call instead of writing 0 bytes", async () => {
+  // First turn: the model tries a whole-file write_file but the response was
+  // cut off at the output ceiling — `content` arrived empty. Executing it would
+  // clobber sum.js to 0 bytes; the guard must drop it and ask for a retry.
+  const truncatedWrite: CompletionResponse = {
+    content: [
+      {
+        type: "tool_use",
+        id: "1",
+        name: "write_file",
+        input: { path: "sum.js", content: "" },
+      } as ToolUseBlock,
+    ],
+    stopReason: "max_tokens",
+  };
+  const provider = new ScriptedProvider([
+    truncatedWrite,
+    use("2", "write_file", {
+      path: "sum.js",
+      content: "module.exports = (a, b) => a + b;",
+    }),
+    use("3", "run_command", { command: "npm test" }),
+    use("4", "done", { summary: "fixed after retrying with a full edit" }),
+  ]);
+  const executor = new FakeExecutor();
+  const session = new GovernedSession({
+    id: "trunc1",
+    task: "fix the failing test",
+    driver: new AgentWorker({ provider }),
+    authorizer: reefAllowlist({ commands: { npm: ["test"] } }),
+    executor,
+    now: clock(),
+  });
+
+  const { outcome } = await session.run();
+  assert.equal(outcome, "completed");
+  // The truncated (empty) write must never reach the executor.
+  const editContents = executor.actions
+    .filter((a) => a.type === "edit")
+    .map((a) => String((a.payload as { content?: unknown }).content ?? ""));
+  assert.deepEqual(
+    editContents,
+    ["module.exports = (a, b) => a + b;"],
+    "only the complete, retried edit was executed — no 0-byte write",
+  );
+  // The retry prompt (truncation notice) was fed back to the model.
+  const noticed = provider.requests.some((r) =>
+    JSON.stringify(r.messages).includes("cut off at the output-token limit"),
+  );
+  assert.ok(noticed, "the model was told its response was truncated");
+});
+
 const lookupTool: Tool = {
   name: "lookup",
   description: "look up a fact",
