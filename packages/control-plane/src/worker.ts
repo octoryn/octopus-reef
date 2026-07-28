@@ -24,6 +24,8 @@ import type {
   RunCheckpoint,
   RunFailure,
   RunMutation,
+  SandboxExecution,
+  SandboxFinalizeResult,
   SandboxHandle,
   TenantScope,
 } from "./types.js";
@@ -281,9 +283,15 @@ export class ControlPlaneWorker {
       } else if (run.status === "RUNNING") {
         run = await this.#transition(scope, runId, fence, "VERIFYING");
       }
-      let diffRef = result.resultRefs?.diffRef;
-      const testRef = result.resultRefs?.testRef;
-      const evidenceRefs = new Set(result.resultRefs?.evidenceRefs ?? []);
+      // Seed from any candidate references already durable on the run so an
+      // approval-resume (or retry) preserves the materialised candidate instead
+      // of clobbering it with an empty set.
+      let diffRef = result.resultRefs?.diffRef ?? run.resultRefs.diffRef;
+      let testRef = result.resultRefs?.testRef ?? run.resultRefs.testRef;
+      const evidenceRefs = new Set([
+        ...run.resultRefs.evidenceRefs,
+        ...(result.resultRefs?.evidenceRefs ?? []),
+      ]);
       if (this.#options.git !== undefined) {
         const committed = await this.#options.git.commit(
           scope,
@@ -320,12 +328,123 @@ export class ControlPlaneWorker {
           `proof-artifact:${run.attempt}`,
         );
       }
+
+      // Candidate materialisation (path B): when the run carries a Builder
+      // source binding and the sandbox can finalise, turn the completed working
+      // tree into a reviewable candidate — run tests, commit + push to a per-run
+      // CodeCommit branch, capture the diff — and route to human review with the
+      // full candidate reference set instead of silently completing.
+      const candidateBinding =
+        run.metadata[BUILDER_SOURCE_BUNDLE_BINDING_METADATA_KEY];
+      const finalize = sandbox.finalize?.bind(sandbox);
+      // Only materialise + gate a review on the first completion. A run resumed
+      // after its review was decided (reviewId already set) completes carrying
+      // the candidate references, rather than looping back into review.
+      const wantsCandidateReview =
+        candidateBinding !== undefined &&
+        finalize !== undefined &&
+        run.reviewId === undefined;
+      let candidate: SandboxFinalizeResult | undefined;
+      if (wantsCandidateReview && finalize !== undefined) {
+        const testCommand = candidateTestCommand(run);
+        candidate = await finalize({
+          candidateBranch: candidateBranch(runId, run.attempt),
+          commitMessage: `reef: candidate for AgentRun ${runId} (attempt ${run.attempt})`,
+          ...(testCommand !== undefined ? { testCommand } : {}),
+          push: true,
+        });
+        const candidateRef =
+          candidate.pushed && candidate.remoteUrl !== undefined
+            ? `codecommit:${candidate.remoteUrl}@${candidate.commit}`
+            : `candidate-commit:${candidate.commit}`;
+        diffRef = candidateRef;
+        evidenceRefs.add(candidateRef);
+        if (this.#options.artifacts !== undefined) {
+          const diffArtifact = await this.#options.artifacts.put(
+            scope,
+            runId,
+            `candidate/attempt-${run.attempt}.diff`,
+            Buffer.from(candidate.diff, "utf8"),
+            "text/x-diff",
+          );
+          evidenceRefs.add(diffArtifact.uri);
+          const testArtifact = await this.#options.artifacts.put(
+            scope,
+            runId,
+            `candidate/attempt-${run.attempt}.test.txt`,
+            Buffer.from(candidate.test.report, "utf8"),
+            "text/plain",
+          );
+          evidenceRefs.add(testArtifact.uri);
+          testRef = testArtifact.uri;
+        } else {
+          testRef = `sandbox-test:${candidate.test.passed ? "passed" : "failed"}:exit-${candidate.test.exitCode}`;
+        }
+        await this.#options.events.append(
+          scope,
+          runId,
+          "candidate.materialised",
+          {
+            commit: candidate.commit,
+            branch: candidate.branch,
+            baseline: candidate.baseline,
+            pushed: candidate.pushed,
+            changed: candidate.changed,
+            testRan: candidate.test.ran,
+            testExitCode: candidate.test.exitCode,
+            testPassed: candidate.test.passed,
+            diffTruncated: candidate.diffTruncated,
+          },
+          this.#now(),
+          `candidate-materialised:${run.attempt}`,
+        );
+      }
+
       const resultRefs = {
         ...(diffRef !== undefined ? { diffRef } : {}),
         ...(testRef !== undefined ? { testRef } : {}),
         evidenceRefs: [...evidenceRefs],
       };
       const now = this.#now();
+
+      if (wantsCandidateReview && candidate !== undefined) {
+        const reviewId = randomUUID();
+        const reason = `candidate ready for review: ${
+          candidate.changed ? "changes present" : "no changes"
+        }, tests ${
+          candidate.test.ran
+            ? candidate.test.passed
+              ? "passed"
+              : "failed"
+            : "not run"
+        }`;
+        await this.#options.reviews.request({
+          ...scope,
+          id: reviewId,
+          runId,
+          reason,
+          context: { resultRefs, candidate },
+          createdAt: now,
+        });
+        run = await this.#mutateFenced(scope, runId, fence, {
+          status: "WAITING_FOR_REVIEW",
+          output: result.output,
+          resultRefs,
+          reviewId,
+          clearLease: true,
+        });
+        await this.#options.events.append(
+          scope,
+          runId,
+          "run.waiting_for_review",
+          { reviewId, reason, resultRefs },
+          now,
+          `review-request:${reviewId}`,
+        );
+        await this.#options.queue.ack(queueLease);
+        return;
+      }
+
       run = await this.#mutateFenced(scope, runId, fence, {
         status: "COMPLETED",
         output: result.output,
@@ -742,6 +861,40 @@ export class ControlPlaneWorker {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Canonical per-run candidate branch name; sanitised to a safe git ref. */
+function candidateBranch(runId: string, attempt: number): string {
+  const safeRun = runId.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 200);
+  return `reef-candidate/${safeRun || "run"}-${attempt}`;
+}
+
+/**
+ * Per-project test command contract, taken from run config when the dispatcher
+ * pins one (`candidateTestCommand: { argv, cwd?, timeoutMs? }`). When absent the
+ * sandbox runner auto-detects the contract (pytest / npm test).
+ */
+function candidateTestCommand(run: AgentRun): SandboxExecution | undefined {
+  const raw = run.config["candidateTestCommand"];
+  if (raw === null || typeof raw !== "object") return undefined;
+  const record = raw as Record<string, unknown>;
+  const argv = record["argv"];
+  if (
+    !Array.isArray(argv) ||
+    argv.length === 0 ||
+    argv.some((part) => typeof part !== "string" || part === "")
+  ) {
+    return undefined;
+  }
+  const cwd = record["cwd"];
+  const timeoutMs = record["timeoutMs"];
+  return {
+    argv: argv as string[],
+    ...(typeof cwd === "string" && cwd !== "" ? { cwd } : {}),
+    ...(Number.isInteger(timeoutMs) && (timeoutMs as number) > 0
+      ? { timeoutMs: timeoutMs as number }
+      : {}),
+  };
 }
 
 function completedFromAcceptanceCheckpoint(
