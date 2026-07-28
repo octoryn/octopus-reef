@@ -35,6 +35,8 @@ import type {
   QueueMessage,
   SandboxExecution,
   SandboxExecutionResult,
+  SandboxFinalizeRequest,
+  SandboxFinalizeResult,
   SandboxHandle,
   SandboxSpec,
   TenantScope,
@@ -305,6 +307,11 @@ export interface EcsSandboxCommandExecutor {
     command: SandboxExecution,
     context?: EcsSandboxCommandContext,
   ): Promise<SandboxExecutionResult>;
+  finalize?(
+    taskArn: string,
+    request: SandboxFinalizeRequest,
+    context?: EcsSandboxCommandContext,
+  ): Promise<SandboxFinalizeResult>;
   ready?(taskArn: string, context?: EcsSandboxCommandContext): Promise<void>;
 }
 
@@ -338,6 +345,20 @@ export class HttpEcsSandboxCommandExecutor implements EcsSandboxCommandExecutor 
       { taskArn, command },
       this.#options.bearerToken ?? context.authToken,
       command.timeoutMs,
+    );
+  }
+
+  async finalize(
+    taskArn: string,
+    request: SandboxFinalizeRequest,
+    context: EcsSandboxCommandContext = {},
+  ): Promise<SandboxFinalizeResult> {
+    return finalizeSandboxRequest(
+      this.#options.fetchImpl ?? fetch,
+      this.#options.endpoint,
+      { taskArn, finalize: request },
+      this.#options.bearerToken ?? context.authToken,
+      request.timeoutMs,
     );
   }
 }
@@ -378,6 +399,21 @@ export class AwsEcsTaskHttpCommandExecutor implements EcsSandboxCommandExecutor 
     );
   }
 
+  async finalize(
+    taskArn: string,
+    request: SandboxFinalizeRequest,
+    context: EcsSandboxCommandContext = {},
+  ): Promise<SandboxFinalizeResult> {
+    const endpoint = await this.#endpoint(taskArn, "/v1/finalize");
+    return finalizeSandboxRequest(
+      this.#options.fetchImpl ?? fetch,
+      endpoint,
+      { finalize: request },
+      context.authToken,
+      request.timeoutMs,
+    );
+  }
+
   async ready(
     taskArn: string,
     _context: EcsSandboxCommandContext = {},
@@ -406,7 +442,7 @@ export class AwsEcsTaskHttpCommandExecutor implements EcsSandboxCommandExecutor 
     );
   }
 
-  async #endpoint(taskArn: string): Promise<string> {
+  async #endpoint(taskArn: string, path?: string): Promise<string> {
     const result = await this.#client.send(
       new DescribeTasksCommand({
         cluster: this.#options.cluster,
@@ -420,7 +456,7 @@ export class AwsEcsTaskHttpCommandExecutor implements EcsSandboxCommandExecutor 
       );
     }
     const address = ecsPrivateIpv4(task);
-    return `${this.#options.scheme ?? "http"}://${address}:${this.#options.port ?? 8081}${this.#options.path ?? "/v1/execute"}`;
+    return `${this.#options.scheme ?? "http"}://${address}:${this.#options.port ?? 8081}${path ?? this.#options.path ?? "/v1/execute"}`;
   }
 }
 
@@ -460,6 +496,19 @@ class EcsSandboxHandle implements SandboxHandle {
         ...command,
         env: { ...command.env, AWS_EC2_METADATA_DISABLED: "true" },
       },
+      this.authToken === undefined ? {} : { authToken: this.authToken },
+    );
+  }
+
+  finalize(request: SandboxFinalizeRequest): Promise<SandboxFinalizeResult> {
+    if (this.executor.finalize === undefined) {
+      return Promise.reject(
+        new Error("ECS sandbox command executor does not support finalize"),
+      );
+    }
+    return this.executor.finalize(
+      this.id,
+      request,
       this.authToken === undefined ? {} : { authToken: this.authToken },
     );
   }
@@ -655,6 +704,48 @@ async function executeSandboxRequest(
     );
   }
   return body as SandboxExecutionResult;
+}
+
+async function finalizeSandboxRequest(
+  fetchImpl: typeof fetch,
+  endpoint: string,
+  payload: unknown,
+  bearerToken: string | undefined,
+  timeoutMs: number | undefined,
+): Promise<SandboxFinalizeResult> {
+  const response = await fetchImpl(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(bearerToken !== undefined
+        ? { Authorization: `Bearer ${bearerToken}` }
+        : {}),
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(timeoutMs ?? 15 * 60_000),
+  });
+  const body = (await response.json()) as Record<string, unknown> & {
+    readonly error?: unknown;
+  };
+  const test = body["test"] as Record<string, unknown> | undefined;
+  if (
+    !response.ok ||
+    typeof body["baseline"] !== "string" ||
+    typeof body["commit"] !== "string" ||
+    typeof body["branch"] !== "string" ||
+    typeof body["pushed"] !== "boolean" ||
+    typeof body["diff"] !== "string" ||
+    typeof body["diffTruncated"] !== "boolean" ||
+    typeof body["changed"] !== "boolean" ||
+    test === undefined ||
+    typeof test["exitCode"] !== "number" ||
+    typeof test["passed"] !== "boolean"
+  ) {
+    throw new Error(
+      `ECS sandbox finalize failed: ${response.status} ${JSON.stringify(body).slice(0, 500)}`,
+    );
+  }
+  return body as unknown as SandboxFinalizeResult;
 }
 
 function ecsPrivateIpv4(task: Task): string {
